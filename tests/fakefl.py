@@ -142,6 +142,15 @@ class FakeFL:
             "slots": {},
         }
 
+    def add_master_limiter(self, gain=0.5, ceiling=0.9, name="Fruity Limiter"):
+        """A limiter in master slot 9 whose Gain and Ceiling show dB (-60..0)."""
+        self.tracks[0]["slots"][9] = name
+        self.params[("m", 0, 9)] = [
+            ["Gain", gain, "db"],
+            ["Ceiling", ceiling, "db"],
+            ["Attack", 0.2, "ms"],
+        ]
+
     # ---- wiring
 
     def install(self, monkeypatch):

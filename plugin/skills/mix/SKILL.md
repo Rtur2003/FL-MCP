@@ -54,4 +54,4 @@ Reverb and delay belong on sends (one reverb, one delay, shared) rather than ins
 
 ## Master
 
-Chain: gentle EQ, bus glue (optional), limiter last with ceiling -1.0 dB. Raise loudness with the limiter's input gain until the integrated loudness reaches the target while the true peak stays under -1. Never put the master fader above 0 dB (volume 0.8).
+Chain: gentle EQ, bus glue (optional), limiter last with ceiling -1.0 dB. Raise loudness with the limiter's input gain until the integrated loudness reaches the target while the true peak stays under -1. `fl_audio action=master genre=<g>` (or `target=<LUFS>`) does exactly that loop: it sets the ceiling, exports the open project, moves the limiter's gain (found by meaning, in dB; a threshold-driven limiter is turned down instead) by the loudness error, and measures again, up to three adjustments. It needs `fl_desk` for the exports and a limiter on the master (`fl_ui action=load query="Fruity Limiter" index=0`), reports each pass and the gain it started from, and stops with a note when the limiter saturates. Never put the master fader above 0 dB (volume 0.8).

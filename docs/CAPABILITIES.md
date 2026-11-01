@@ -31,6 +31,7 @@ Confidence: **verified** = tested against real FL files or a reference implement
 | Loudness (LUFS), loudness range, true peak, crest, clipping, DC | File | verified | BS.1770-4 / EBU 3342 on the rendered file |
 | Spectrum, stereo width, correlation, mono loss, low-end width | File | tested | 7 bands; correlation and mid/side from the channels |
 | Compare with a reference track | File | tested | Band differences with advice |
+| Master to a loudness target | API + Desktop | tested (fake) / unseen | `fl_audio master`: export, measure, move the limiter's gain by the error, repeat (3 adjustments at most) |
 | Level balance by measurement | API | tested | `fl_mix`: plays, reads peaks, moves faders; needs audible playback |
 | Problem finding: clipping, headroom, routing, pan, missing plugins | API | tested | `fl_mix doctor`, worst first |
 | Find sounds: sample packs, installed plugins; rank by role and by measured sound; pick a coherent kit | File | tested | `fl_library`; samples measured for length, decay, brightness, low end |

@@ -165,12 +165,12 @@ class Run:
                 continue
             req = {"o": "param", "t": where, "i": index, "s": slot, "a": "set", "p": i}
             try:
-                got = self.call({**req, "r": text})["param"]
+                got = self.call({**req, "r": text})["param"]  # [i, name, val, text, ok]
             finally:
                 self.call({**req, "v": val})
-            if got.get("ok") is False:
+            if not got[4]:
                 raise RuntimeError(f"could not solve '{name}' to its own text '{text}'")
-            return f"'{name}' solved to {text} (FL shows {got.get('text')}) and restored"
+            return f"'{name}' solved to {text} (FL shows {got[3]}) and restored"
         raise Skip("no parameter of this plugin shows a value with a unit (dB, Hz, ms...)")
 
     def presets(self) -> str:

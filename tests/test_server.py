@@ -546,3 +546,36 @@ async def test_without_a_supported_system_the_tool_explains(monkeypatch, tmp_pat
     monkeypatch.setattr(desk.sys, "platform", "linux")
     error = (await desk_call({"action": "status"}, True)).content[0].text
     assert "Windows and macOS" in error
+
+
+async def test_fl_audio_master_needs_the_desk_and_a_limiter(wired, monkeypatch, tmp_path):
+    monkeypatch.setenv("FL_MCP_DESKTOP", "0")
+    assert "needs fl_desk" in await run("fl_audio", {"action": "master"}, expect_error=True)
+
+
+async def test_fl_audio_master_brings_the_mix_to_the_target(screen, wired, tmp_path):
+    np = pytest.importorskip("numpy")
+    sf = pytest.importorskip("soundfile")
+    pytest.importorskip("scipy")
+    wired.fake.add_master_limiter(gain=0.5)  # Gain shows -30 dB
+    t = np.arange(48000 * 10) / 48000
+
+    def fl_exports(combo):
+        typed = [e for e in screen.log if e[0] == "type"]
+        if (
+            combo.key == "enter"
+            and typed
+            and sum(1 for e in screen.log if e == ("key", "enter")) % 2 == 0
+        ):
+            gain_db = -60 + 60 * wired.fake.params[("m", 0, 9)][0][1]
+            level = 10 ** ((gain_db - 5) / 20)  # louder limiter gain, louder file
+            tone = (level * np.sin(2 * np.pi * 997 * t)).astype("float32")
+            sf.write(typed[-1][1], np.stack([tone, tone], axis=1), 48000, subtype="FLOAT")
+
+    screen.on_key = fl_exports
+    out = await run("fl_audio", {"action": "master", "target": -23.0})
+    assert out["reached"] is True and abs(out["passes"][-1]["lufs"] + 23.0) <= 0.5
+    assert (
+        out["limiter"]["plugin"] == "Fruity Limiter" and out["limiter"]["original_gain_db"] == -30.0
+    )
+    assert out["limiter"]["final_gain_db"] == pytest.approx(-18.0, abs=1.0)

@@ -66,7 +66,7 @@ The scripting API is the main door. Because it is limited, there are more (the *
    - `queue`: one part to the piano roll through the inbox file.
 4. `mixing.balance` plays the project, measures peaks per track and moves faders until each role is near its target; it reports faders that hit their limit instead of hiding it.
 5. `chain.py` compares the plugins on a track with what its role wants (`data/plugins.json`: kinds, order, recipes) and, with `apply`, sets starting values by *meaning*: `plugins_kb.match_intents` finds the threshold, ratio, attack, release, ceiling, wet and so on of any plugin by name words and by the unit in its value text, so it works on plugins it has never seen.
-6. `fl_audio` closes the loop: `render.py` or `desk.export` produces audio, `audio.report` measures it and turns the numbers into plain advice against the genre's loudness target.
+6. `fl_audio` closes the loop: `render.py` or `desk.export` produces audio, `audio.report` measures it and turns the numbers into plain advice against the genre's loudness target. `mastering.py` automates the last step: it finds the limiter on the master, picks its dB gain (or threshold) parameter by meaning, and moves it by the loudness error, measuring after each change.
 
 ### Anti-monotony
 

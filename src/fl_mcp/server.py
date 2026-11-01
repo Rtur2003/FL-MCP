@@ -27,6 +27,7 @@ from fl_mcp import (
     desk,
     guides,
     library,
+    mastering,
     mixing,
     produce,
     render,
@@ -377,7 +378,7 @@ async def fl_library(
 
 
 async def fl_audio(
-    action: Literal["analyze", "render", "compare", "status"] = "analyze",
+    action: Literal["analyze", "render", "compare", "master", "status"] = "analyze",
     path: Annotated[str | None, Field(description="audio file; default latest export")] = None,
     project: Annotated[str | None, Field(description="render: .flp; default just saved")] = None,
     reference: Annotated[str | None, Field(description="compare: reference track")] = None,
@@ -391,7 +392,8 @@ async def fl_audio(
     """Hear the mix. analyze: LUFS (integrated, short-term, momentary), loudness range, true peak,
     crest, clipping, DC, stereo width, mono loss, 7-band spectrum and plain advice against the
     genre's or target loudness. render: export, then analyze: FL's command line for a saved .flp,
-    or the open project through fl_desk when on. compare: with a reference. Needs audio extra."""
+    or the open project through fl_desk when on. compare: with a reference. master: set the master
+    limiter's gain until the loudness hits the target (needs fl_desk). Needs audio extra."""
     if action == "status":
         return _out({"analysis": audio.available(), **await _thread(render.status)})
     goal = target if target is not None else (GENRES[genre].lufs if genre else None)
@@ -402,6 +404,21 @@ async def fl_audio(
         if not mine:
             raise ToolError("compare needs path: no audio was exported recently")
         return _out(await _thread(audio.compare, mine, reference))
+    if action == "master":
+        if not desk.enabled():
+            raise ToolError(
+                "master exports the open project on every pass, which needs fl_desk "
+                "(fl-mcp desktop on). Without it set the limiter with fl_param, render with "
+                "fl_audio and repeat (mix guide)"
+            )
+
+        def measure() -> dict[str, Any]:
+            target_file = data_dir() / "exports" / f"master-{time.time_ns()}.wav"
+            made_file = desk.get().export(target_file, "wav")
+            return audio.report(made_file["audio"], goal, ceiling)
+
+        aim = goal if goal is not None else audio.STREAMING_LUFS
+        return _out(await _thread(mastering.run, bridge.call, measure, aim, ceiling))
     made: dict[str, Any] | None = None
     if action == "render":
         if not project and desk.enabled() and fmt in ("wav", "mp3"):  # the open project, as is

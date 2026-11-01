@@ -288,6 +288,24 @@
         "overdrive"
       ],
       "unit": ""
+    },
+    "limitgain": {
+      "words": [
+        "input gain",
+        "in gain",
+        "gain",
+        "input",
+        "drive"
+      ],
+      "unit": "db"
+    },
+    "limitthreshold": {
+      "words": [
+        "threshold",
+        "thresh",
+        "thr"
+      ],
+      "unit": "db"
     }
   },
   "recipes": {
