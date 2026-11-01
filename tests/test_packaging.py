@@ -56,8 +56,11 @@ def test_the_manifest_matches_the_spec_and_the_code(bundle):
     key = m["user_config"]["license_key"]
     assert key["sensitive"] is True and key["required"] is False and key["type"] == "string"
     assert m["server"]["mcp_config"]["env"]["FL_MCP_LICENSE"] == "${user_config.license_key}"
-    assert len(m["tools"]) == len(NAMES) and all(t["name"] and t["description"] for t in m["tools"])
-    assert {t["name"] for t in m["tools"]} >= {"fl_produce", "fl_mix", "fl_status"}
+    assert len(m["tools"]) == len(NAMES) + 1  # fl_desk is listed too (opt-in)
+    assert all(t["name"] and t["description"] for t in m["tools"])
+    assert {t["name"] for t in m["tools"]} >= {"fl_produce", "fl_mix", "fl_status", "fl_desk"}
+    assert m["user_config"]["desktop"]["default"] is False
+    assert m["server"]["mcp_config"]["env"]["FL_MCP_DESKTOP"] == "${user_config.desktop}"
 
 
 def test_the_bundle_installs_dependencies_but_not_the_project(bundle):
