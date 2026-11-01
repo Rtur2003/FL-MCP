@@ -3,22 +3,24 @@
 FL-MCP controls the FL Studio on the same computer. Nothing here is hosted; the only optional network traffic is the licence service (see COMMERCE.md).
 
 ```
-MCP client (any model)
-   |  stdio, JSON-RPC
+MCP client (any model)         Claude Code plugin: skills generated from the same guides
+   |  stdio, JSON-RPC            MCP resources + prompts: fl://guide/<topic>, make_beat, ...
    v
-fl_mcp.server  --- produce / mixing / music / flp (pure Python, no FL needed)
-   |  JSON framed in MIDI CC messages
-   v
-virtual MIDI port (loopMIDI on Windows, IAC on macOS)
-   |
-   v
-device_FLMCP.py  (controller script inside FL Studio's embedded Python)
+fl_mcp.server --- produce / mixing / chain / music / flp / library / audio / selftest
+   |             (pure Python, no FL needed)         |                    |
+   |  JSON framed in MIDI CC messages                |  files             |  keys, mouse, pixels
+   v                                                 v                    v
+virtual MIDI port                               .flp, .mid, .wav      desktop backend
+(loopMIDI on Windows, IAC on macOS)             FL command line       (opt-in, FL windows only)
+   |                                                 |                    |
+   v                                                 v                    v
+device_FLMCP.py (controller script, embedded Python)         FL Studio
    |  documented FL scripting API only
    v
 FL Studio
 ```
 
-Two more doors into FL exist because the scripting API is limited: the **piano roll script** (`FL MCP.pyscript`, run by the user from Tools > Scripting) and **files** (a MIDI file the user drags in, a `.flp` the user opens).
+The scripting API is the main door. Because it is limited, there are more (the **capability ladder**, see `CAPABILITIES.md`): the **piano roll script** (`FL MCP.pyscript`), FL's own **UI driven from inside FL** (`ui.navigateBrowser`, key presses), **files** (a `.flp` written for FL to open, a MIDI file, FL's command-line render), and, only when switched on, the **desktop** (screenshots, keys, mouse).
 
 ## The link
 
@@ -32,10 +34,12 @@ Two more doors into FL exist because the scripting API is limited: the **piano r
 
 ## The controller script
 
-`src/fl_mcp/fl/device_FLMCP.py` runs inside FL on FL's older embedded Python, so it avoids newer syntax. It understands sixteen operations: `ping status list set tr steps param roll call gain eq peaks markers note grid batch`.
+`src/fl_mcp/fl/device_FLMCP.py` runs inside FL on FL's older embedded Python, so it avoids newer syntax. It understands nineteen operations: `ping status list set tr steps param roll call gain eq peaks markers note grid batch ui probe diag`.
 
 - **Allowlist.** `call` can reach only the FL API modules `transport mixer channels patterns playlist plugins ui general arrangement`; arguments named like `midi.NAME` resolve to constants. There is no `exec`, `eval`, file or network access.
 - **Real units.** FL stores volume and EQ as 0-1 values with a non-linear mapping. The script solves for the stored value whose read-back in dB or Hz equals the target (bisection against `getTrackVolume(i, 1)`, `getEqGain(..., 1)`, `getEqFrequency(..., 1)`), so "-8 dB" means -8 dB.
+- **Plugins by name and in the plugin's own units.** `param` finds a parameter by name, then solves against the text the plugin itself shows (`plugins.getParamValueString`): 17 samples bracket the wanted value, bisection finishes, the stored value is restored if nothing reaches it, and the answer reports the text FL really shows. Units understood: dB, Hz/kHz, ms/s, %, ratios, steps. Presets: names via `plugins.getName(..., midi.FPN_Preset, ...)`, stepping via `nextPreset`/`prevPreset`.
+- **Interface.** `ui` shows, hides and focuses windows, presses an allowlisted set of keys, and walks FL's browser (`navigateBrowser`, `toggleBrowserNode`, `getFocusedNodeCaption`) with a step limit and loop detection. `probe` reports which optional API functions this FL build has; `diag` returns the script's last errors from a small ring buffer.
 - **Undo.** A `batch` is one undo step (`general.saveUndo`), so a whole production can be undone with one Ctrl+Z.
 - **Measurement.** `peaks` reads `mixer.getTrackPeaks`; the host samples it over time (`mixing.py`).
 
@@ -43,11 +47,13 @@ Two more doors into FL exist because the scripting API is limited: the **piano r
 
 | Missing in the API | Route used |
 |---|---|
-| Create channels or plugins | Fill channels that already exist (matched by name), or build on a template `.flp` |
-| Write notes to a pattern | Drums: the step sequencer (`grid` op). Melody and chords: the piano roll script reads `~/.fl-mcp/inbox.json`. Everything: a MIDI file. |
-| Place playlist clips | Only through a written `.flp` (see below) |
-| Render or export audio | Not available. Reported as a limit rather than faked. |
-| Load samples or presets | Not available. The plan's `sound` hints tell the user or model what to load. |
+| Create channels, patterns, playlist clips | A written `.flp` built on a template (`flp.py`), including cloned **sampler channels** that point at real files; the user (or `fl_desk macro=open`) opens it |
+| Load a plugin or sample | FL's own browser driven from inside FL (`fl_ui`: focus, step to the item, select); the desktop tier as the fallback |
+| Write notes to a pattern | Drums: the step sequencer. Melody and chords: the piano roll script reads `~/.fl-mcp/inbox.json`; `fl_desk macro=script` runs it with FL's "run last script" shortcut and checks `state.json` for the queued serial. Everything: a MIDI file |
+| Render or export audio | FL's command line (`FL64.exe /R /E<fmt> project.flp`, `render.py`), or File > Export through the desktop tier for the project that is open (`desk.export`) |
+| Measure the mix | `audio.py` on the rendered file (BS.1770 loudness, true peak, spectrum, stereo); mixer peak meters during playback for levels |
+| Know what is installed | `library.py` reads FL's plugin database and walks the sample folders, then measures samples (duration, decay, brightness, low end) |
+| Anything on screen | `desk.py` with a Windows (user32/GDI) or macOS (System Events) backend |
 
 ## Production pipeline
 
@@ -59,6 +65,8 @@ Two more doors into FL exist because the scripting API is limited: the **piano r
    - `export_flp`: `flp.py` patches the template (see below).
    - `queue`: one part to the piano roll through the inbox file.
 4. `mixing.balance` plays the project, measures peaks per track and moves faders until each role is near its target; it reports faders that hit their limit instead of hiding it.
+5. `chain.py` compares the plugins on a track with what its role wants (`data/plugins.json`: kinds, order, recipes) and, with `apply`, sets starting values by *meaning*: `plugins_kb.match_intents` finds the threshold, ratio, attack, release, ceiling, wet and so on of any plugin by name words and by the unit in its value text, so it works on plugins it has never seen.
+6. `fl_audio` closes the loop: `render.py` or `desk.export` produces audio, `audio.report` measures it and turns the numbers into plain advice against the genre's loudness target.
 
 ### Anti-monotony
 
@@ -72,6 +80,28 @@ Patch operations: set tempo, replace a pattern's notes and name, clone a pattern
 
 Risk, stated plainly: FL does not publish this format, and FL Studio itself is the only complete judge of a file. The module is verified against real FL 20.8.4 projects and an independent parser, but a project written for a newer FL version should be opened and checked once by a person.
 
+## Audio analysis
+
+`audio.py` follows ITU-R BS.1770-4 and EBU Tech 3342: K-weighting (the two standard biquads, computed for any sample rate from the standard's analogue prototype and verified against its 48 kHz coefficients), 400 ms momentary blocks every 100 ms (75 % overlap) and 3 s short-term blocks every second, absolute (-70 LUFS) and relative (-10 LU) gating, loudness range from the 10th to the 95th percentile with a -20 LU relative gate, and true peak on a 4x oversampled signal. Spectrum bands, stereo correlation, mid/side level, low-end side level, mono compatibility, DC and clipping are measured on the same file. `advise` turns the numbers into sentences a model can act on. numpy, scipy and soundfile are an optional extra; without them `fl_audio` says so.
+
+## The desktop tier
+
+`desk.py` holds the policy and the macros; `desk_win.py` and `desk_mac.py` hold the operating-system calls behind a small `Backend` interface, so the policy is tested against a fake desktop.
+
+- Input is sent only if an FL window (matched by process, then by title) is in front; otherwise FL is brought forward, and if that fails nothing is sent. The check is repeated before every step of a macro.
+- Key combos are parsed to a small grammar (`mod+shift+r`); window-closing and system keys are blocked. A mouse in the top-left corner raises a failsafe.
+- A screenshot is the union of FL's visible windows, shrunk to at most 1568 px wide; later clicks are given in that picture's coordinates and scaled back. A click before any screenshot is refused.
+- Windows structures use fixed-width field types so their sizes (`INPUT` is 40 bytes on 64-bit) are checked by a test on any 64-bit system. The process asks for per-monitor DPI awareness so pixels in pictures and clicks agree.
+- Off by default: `fl-mcp desktop on` writes a flag file (or `FL_MCP_DESKTOP=1`); the tool is not even registered otherwise.
+
+## Guides, prompts and the plugin
+
+The knowledge a model needs lives in five markdown files in `src/fl_mcp/data/guides`. `guides.py` fills their tables from the live data (genre profiles, loudness targets, instruments) and serves them as MCP resources and prompts. `scripts/build_plugin.py` wraps the same files as the skills of the Claude Code plugin (`plugin/`), writes the manifest from the package version, and `--check` (run by a test) fails if a committed file differs. Another test checks that every `fl_*` tool and every `argument=` a guide mentions exists, so a guide cannot describe a tool that is gone.
+
+## Self-test and setup
+
+`fl-mcp selftest` runs `selftest.py` against the FL that is running: link and script version, status, every list, a small write and put-back of one mixer volume and the tempo, a plugin parameter solved to its own displayed text and restored, presets, windows, the browser, and what the audio, render and desktop layers have. The result is a JSON report. `fl-mcp setup` installs the scripts, checks the MIDI port and prints the client text from `clients.py`.
+
 ## Testing
 
 | Layer | How |
@@ -83,6 +113,12 @@ Risk, stated plainly: FL does not publish this format, and FL Studio itself is t
 | Music | Properties (no overlapping one-shots, notes in key, section structure, seeds reproduce), MIDI files re-read with mido. |
 | `.flp` | Byte-exact round trip, every truncation fails cleanly, real files and an independent parser when available. |
 | Credits | Random sequences of grants, holds, settlements and expiries must keep the books balanced; mutations of the ledger are caught. |
+| Plugins | Parameter lookup, real-unit solving (including failures that restore the value), presets, the interface and browser ops, against a fake with several plugin families. |
+| Sounds | Library scan, role ranking and kit selection on generated audio; generated `.flp` sampler channels re-read by an independent parser (when available) and checked against a real FL 20.8.4 file. |
+| Audio | Known tones give known LUFS at several sample rates; gating, loudness range, true peak between samples, spectrum, stereo, clipping; render with a fake FL process. |
+| Desktop | Key grammar and blocked keys, foreground checks before every step, failsafe, click scaling, macros against a fake desktop, PNG encoding, Windows structure sizes. |
+| Self-test | Run against the FL fake: every check ends ok or skipped with a reason; writes are put back, also when one fails. |
+| Guides and plugin | Committed plugin equals generated plugin; front matter limits; every tool and argument in a guide exists; `claude plugin validate --strict` when the CLI is present. |
 | Bundle | The unpacked `.mcpb` is started over stdio and lists its tools. |
 
 ## Extending

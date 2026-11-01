@@ -1,27 +1,41 @@
-# What it can do, and what it cannot
+# What it can do, and by which route
 
-Status key: **live** = works through the documented FL API, **assisted** = needs one step from the user, **file** = delivered as a file, **no** = not possible through any documented route (the server says so instead of faking it).
+Routes, from most to least certain. The server tries them in this order and says which one it used.
 
-| Area | Status | Notes |
-|---|---|---|
-| Transport: play, stop, record, loop, metronome, tempo, position | live | |
-| Save, undo | live | `save` writes the current project, `undo` is one step |
-| Read project state, channels, mixer, patterns, playlist tracks | live | Paged; default and empty items skipped |
-| Name, color, volume, pan, mute, solo of channels, mixer tracks, patterns, playlist tracks | live | Volume and pan in real units |
-| Mixer routing: insert assignment, sends and send levels | live | |
-| Mixer EQ (built-in 3-band): gain and frequency | live | The built-in EQ has shelves only; a real high-pass needs an EQ plugin |
-| Plugin parameters of existing instruments and effects | live | List (filter by name), set by index, read back; values 0-1 |
-| Drum patterns in the Channel Rack | live | Step sequencer: steps, velocity, pitch, swing |
-| Melodies, chords, bass lines | assisted | Piano roll script: the user runs Tools > Scripting > FL MCP once per part |
-| Whole song as notes | file | Standard MIDI File with a track per part and section markers |
-| Whole song as a project | file | `.flp` built on the user's template (instruments, patterns, playlist) |
-| Section markers | live | Time markers on the timeline |
-| Level balance by measurement | live | `fl_mix`: plays, reads peaks, moves faders; needs audible playback |
-| Create a channel or load a plugin | no | Not in the API. Use a template project |
-| Load a sample or preset | no | Not in the API. Plans carry sound hints instead |
-| Place playlist clips in a running project | no | Not in the API. Possible only in a written `.flp` |
-| Render or export audio, loudness (LUFS), spectrum | no | Not in the API. Peak levels from the mixer meters are the only measurement |
-| Open a project | no | Not in the API (saving is). The user opens the written `.flp` |
+1. **API**: FL's documented scripting API, through the controller script.
+2. **UI**: FL's own interface driven from inside FL (windows, keys, the browser) through the same script. Works on what the FL build exposes (`fl_status probe=true`).
+3. **File**: a `.flp`, `.mid` or audio file written or read on disk.
+4. **Command line**: FL started with `/R` to render a saved project (Windows).
+5. **Desktop**: screenshots, keys and mouse on the screen. Off until `fl-mcp desktop on`.
+
+Confidence: **verified** = tested against real FL files or a reference implementation; **tested** = tested against the fake FL built on the official stubs; **unseen** = depends on live FL behaviour no test here can show (the first `fl-mcp selftest` on a real machine settles it).
+
+| Area | Route | Confidence | Notes |
+|---|---|---|---|
+| Transport: play, stop, record, loop, metronome, tempo, position; save, undo | API | tested | `undo` is one step; a produced song is one undo step |
+| Read project state, channels, mixer, patterns, playlist tracks, **every plugin** | API | tested | Paged; default and empty items skipped |
+| Name, color, volume, pan, mute, solo of channels, mixer tracks, patterns, playlist tracks | API | tested | Volume and pan in real units |
+| Mixer routing: insert assignment, sends and send levels | API | tested | |
+| **Any plugin, stock or third party**: find a parameter by name, set it in the plugin's own units, set many at once | API | tested / unseen per plugin | Solves against the plugin's displayed text; plugins that report no text fall back to 0-1 values |
+| Presets: list names, load by name, step | API | tested / unseen per plugin | Depends on the plugin reporting presets to the API |
+| Plugin chains by role: check order, set compressor/limiter/reverb/delay values by meaning | API | tested | Works on plugins already loaded |
+| Drum patterns in the Channel Rack | API | tested | Step sequencer: steps, velocity, pitch |
+| Melodies, chords, bass lines | File + UI | tested / unseen | Piano roll script; `fl_desk macro=script` repeats it with FL's shortcut and verifies; or the user runs it once |
+| Whole song as notes | File | verified | Standard MIDI File, a track per part, section markers |
+| Whole song as a project, with samples | File | verified (format), unseen (FL accepting cloned sampler channels) | `.flp` on a template; checked against FL 20.8.4 and an independent parser |
+| Open or save a project | Desktop | unseen | `fl_desk macro=open` / `save` |
+| Create a channel, load a plugin or sample | UI, then Desktop | unseen | `fl_ui` browser route; `fl_desk` fallback with screenshots; or generated `.flp` |
+| Place playlist clips | File | verified | In a written `.flp` |
+| Window state, key presses, browser walking | UI | tested / unseen | Needs `ui.navigateBrowser` and friends (`probe` says) |
+| Render or export audio | Command line, Desktop | unseen | `FL64.exe /R /E<fmt>` on a saved project; `fl_desk macro=export` for the open project |
+| Loudness (LUFS), loudness range, true peak, crest, clipping, DC | File | verified | BS.1770-4 / EBU 3342 on the rendered file |
+| Spectrum, stereo width, correlation, mono loss, low-end width | File | tested | 7 bands; correlation and mid/side from the channels |
+| Compare with a reference track | File | tested | Band differences with advice |
+| Level balance by measurement | API | tested | `fl_mix`: plays, reads peaks, moves faders; needs audible playback |
+| Problem finding: clipping, headroom, routing, pan, missing plugins | API | tested | `fl_mix doctor`, worst first |
+| Find sounds: sample packs, installed plugins; rank by role and by measured sound; pick a coherent kit | File | tested | `fl_library`; samples measured for length, decay, brightness, low end |
+| See the screen, click, type | Desktop | unseen | Windows (user32/GDI) and macOS (System Events); opt-in |
+| Recording by MIDI, plugin sidechain source, automation clips | not done | | Possible through the desktop tier case by case; no tool of its own yet |
 
 ## How a professional works, and where this follows it
 
@@ -29,16 +43,12 @@ Status key: **live** = works through the documented FL API, **assisted** = needs
 |---|---|
 | Choose tempo and key to the genre | Each genre has tempo ranges and default scales (house 120-128, techno 125-140, trap 130-160, boom bap 84-96, lo-fi 68-84...). Minor, major and the hicaz scale (oriental trap) are supported. |
 | Arrange in sections | Intro, build, drop, break, outro with intensity curves and role lists per section. |
-| Drums as one-shots | Drum parts are one-shots at a single pitch with short gates; hat, clap and percussion get their own groove (swing, ghost notes, rolls). |
-| 808 bass | Glides are written as slide notes in a `.flp` (the MIDI file carries plain notes); mono bass lines are cleaned so notes never overlap. |
-| Gain staging | Role peak targets that vary by genre (base values: kick -8 dBFS, bass -9, snare -10, clap -12, hats -20), master kept under -3 dBFS. |
-| Pan and EQ by role | Hats, open hats, percussion and arps sit off-center. EQ bands (gain at a frequency) are applied to the built-in EQ; the high-pass frequency in the plan is advice, because the built-in EQ has no high-pass. |
-| Sends | Reverb and delay send levels per role are part of the plan. |
-| Sidechain | A ducking depth per role is in the plan as advice; it is applied through plugin settings that depend on the user's effect chain, which the server does not create. |
+| Drums as one-shots, from one kit | Drum parts are one-shots with short gates; hat, clap and percussion get their own groove (swing, ghost notes, rolls). `fl_library kit` picks all drum samples from one pack. |
+| 808 bass | Glides are written as slide notes in a `.flp`; mono bass lines are cleaned so notes never overlap. |
+| Gain staging | Role peak targets that vary by genre (base values: kick -8 dBFS, bass -9, snare -10, clap -12, hats -20), master kept under -3 dBFS before the limiter; `fl_mix balance` moves faders until they are met. |
+| EQ and compression by role | High-pass per role, small cuts and lifts, compressor starting points per role (`data/plugins.json`), set in real units on the plugins the track has. |
+| Sends | Reverb and delay on shared send tracks; send levels per role are part of the plan. |
+| Check with meters | LUFS against the genre's release loudness, true peak under -1 dBTP, crest factor, stereo and mono compatibility, spectrum against a reference. |
 | Variation | Fills, drop-outs, rolls, humanization and melody variation (see ARCHITECTURE.md). |
 
-## Not built yet (honest list)
-
-- Audio analysis (loudness, spectrum, stereo width): needs rendered audio; a UI-automation tier for export is possible but fragile and not included.
-- A scanner for installed plugins to pick sounds automatically.
-- Recording automation by MIDI.
+Sidechain ducking depth is part of the plan as advice; the plugin's sidechain *source* is chosen in the plugin's own window, which the API cannot reach (the desktop tier can).

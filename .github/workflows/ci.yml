@@ -17,6 +17,18 @@ jobs:
       - run: uv pip install -e ".[dev]"
       - run: .venv/bin/ruff check .
       - run: .venv/bin/ruff format --check .
+      - run: .venv/bin/python scripts/build_plugin.py --check
       - run: .venv/bin/pytest
       - run: .venv/bin/python packaging/build_mcpb.py --out dist
         if: matrix.python != '3.10'
+
+  plugin:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm install -g @anthropic-ai/claude-code
+      - run: claude plugin validate plugin --strict
+      - run: claude plugin validate . --strict
