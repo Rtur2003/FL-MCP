@@ -24,7 +24,7 @@ Call `fl_status probe=true log=true` first: it lists the API functions this FL b
 | `fl_notes` queued, nothing in the piano roll | the piano roll script never ran | in the piano roll: Tools > Scripting > FL MCP, press Accept once; afterwards `fl_desk macro=script` (or Ctrl+Alt+Y) repeats it |
 | `fl_param` says a parameter has no text | plugin does not report value strings | set 0-1 `value`, or read it on screen with `fl_desk` |
 | `fl_param real=` cannot reach a value | the parameter's range does not contain it | read `text` after the call: it shows what FL really set |
-| `fl_audio render`: "already open" | FL handed the project to the running instance | use `fl_desk` (desktop on) for the open project, or File > Export |
+| `fl_audio render`: "FL Studio is open" | FL's command-line renderer starts its own copy of FL | save and close FL, or use `fl_desk` (desktop on) to export the open project, or File > Export by hand |
 | `fl_desk`: "Windows blocked the input" | FL runs as administrator | start Claude as administrator too, or run FL normally |
 | Credits | `fl_status` shows the balance; `fl-mcp account` shows prices | tell the user instead of retrying |
 

@@ -430,6 +430,15 @@ async def fl_audio(
                 raise ToolError(
                     "no project to render: save it in FL (Ctrl+S) and call again, or pass project"
                 )
+            try:
+                await _fl({"o": "ping"})
+            except ToolError:
+                pass  # FL is not answering: it is closed, which the batch renderer needs
+            else:
+                raise ToolError(
+                    "FL Studio is open, and its command-line renderer starts its own copy: save "
+                    "and close FL then call again, or turn on fl_desk to export the open project"
+                )
             made = await _thread(render.render, flp, fmt)
         path = made["audio"]
     path = path or await _thread(render.newest_audio)

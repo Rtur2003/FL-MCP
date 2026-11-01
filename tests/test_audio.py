@@ -217,43 +217,102 @@ class Clock:
         self.t += s
 
 
-def test_render_waits_for_the_file_to_stop_growing(tmp_path):
-    flp = tmp_path / "song.flp"
-    flp.write_bytes(b"FLhd")
+def run_render(tmp_path, flp, fmt="wav", writes=None, timeout=60, proc=None, **kw):
+    """Render with a fake FL: `writes(cmd, clock)` plays the part of FL writing files."""
     clock, calls = Clock(), []
+    work = tmp_path / "work"
 
     def popen(cmd):
         calls.append(cmd)
-        return FakeProc()
+        return proc or FakeProc()
 
     def sleep(s):
         clock.sleep(s)
-        out = tmp_path / "song.wav"
-        out.write_bytes(b"x" * min(int(clock.t) * 1000, 3000))
+        if writes:
+            writes(calls[-1], clock)
 
-    out = render.render(flp, "wav", 60, Path("FL64.exe"), popen, sleep, clock.now, time.time)
-    assert calls == [["FL64.exe", "/R", "/Ewav", str(flp)]]
-    assert out["audio"] == str(tmp_path / "song.wav") and out["seconds"] >= 3
+    out = render.render(
+        flp, fmt, timeout, Path("C:/FL/FL64.exe"), popen, sleep, clock.now, lambda: 1000.0,
+        workdir=work, **kw,
+    )  # fmt: skip
+    return out, calls
+
+
+def test_a_lone_project_is_rendered_where_it_is_with_flps_own_switches(tmp_path):
+    folder = tmp_path / "My Song"
+    folder.mkdir()
+    flp = folder / "song.flp"
+    flp.write_bytes(b"FLhd")
+
+    def fl_writes(cmd, clock):
+        out = Path(cmd.split('/O"')[1].rstrip('"'))
+        (out / "song.wav").write_bytes(b"x" * min(int(clock.t) * 1000, 3000))
+        os.utime(out / "song.wav", (1001, 1001))
+
+    out, calls = run_render(tmp_path, flp, writes=fl_writes)
+    assert calls == [
+        f'"{Path("C:/FL/FL64.exe")}" /R /Ewav /F"{folder.resolve()}" '
+        f'/O"{tmp_path / "work" / "1000" / "audio"}"'
+    ]
+    assert out["audio"].endswith("song.wav") and out["copied"] is False and out["seconds"] >= 3
+
+
+def test_a_project_among_others_is_copied_to_a_folder_of_its_own(tmp_path):
+    for name in ("a", "b", "song"):
+        (tmp_path / f"{name}.flp").write_bytes(b"FLhd" + name.encode())
+    (tmp_path / "Backup").mkdir()
+    (tmp_path / "Backup" / "song.flp").write_bytes(b"old")  # FL skips backups, so do we
+
+    def fl_writes(cmd, clock):
+        source = Path(cmd.split('/F"')[1].split('"')[0])
+        assert [f.name for f in source.glob("*.flp")] == ["song.flp"]
+        out = Path(cmd.split('/O"')[1].rstrip('"'))
+        (out / "song.wav").write_bytes(b"y" * 100)
+        os.utime(out / "song.wav", (1001, 1001))
+
+    out, calls = run_render(tmp_path, tmp_path / "song.flp", writes=fl_writes)
+    assert out["copied"] is True and "/F" in calls[0]
+    assert (tmp_path / "song.flp").read_bytes() == b"FLhdsong"  # the original is untouched
+
+
+def test_a_lone_backup_does_not_count_as_another_project(tmp_path):
+    flp = tmp_path / "song.flp"
+    flp.write_bytes(b"FLhd")
+    (tmp_path / "Backup").mkdir()
+    (tmp_path / "Backup" / "song.flp").write_bytes(b"old")
+
+    def fl_writes(cmd, clock):
+        out = Path(cmd.split('/O"')[1].rstrip('"'))
+        (out / "song.mp3").write_bytes(b"z" * 10)
+        os.utime(out / "song.mp3", (1001, 1001))
+
+    out, calls = run_render(tmp_path, flp, "mp3", writes=fl_writes)
+    assert out["copied"] is False and "/Emp3" in calls[0]
+
+
+def test_an_older_fl_without_the_output_folder_switch_writes_beside_the_project(tmp_path):
+    flp = tmp_path / "song.flp"
+    flp.write_bytes(b"FLhd")
+
+    def fl_writes(cmd, clock):
+        (tmp_path / "song.wav").write_bytes(b"w" * 50)
+        os.utime(tmp_path / "song.wav", (1001, 1001))
+
+    out, _ = run_render(tmp_path, flp, writes=fl_writes)
+    assert out["audio"] == str(tmp_path / "song.wav")
 
 
 def test_render_failures_say_what_happened(tmp_path):
     flp = tmp_path / "song.flp"
     flp.write_bytes(b"FLhd")
-    clock = Clock()
-    args = (Path("FL64.exe"),)
     with pytest.raises(ValueError, match="exited with code 3 and wrote no audio"):
-        render.render(
-            flp, "wav", 60, *args, lambda cmd: FakeProc(3), clock.sleep, clock.now, time.time
-        )
-    clock = Clock()
-    with pytest.raises(ValueError, match="no audio appeared within 5 s.*already open"):
-        render.render(
-            flp, "wav", 5, *args, lambda cmd: FakeProc(), clock.sleep, clock.now, time.time
-        )
+        run_render(tmp_path, flp, proc=FakeProc(3))
+    with pytest.raises(ValueError, match="no audio appeared within 5 s.*close FL first"):
+        run_render(tmp_path, flp, timeout=5)
     with pytest.raises(ValueError, match="not an existing .flp"):
-        render.render(tmp_path / "nope.flp", "wav", 5, *args)
+        render.render(tmp_path / "nope.flp", "wav", 5, Path("FL64.exe"))
     with pytest.raises(ValueError, match="format must be one of"):
-        render.render(flp, "aac", 5, *args)
+        render.render(flp, "aac", 5, Path("FL64.exe"))
 
 
 def test_without_fl_the_reason_is_given(tmp_path, monkeypatch):

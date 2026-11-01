@@ -5,7 +5,7 @@ Routes, from most to least certain. The server tries them in this order and says
 1. **API**: FL's documented scripting API, through the controller script.
 2. **UI**: FL's own interface driven from inside FL (windows, keys, the browser) through the same script. Works on what the FL build exposes (`fl_status probe=true`).
 3. **File**: a `.flp`, `.mid` or audio file written or read on disk.
-4. **Command line**: FL started with `/R` to render a saved project (Windows).
+4. **Command line**: FL started with `/R /E<fmt> /F<folder> /O<folder>` to render a saved project (Windows; FL must be closed, it starts its own copy).
 5. **Desktop**: screenshots, keys and mouse on the screen. Off until `fl-mcp desktop on`.
 
 Confidence: **verified** = tested against real FL files or a reference implementation; **tested** = tested against the fake FL built on the official stubs; **unseen** = depends on live FL behaviour no test here can show (the first `fl-mcp selftest` on a real machine settles it).
@@ -27,7 +27,7 @@ Confidence: **verified** = tested against real FL files or a reference implement
 | Create a channel, load a plugin or sample | UI, then Desktop | tested (fake browser) / unseen | `fl_ui action=load` checks by inventory diff that something appeared; `fl-mcp selftest --deep` tests it on your FL; `fl_desk` fallback; or generated `.flp` |
 | Place playlist clips | File | verified | In a written `.flp` |
 | Window state, key presses, browser walking | UI | tested / unseen | Needs `ui.navigateBrowser` and friends (`probe` says) |
-| Render or export audio | Command line, Desktop | unseen | `FL64.exe /R /E<fmt>` on a saved project; `fl_desk macro=export` for the open project |
+| Render or export audio | Command line, Desktop | unseen | `FL64.exe /R /E<fmt> /F... /O...` on a saved project with FL closed; `fl_desk macro=export` for the project that is open |
 | Loudness (LUFS), loudness range, true peak, crest, clipping, DC | File | verified | BS.1770-4 / EBU 3342 on the rendered file |
 | Spectrum, stereo width, correlation, mono loss, low-end width | File | tested | 7 bands; correlation and mid/side from the channels |
 | Compare with a reference track | File | tested | Band differences with advice |

@@ -579,3 +579,10 @@ async def test_fl_audio_master_brings_the_mix_to_the_target(screen, wired, tmp_p
         out["limiter"]["plugin"] == "Fruity Limiter" and out["limiter"]["original_gain_db"] == -30.0
     )
     assert out["limiter"]["final_gain_db"] == pytest.approx(-18.0, abs=1.0)
+
+
+async def test_command_line_render_refuses_while_fl_is_open(wired, tmp_path):
+    flp = tmp_path / "song.flp"
+    flp.write_bytes(b"FLhd")
+    error = await run("fl_audio", {"action": "render", "project": str(flp)}, expect_error=True)
+    assert "FL Studio is open" in error and "fl_desk" in error

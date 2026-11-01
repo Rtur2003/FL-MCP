@@ -5,6 +5,7 @@ FL is already running it may hand the project to that instance; the answer then 
 not at all, which is reported rather than hidden."""
 
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -86,6 +87,23 @@ def status() -> dict[str, Any]:
     }
 
 
+def _siblings(project: Path) -> list[Path]:
+    """Other projects FL's folder render would also pick up (its Backup folder is skipped)."""
+    out = []
+    for f in project.parent.rglob("*.flp"):
+        inside = {part.lower() for part in f.relative_to(project.parent).parts[:-1]}
+        if f != project and "backup" not in inside:
+            out.append(f)
+    return out
+
+
+def command_line(exe: Path, fmt: str, source: Path, out: Path) -> str:
+    """FL's documented batch render: /R renders, /E<format>, /F<source folder>, /O<output folder>.
+
+    The quotes go around the path only (`/F"C:\\My Projects"`), as FL's own examples have them."""
+    return f'"{exe}" /R /E{fmt} /F"{source}" /O"{out}"'
+
+
 def render(
     flp: str | Path,
     fmt: str = "wav",
@@ -95,8 +113,11 @@ def render(
     sleep: Callable[[float], None] = time.sleep,
     clock: Callable[[], float] = time.monotonic,
     wall: Callable[[], float] = time.time,
+    workdir: Path | None = None,
 ) -> dict[str, Any]:
-    project = Path(flp).expanduser()
+    """Render one saved project with FL's command line. FL renders every .flp in the folder it is
+    given, so a project that shares its folder with others is copied to a folder of its own."""
+    project = Path(flp).expanduser().resolve()
     if project.suffix.lower() != ".flp" or not project.is_file():
         raise ValueError(f"not an existing .flp project: {project}")
     if fmt not in FORMATS:
@@ -109,13 +130,24 @@ def render(
             else ("FL Studio's FL64.exe was not found: set FL_MCP_FL_DIR to its folder")
         )
         raise ValueError(f"cannot render from the command line: {why}")
-    target = project.with_suffix(f".{fmt}")
+    base = (workdir or paths.data_dir() / "renders") / str(int(wall()))
+    out = base / "audio"
+    out.mkdir(parents=True, exist_ok=True)
+    source, copied = project.parent, False
+    if _siblings(project):
+        source, copied = base / "project", True
+        source.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(project, source / project.name)
     started = wall()
-    proc = popen([str(exe), "/R", f"/E{fmt}", str(project)])
+    proc = popen(command_line(exe, fmt, source, out))
+    wanted = [out / f"{project.stem}.{fmt}", project.with_suffix(f".{fmt}")]  # /O, or beside it
     deadline, last_size, stable = clock() + timeout, -1, 0
     while clock() < deadline:
         sleep(1.0)
-        found = target if target.is_file() and target.stat().st_mtime >= started - 1 else None
+        found = next(
+            (f for f in wanted if f.is_file() and f.stat().st_mtime >= started - 1),
+            None,
+        )
         if found is not None:
             size = found.stat().st_size
             stable = stable + 1 if size == last_size and size > 0 else 0
@@ -125,11 +157,12 @@ def render(
                     "audio": str(found),
                     "fmt": fmt,
                     "seconds": round(clock() - (deadline - timeout), 1),
+                    "copied": copied,
                 }
         code = proc.poll()
         if code not in (None, 0) and found is None:
             raise ValueError(f"FL Studio exited with code {code} and wrote no audio")
     raise ValueError(
-        f"no audio appeared within {timeout:.0f} s. If FL Studio was already open it may have "
-        "taken the project instead of rendering it: close FL, or export from its File menu"
+        f"no audio appeared within {timeout:.0f} s. FL's batch renderer starts its own copy of "
+        "FL Studio: close FL first. Otherwise export from its File menu, or turn on fl_desk"
     )
