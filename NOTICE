@@ -1,0 +1,25 @@
+FL-MCP is MIT licensed (see LICENSE). Third-party material and where it came from:
+
+FL Studio scripting API index (src/fl_mcp/api.json)
+  Function names, signatures and constant values extracted from fl-studio-api-stubs
+  (https://github.com/MaddyGuthridge/FL-Studio-API-Stubs, LGPL-3.0) by scripts/gen_api_index.py.
+  No documentation text or code from the stubs is included. The stubs are a development
+  dependency only: the test suite uses them to check that every FL call the controller script
+  makes exists with a matching signature.
+
+FL Studio project file format (src/fl_mcp/flp.py)
+  The reader/patcher is an original implementation. The event layout it relies on (event ids and
+  sizes, note and playlist record layouts) was established by inspecting real project files and
+  from the publicly documented structure of the format, and is checked against real FL Studio
+  20.8.4 projects. Unknown events are preserved byte for byte, so files written by newer FL
+  versions round-trip untouched.
+  PyFLP (https://github.com/demberto/PyFLP, GPL-3.0) is used only as an independent cross-check
+  in one optional test (tests/oracle_dump.py), run in a separate interpreter through
+  FL_MCP_ORACLE_PYTHON. It is not a dependency of the package, is not imported by it and is not
+  distributed with it.
+
+Runtime dependencies (installed by pip/uv, not bundled in this repository)
+  mcp (MIT), mido (MIT), python-rtmidi (MIT).
+
+FL Studio is a trademark of Image-Line Software. This project is not affiliated with or endorsed
+by Image-Line. It does not contain, copy or redistribute any Image-Line software or sounds.

@@ -1,4 +1,6 @@
 import argparse
+import getpass
+import json
 import logging
 import os
 import platform
@@ -37,6 +39,29 @@ def _doctor() -> int:
     return 0
 
 
+def _licence(args: argparse.Namespace) -> int:
+    from fl_mcp.commerce import Gate, LicenseError
+
+    gate = Gate()
+    if not gate.metered:
+        print("This build has no licence service: nothing is metered and no licence is needed.")
+        return 0
+    try:
+        if args.cmd == "login":
+            key = args.key or getpass.getpass("Licence key: ")
+            out = gate.login(key, args.name, args.replace)
+            print(f"Signed in: {out['plan']} plan, {out['credits']} credits.")
+        elif args.cmd == "logout":
+            gate.logout()
+            print("Signed out.")
+        else:
+            print(json.dumps(gate.status(), indent=2))
+    except LicenseError as exc:
+        print(exc, file=sys.stderr)
+        return 1
+    return 0
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="fl-mcp", description="MCP server for FL Studio.")
     sub = parser.add_subparsers(dest="cmd")
@@ -45,6 +70,12 @@ def main(argv: list[str] | None = None) -> None:
     inst.add_argument("--fl-dir", help="FL Studio user data folder (contains Settings)")
     inst.add_argument("--notes-dir", help="folder shared with the piano roll script")
     sub.add_parser("doctor", help="check MIDI ports, installed scripts and the FL Studio link")
+    login = sub.add_parser("login", help="sign this computer in with a licence key")
+    login.add_argument("key", nargs="?", help="asked for (hidden) when left out")
+    login.add_argument("--name", help="how this computer is listed; default: its host name")
+    login.add_argument("--replace", help="sign out another computer (name or id) to free a seat")
+    sub.add_parser("logout", help="sign this computer out and free its seat")
+    sub.add_parser("account", help="show plan, credits and prices")
     args = parser.parse_args(argv)
 
     logging.basicConfig(
@@ -59,6 +90,8 @@ def main(argv: list[str] | None = None) -> None:
         print("Restart FL Studio (or reload the script), then see README step 3.")
     elif args.cmd == "doctor":
         raise SystemExit(_doctor())
+    elif args.cmd in ("login", "logout", "account"):
+        raise SystemExit(_licence(args))
     else:
         from fl_mcp.server import serve
 
