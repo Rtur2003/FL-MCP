@@ -28,10 +28,10 @@ INSTRUCTIONS = (
     "(0.8 = 0 dB), pan -1..1, colors #RRGGBB. MIDI note 60 is C4 (FL's piano roll labels it C5). "
     "FL's API cannot create channels or plugins or place playlist clips. To make music fast use "
     "fl_produce: one call builds a genre-aware song plan, writes drums into the Channel Rack and "
-    "exports a MIDI file with everything. fl_mix measures and balances levels while the project "
-    "plays. Melodies and chords reach the piano roll through fl_notes (the user runs Tools > "
-    "Scripting > FL MCP once). Inspect with fl_status/fl_list, change with fl_set; use fl_api + "
-    "fl_call only for anything else."
+    "exports a MIDI file with everything (and a ready .flp when given a template project). fl_mix "
+    "measures and balances levels while the project plays. Melodies and chords reach the piano "
+    "roll through fl_notes (the user runs Tools > Scripting > FL MCP once). Inspect with "
+    "fl_status/fl_list, change with fl_set; use fl_api + fl_call only for anything else."
 )
 
 bridge = Bridge()
@@ -314,7 +314,7 @@ Genre = Literal[tuple(GENRES)]  # type: ignore[valid-type]
 
 async def fl_produce(
     action: Annotated[
-        Literal["make", "plan", "apply", "queue", "midi", "show", "genres"],
+        Literal["make", "plan", "apply", "queue", "midi", "flp", "inspect", "show", "genres"],
         Field(description="make = plan + deliver; apply = deliver a stored plan"),
     ] = "make",
     genre: Genre | None = None,
@@ -333,17 +333,26 @@ async def fl_produce(
     ] = None,
     pattern: Annotated[str | None, Field(description="queue/show: pattern name or index")] = None,
     role: Annotated[str | None, Field(description="queue: role to send to the piano roll")] = None,
+    template: Annotated[
+        str | None, Field(description="path of a .flp project to build on; never modified")
+    ] = None,
+    replace_playlist: Annotated[bool, Field(description="flp: drop the template's clips")] = False,
 ) -> str:
-    """Fast production. make builds a genre-aware song plan (sections, drums, bass, chords, melody,
-    mix targets) and delivers it: drums and one-shots fill matching Channel Rack channels as named
-    patterns with tempo, markers, EQ and pan; the whole song is also written as a MIDI file to drag
-    into FL. Channels are matched by name (kick, snare, hat, bass, lead...); channels overrides.
-    queue sends one melodic part to the piano roll. Also: plan, apply, midi, show, genres."""
+    """Fast production. make builds a genre-aware plan (sections, drums, bass, chords, melody,
+    mix targets) and delivers it: drums fill matching Channel Rack channels as named patterns
+    with tempo, markers, EQ and pan, and a MIDI file carries everything. Channels are matched
+    by name (kick, hat, bass, lead...). With template (a .flp) flp and make also write a full
+    project: patterns with all notes plus the playlist. queue sends one part to the piano roll;
+    inspect reads a template."""
     if action == "genres":
         return _out({k: [g.name, *g.bpm, g.default_scale] for k, g in GENRES.items()})
-    if action in ("make", "plan"):
-        if not genre:
-            raise ToolError("genre is required; see action=genres")
+    if action == "inspect":
+        if not template:
+            raise ToolError("inspect needs template")
+        return _out(await _thread(produce.inspect_flp, template))
+    if action in ("make", "plan") and not genre:
+        raise ToolError("genre is required; see action=genres")
+    if genre:
         picked = [r.strip() for r in roles.split(",") if r.strip()] if roles else None
         built = await _thread(
             compose,
@@ -405,6 +414,10 @@ async def fl_produce(
             if action == "apply":
                 raise
             out["live"] = f"not applied: {exc}"
+    if action == "flp" and not template:
+        raise ToolError("flp needs template: the path of a .flp project to build on")
+    if template and action in ("make", "flp"):
+        out["flp"] = await _thread(produce.export_flp, built, template, override, replace_playlist)
     if action in ("make", "midi"):
         out["midi"] = str(await _thread(produce.export_midi, built))
         out["midi_note"] = (

@@ -77,7 +77,7 @@ async def test_tool_list_is_small_flat_and_portable():
     assert [t.name for t in tools] == NAMES
     for tool in tools:
         assert re.fullmatch(r"[a-z][a-z0-9_]{2,40}", tool.name)
-        assert 30 < len(tool.description) < 520 and tool.output_schema is None
+        assert 30 < len(tool.description) < 650 and tool.output_schema is None
         schema = tool.input_schema
         assert schema["type"] == "object" and "properties" in schema
         assert set(schema.get("required", [])) <= set(schema["properties"])

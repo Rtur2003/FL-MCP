@@ -7,7 +7,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from fl_mcp import paths
+from fl_mcp import flp, paths
 from fl_mcp.music.genres import ROLE_ORDER
 from fl_mcp.music.midi import plan_to_midi
 from fl_mcp.music.plan import Part, Plan
@@ -263,3 +263,25 @@ def export_midi(plan: Plan, drums: str = "fl") -> Path:
     path = folder / f"{plan.id}{'-gm' if drums == 'gm' else ''}.mid"
     path.write_bytes(plan_to_midi(plan, drums))
     return path
+
+
+def _template(path: str) -> Path:
+    f = Path(path).expanduser()
+    if f.suffix.lower() != ".flp" or not f.is_file():
+        raise ValueError("template must be the path of an existing .flp project")
+    return f
+
+
+def export_flp(
+    plan: Plan, template: str, override: dict[str, int] | None = None, replace: bool = False
+) -> dict[str, Any]:
+    """Write template + plan (patterns, notes, playlist) as a new project; the template is kept."""
+    out = paths.data_dir() / "out" / f"{plan.id}.flp"
+    return flp.build(_template(template), plan, out, override, "replace" if replace else "append")
+
+
+def inspect_flp(template: str) -> dict[str, Any]:
+    project = flp.Flp.parse(_template(template).read_bytes())
+    summary = project.summary()
+    summary["roles"], summary["unmatched"] = detect_roles([c[1] for c in summary["channels"]])
+    return summary

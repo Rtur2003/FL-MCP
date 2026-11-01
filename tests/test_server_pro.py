@@ -171,3 +171,61 @@ async def test_mix_errors(studio):
         c["fx"] = 0
     await run("fl_produce", {"action": "plan", "genre": "house", "seed": 1, "length": "sketch"})
     assert "own mixer track" in await run("fl_mix", {"action": "balance"}, expect_error=True)
+
+
+async def test_flp_template_flow(studio, tmp_path):
+    from fl_mcp.flp import Flp
+    from tests.flpgen import template
+
+    src = tmp_path / "template.flp"
+    src.write_bytes(template(channels=("Kick", "808 Bass", "Lead Synth", "Odd one")))
+    info = await run("fl_produce", {"action": "inspect", "template": str(src)})
+    assert info["roles"] == {"kick": 0, "bass": 1, "lead": 2} and info["named_pattern_with_notes"]
+    assert info["unmatched"] == ["Odd one"] and info["playlist_items"] == 1
+
+    out = await run(
+        "fl_produce",
+        {"action": "flp", "genre": "house", "seed": 2, "length": "sketch", "template": str(src)},
+    )
+    built = out["flp"]
+    assert built["tempo"] == out["plan"]["bpm"] and built["channels"] == {
+        "kick": 0,
+        "bass": 1,
+        "lead": 2,
+    }
+    project = Flp.parse((studio.dir / "out" / "house-2.flp").read_bytes())
+    assert len(project.patterns()) == 1 + len(out["plan"]["patterns"])
+    assert "live" not in out and "midi" not in out
+
+    again = await run(
+        "fl_produce",
+        {"action": "flp", "plan": "house-2", "template": str(src), "replace_playlist": True},
+    )
+    items = Flp.parse((studio.dir / "out" / "house-2.flp").read_bytes()).playlist_items()
+    assert again["flp"]["clips"] == len(items)  # the template's own clip was dropped
+
+    full = await run(
+        "fl_produce", {"genre": "lofi", "seed": 1, "length": "sketch", "template": str(src)}
+    )
+    assert full["flp"]["file"].endswith("lofi-1.flp") and full["midi"] and full["live"]["bpm"]
+
+
+@pytest.mark.parametrize(
+    ("args", "message"),
+    [
+        ({"action": "inspect"}, "inspect needs template"),
+        ({"action": "flp", "genre": "house"}, "flp needs template"),
+        ({"action": "inspect", "template": "/nope.flp"}, "existing .flp"),
+        ({"action": "inspect", "template": "/etc/passwd"}, "existing .flp"),
+    ],
+)
+async def test_flp_errors(studio, args, message):
+    assert message in await run("fl_produce", args, expect_error=True)
+
+
+async def test_a_template_that_is_not_an_flp_is_refused(studio, tmp_path):
+    bad = tmp_path / "x.flp"
+    bad.write_bytes(b"not a project")
+    assert "not an FL Studio project" in await run(
+        "fl_produce", {"action": "inspect", "template": str(bad)}, expect_error=True
+    )
