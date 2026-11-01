@@ -61,9 +61,10 @@ def load(call: Call, name: str, track: int | None = None, steps: int = 400) -> d
     if not name.strip():
         raise ValueError("load needs query: the plugin or sample name")
     if track is not None:
+        call({"o": "ui", "a": "win", "w": "mixer", "v": "focus"})
         call({"o": "set", "k": "mixer", "i": track, "p": {"select": True}})
     before = inventory(call)
-    call({"o": "ui", "a": "win", "w": "browser", "v": "focus"})
+    call({"o": "ui", "a": "win", "w": "browser", "v": "show"})
     for _ in range(CHUNKS):  # to the top of the tree, however long it is
         if call({"o": "ui", "a": "browser", "b": "top", "n": steps}).get("done"):
             break
@@ -74,7 +75,7 @@ def load(call: Call, name: str, track: int | None = None, steps: int = 400) -> d
             break
         item = str(hit["item"][0])
         stops.append(item)
-        call({"o": "ui", "a": "browser", "b": "select"})
+        call({"o": "ui", "a": "browser", "b": "select", "new": track is None})
         fresh = _new(before, inventory(call))
         if fresh:
             return {"loaded": fresh, "via": item}

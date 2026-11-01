@@ -891,7 +891,8 @@ def _op_roll(r):
         patterns.jumpToPattern(p)
     if c >= 0:
         channels.selectOneChannel(_idx(c, 0, channels.channelCount(True) - 1, "channel"), True)
-    ui.showWindow(midi.widPianoRoll)
+    if not ui.getVisible(midi.widPianoRoll):
+        ui.showWindow(midi.widPianoRoll)
     return {
         "pat": patterns.patternNumber(),
         "ch": channels.selectedChannel(False, 0, True),
@@ -1143,11 +1144,15 @@ def _op_browser(r):
         ui.toggleBrowserNode(int(r.get("v", -1)))
         return {"item": _browser_item()}
     if b == "select":
-        if not ui.getFocused(midi.widBrowser):
-            ui.setFocused(midi.widBrowser)
+        if not ui.getVisible(midi.widBrowser):
+            ui.showWindow(midi.widBrowser)
+        if _try(ui.isBrowserAutoHide):
+            _try(ui.setBrowserAutoHide, False)
         ui.selectBrowserMenuItem()
         if _try(ui.isInPopupMenu):
             ui.down(1)
+            if r.get("new") and "new channel" not in (_try(ui.getHintMsg) or "").lower():
+                ui.down(1)
             ui.enter()
         return {"item": _browser_item()}
     if b == "preview":
@@ -1184,17 +1189,18 @@ def _op_ui(r):
         name = r.get("w")
         if name not in _WIN:
             raise ValueError("window must be one of " + ", ".join(sorted(_WIN)))
+        w = _WIN[name]
         v = r.get("v") or "?"
-        if v == "show":
-            if not ui.getVisible(_WIN[name]):
-                ui.showWindow(_WIN[name])
+        if v in ("show", "focus"):
+            if not ui.getVisible(w):
+                ui.showWindow(w)
+            if w == midi.widBrowser and _try(ui.isBrowserAutoHide):
+                _try(ui.setBrowserAutoHide, False)
+            if v == "focus" and w != midi.widBrowser and ui.getVisible(w) and not ui.getFocused(w):
+                ui.setFocused(w)
         elif v == "hide":
-            ui.hideWindow(_WIN[name])
-        elif v == "focus":
-            if not ui.getVisible(_WIN[name]):
-                ui.showWindow(_WIN[name])
-            if not ui.getFocused(_WIN[name]):
-                ui.setFocused(_WIN[name])
+            if ui.getVisible(w):
+                ui.hideWindow(w)
         elif v != "?":
             raise ValueError("v must be show, hide, focus or ?")
         return _win_state(name)

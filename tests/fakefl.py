@@ -115,6 +115,7 @@ class FakeFL:
             ["Snare 01.wav", 1],
         ]
         self.browser_at, self.browser_log, self.loads = 0, [], []
+        self.in_popup = False
         self.presets = {("c", 2, -1): ["Init", "Dystopian lead", "Soft pad", "Sub bass"]}
         self.preset_at = {("c", 2, -1): 0}
 
@@ -369,7 +370,13 @@ class FakeFL:
         return self.browser[self.browser_at][1]
 
     def ui_isInPopupMenu(self):
+        return self.in_popup
+
+    def ui_isBrowserAutoHide(self):
         return False
+
+    def ui_setBrowserAutoHide(self, value):
+        self.browser_log.append(("autohide", bool(value)))
 
     def general_getChangedFlag(self):
         return self.changed
