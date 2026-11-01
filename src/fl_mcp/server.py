@@ -196,7 +196,14 @@ async def fl_notes(
     with read=true afterwards to confirm ('applied') and to read the piano roll back."""
     folder = data_dir()
     if read:
-        state = _read_json(folder / "state.json")
+        try:
+            state = _read_json(folder / "state.json")
+            if state is not None:
+                state["notes"], state["count"], state["serial"], state["ts"]
+        except (ValueError, KeyError, TypeError):
+            raise ToolError(
+                "state.json is unreadable: run Tools > Scripting > FL MCP again."
+            ) from None
         if state is None:
             raise ToolError("No export yet: ask the user to run Tools > Scripting > FL MCP.")
         queued = _read_json(folder / "inbox.json") or {}

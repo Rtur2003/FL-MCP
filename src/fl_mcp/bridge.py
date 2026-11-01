@@ -5,6 +5,7 @@ BEGIN(id) DATA(byte)... SUM_A SUM_B, with a Fletcher-style checksum. Requests us
 channel 15, responses channel 16, so a loopback port can be shared by both directions.
 """
 
+import atexit
 import json
 import logging
 import os
@@ -102,6 +103,7 @@ class Bridge:
         self._fid = random.randint(1, 127)
         self._in: Any = None
         self._out: Any = None
+        atexit.register(self.close)
 
     # -- MIDI I/O (replaced by an in-memory loopback in tests)
 

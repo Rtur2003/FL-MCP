@@ -218,8 +218,8 @@ def _ch_row(i):
     ]
 
 
-def _mx_row(i):
-    n = mixer.trackCount() - 1
+def _mx_row(i, n=None):
+    n = n or mixer.trackCount() - 1
     fx = [
         plugins.getPluginName(i, s, False, False)
         for s in range(10)
@@ -269,11 +269,13 @@ def _mk_channels(everything):
 
 
 def _mk_mixer(everything):
+    count = mixer.trackCount() - 1
+
     def make(i):
-        row = _mx_row(i)
+        row = _mx_row(i, count)
         return row if everything or _mx_used(i, row) else None
 
-    return MX_COLS, 0, mixer.trackCount() - 2, make
+    return MX_COLS, 0, count - 1, make
 
 
 def _mk_patterns(everything):
