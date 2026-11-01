@@ -223,8 +223,7 @@ class WindowsBackend(Backend):
 
     def cursor(self) -> tuple[int, int]:
         point = POINT()
-        if not self.GetCursorPos(ctypes.byref(point)):
-            return -1, -1
+        self.GetCursorPos(ctypes.byref(point))
         return point.x, point.y
 
     def screen(self) -> tuple[int, int, int, int]:
