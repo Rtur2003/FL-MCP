@@ -21,7 +21,7 @@ import plugins
 import transport
 import ui
 
-VERSION = 2
+VERSION = 3
 PROTO = 1
 
 _IN, _OUT = 14, 15
@@ -30,6 +30,7 @@ _MAX_IN, _MAX_OUT = 20000, 8192
 
 _rx = {"fid": -1, "buf": bytearray(), "sa": -1}
 _last = {"key": None, "body": b""}
+_diag = {"n": 0, "failed": 0, "errors": []}  # the last few failures, for fl_status(log=true)
 
 
 # ---------------------------------------------------------------- framing
@@ -123,10 +124,16 @@ def _finish(fid, data, sa, sb):
     if (fid, sa, sb) == _last["key"]:  # a retry of the request we just answered
         _emit(fid, _last["body"])
         return
+    _diag["n"] += 1
+    op = None
     try:
-        body = _dump({"ok": 1, "r": _run(json.loads(data.decode("ascii")))})
+        req = json.loads(data.decode("ascii"))
+        op = req.get("o")
+        body = _dump({"ok": 1, "r": _run(req)})
     except Exception as exc:
         body = _dump({"ok": 0, "e": _err(exc)})
+        _diag["failed"] += 1
+        _diag["errors"] = (_diag["errors"] + [[_diag["n"], op, _err(exc)]])[-12:]
     if len(body) > _MAX_OUT:
         body = _dump({"ok": 0, "e": "result too large, narrow the request"})
     _last["key"] = (fid, sa, sb)
@@ -294,11 +301,42 @@ def _mk_playlist(everything):
     return PL_COLS, 1, playlist.trackCount(), make
 
 
+PG_COLS = ["i", "at", "idx", "slot", "plugin", "name", "params", "presets"]
+
+
+def _mk_plugins(everything):
+    where = []
+    for c in range(channels.channelCount(True)):
+        if channels.getChannelType(c, True) in (1, 2):
+            where.append(("c", c, -1))
+    for t in range(mixer.trackCount() - 1):
+        for s in range(10):
+            if mixer.isTrackPluginValid(t, s):
+                where.append(("m", t, s))
+
+    def make(i):
+        at, idx, slot = where[i]
+        glob = at == "c"
+        return [
+            i,
+            at,
+            idx,
+            slot,
+            plugins.getPluginName(idx, slot, False, glob),
+            plugins.getPluginName(idx, slot, True, glob),
+            _try(plugins.getParamCount, idx, slot, glob) or 0,
+            _try(plugins.getPresetCount, idx, slot, glob) or 0,
+        ]
+
+    return PG_COLS, 0, len(where) - 1, make
+
+
 _LISTS = {
     "channels": _mk_channels,
     "mixer": _mk_mixer,
     "patterns": _mk_patterns,
     "playlist": _mk_playlist,
+    "plugins": _mk_plugins,
 }
 
 
@@ -525,7 +563,81 @@ def _op_steps(r):
     }
 
 
-def _op_param(r):
+# ---------------------------------------------------------------- plugin parameters
+
+_UNITS = {
+    "db": ("db", 1.0),
+    "hz": ("hz", 1.0),
+    "khz": ("hz", 1000.0),
+    "ms": ("ms", 1.0),
+    "sec": ("ms", 1000.0),
+    "s": ("ms", 1000.0),
+    "%": ("%", 1.0),
+    "st": ("st", 1.0),
+    "semitones": ("st", 1.0),
+    "semitone": ("st", 1.0),
+    "ct": ("ct", 1.0),
+    "cents": ("ct", 1.0),
+    "cent": ("ct", 1.0),
+    "x": ("x", 1.0),
+    ":1": ("ratio", 1.0),
+    "oct": ("oct", 1.0),
+    "bpm": ("bpm", 1.0),
+}
+_UNIT_KEYS = sorted(_UNITS, key=len, reverse=True)
+_TOL = {"db": 0.15, "hz": 1.0, "ms": 0.5, "%": 0.6, "st": 0.2, "ct": 1.0, "ratio": 0.1, "x": 0.05}
+
+
+def _scan_number(s):
+    n = len(s)
+    for i in range(n):
+        c = s[i]
+        digit_next = i + 1 < n and (
+            s[i + 1].isdigit() or (s[i + 1] == "." and i + 2 < n and s[i + 2].isdigit())
+        )
+        if (
+            c.isdigit()
+            or (c == "." and i + 1 < n and s[i + 1].isdigit())
+            or (c in "+-" and digit_next)
+        ):
+            j, dot = i + 1, c == "."
+            while j < n and (s[j].isdigit() or (s[j] == "." and not dot)):
+                dot = dot or s[j] == "."
+                j += 1
+            try:
+                return float(s[i:j]), s[j:]
+            except ValueError:
+                return None
+    return None
+
+
+def _parse_text(text):
+    """A plugin's value text as (number, unit): '2.5 kHz' -> (2500.0, 'hz')."""
+    s = str(text).strip()
+    if not s:
+        return None
+    low = s.lower()
+    if "inf" in low:
+        return (-120.0 if "-" in low else 120.0), "db"
+    got = _scan_number(s)
+    if got is None:
+        return None
+    value, rest = got
+    if s[:1] in "LlRr" and s[1:2] in " 0123456789":  # pan readouts: L 50% / R 30%
+        value = -abs(value) if s[0] in "Ll" else abs(value)
+    rest = rest.lower().replace(" ", "")
+    for key in _UNIT_KEYS:
+        if rest.startswith(key):
+            unit, scale = _UNITS[key]
+            return value * scale, unit
+    return value, ""
+
+
+def _key(text):
+    return "".join(ch for ch in str(text or "").lower() if ch.isalnum())
+
+
+def _plug_ref(r):
     t = r.get("t")
     if t == "channel":
         i = _idx(r["i"], 0, channels.channelCount(True) - 1, "channel")
@@ -539,29 +651,228 @@ def _op_param(r):
         raise ValueError("target must be channel or mixer")
     if not plugins.isValid(i, slot, glob):
         raise ValueError("no plugin there")
-    out = {"plugin": plugins.getPluginName(i, slot, False, glob)}
-    p, v = r.get("p"), r.get("v")
-    if p is not None and v is not None:
-        p = _idx(p, 0, plugins.getParamCount(i, slot, glob) - 1, "param")
-        plugins.setParamValue(_num(v, 0, 1, "value"), p, i, slot, midi.PIM_None, glob)
-        out["param"] = [
-            p,
-            plugins.getParamName(p, i, slot, glob),
-            _r(plugins.getParamValue(p, i, slot, glob)),
-            plugins.getParamValueString(p, i, slot, midi.PIM_None, glob),
-        ]
-        return out
-    find = str(r.get("f") or "").lower()
-    limit = _idx(r.get("n") or 40, 1, 200, "limit")
+    return i, slot, glob
+
+
+def _find_param(i, slot, glob, ref):
+    """A parameter index from an index or a name (exact, then prefix, then substring)."""
     count = plugins.getParamCount(i, slot, glob)
-    rows = []
+    if isinstance(ref, int) or str(ref).strip().isdigit():
+        return _idx(int(ref), 0, count - 1, "param")
+    want = _key(ref)
+    if not want:
+        raise ValueError("param needs an index or a name")
+    exact, starts, within = [], [], []
     for k in range(count):
         name = plugins.getParamName(k, i, slot, glob)
-        if name and (not find or find in name.lower()):
-            rows.append([k, name, _r(plugins.getParamValue(k, i, slot, glob))])
-            if len(rows) >= limit:
-                break
-    out.update({"count": count, "cols": ["i", "name", "val"], "rows": rows})
+        key = _key(name)
+        if not key:
+            continue
+        if key == want:
+            exact.append(k)
+        elif key.startswith(want):
+            starts.append(k)
+        elif want in key:
+            within.append(k)
+    for group in (exact, starts, within):
+        if len(group) == 1:
+            return group[0]
+        if group:
+            names = ", ".join(
+                "%d %s" % (k, plugins.getParamName(k, i, slot, glob)) for k in group[:8]
+            )
+            raise ValueError("'%s' matches several parameters: %s" % (ref, names))
+    raise ValueError("no parameter named '%s'; list them with find" % ref)
+
+
+def _shown(i, slot, glob, p):
+    return plugins.getParamValueString(p, i, slot, midi.PIM_None, glob)
+
+
+def _param_row(i, slot, glob, p):
+    return [
+        p,
+        plugins.getParamName(p, i, slot, glob),
+        _r(plugins.getParamValue(p, i, slot, glob)),
+        _shown(i, slot, glob, p),
+    ]
+
+
+def _target(value, unit):
+    """The wanted real value as (number, canonical unit) from a number or a text like '-6 dB'."""
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        got = (float(value), "")
+    else:
+        got = _parse_text(value)
+        if got is None:
+            raise ValueError("cannot read '%s' as a value with a unit" % value)
+    unit = str(unit or "").lower()
+    if unit:
+        key = unit if unit in _UNITS else None
+        if key is None:
+            raise ValueError("unknown unit " + unit)
+        canon = _UNITS[key]
+        return (got[0] * canon[1], canon[0]) if not got[1] else got
+    return got
+
+
+def _solve_param(i, slot, glob, p, want, unit):
+    """Set parameter p so that its own value text shows `want`: sample, bracket, bisect, verify."""
+    start = plugins.getParamValue(p, i, slot, glob)
+
+    def put(x):
+        plugins.setParamValue(x, p, i, slot, midi.PIM_None, glob)
+        return _parse_text(_shown(i, slot, glob, p))
+
+    try:
+        first = _parse_text(_shown(i, slot, glob, p))
+        if first is None:
+            raise ValueError("this plugin does not show the value as text; use value 0-1")
+        if unit and first[1] and unit != first[1]:
+            raise ValueError("the parameter is in %s, not %s" % (first[1], unit))
+        samples = []
+        for k in range(17):
+            got = put(k / 16.0)
+            if got is not None:
+                samples.append((k / 16.0, got[0]))
+        if len(samples) < 3:
+            raise ValueError("the value text is not numeric")
+    except Exception:
+        plugins.setParamValue(start, p, i, slot, midi.PIM_None, glob)
+        raise
+    tol = max(abs(want) * 0.02, _TOL.get(unit or first[1], 0.01))
+    best = min(samples, key=lambda sv: abs(sv[1] - want))
+    x_best, v_best = best
+    for (x1, v1), (x2, v2) in zip(samples, samples[1:]):
+        if (v1 - want) * (v2 - want) <= 0 and v1 != v2:
+            a, b, rising = x1, x2, v2 > v1
+            for _ in range(20):
+                mid = (a + b) / 2
+                got = put(mid)
+                if got is None:
+                    break
+                if abs(got[0] - want) < abs(v_best - want):
+                    x_best, v_best = mid, got[0]
+                if abs(got[0] - want) <= tol / 8:  # as close as the plugin can show
+                    break
+                if (got[0] < want) == rising:
+                    a = mid
+                else:
+                    b = mid
+            break
+    plugins.setParamValue(x_best, p, i, slot, midi.PIM_None, glob)
+    return abs(v_best - want) <= tol * 2
+
+
+def _set_one(i, slot, glob, item):
+    p = _find_param(i, slot, glob, item.get("p"))
+    ok = True
+    if item.get("r") is not None:
+        want, unit = _target(item["r"], item.get("u"))
+        ok = _solve_param(i, slot, glob, p, want, unit)
+    elif item.get("v") is not None:
+        plugins.setParamValue(_num(item["v"], 0, 1, "value"), p, i, slot, midi.PIM_None, glob)
+    else:
+        raise ValueError("give value (0-1) or real (a number with a unit)")
+    return _param_row(i, slot, glob, p) + [int(ok)]
+
+
+def _preset_names(i, slot, glob, start, count):
+    total = plugins.getPresetCount(i, slot, glob)
+    return total, [
+        [k, plugins.getName(i, slot, midi.FPN_Preset, k, glob)]
+        for k in range(start, min(total, start + count))
+    ]
+
+
+def _current_preset(i, slot, glob):
+    return plugins.getName(i, slot, midi.FPN_Preset, midi.GPN_GetCurrentPreset, glob)
+
+
+def _op_preset(i, slot, glob, r):
+    total = plugins.getPresetCount(i, slot, glob)
+    if total <= 0:
+        raise ValueError("this plugin has no internal presets")
+    steps = r.get("d")
+    if r.get("q"):
+        want = _key(r["q"])
+        names = [(k, plugins.getName(i, slot, midi.FPN_Preset, k, glob)) for k in range(total)]
+        hits = [k for k, n in names if _key(n) == want] or [k for k, n in names if want in _key(n)]
+        if not hits:
+            raise ValueError("no preset matches '%s' (list them with a=presets)" % r["q"])
+        here = _current_preset(i, slot, glob)
+        now = [k for k, n in names if n == here]
+        if not now:
+            raise ValueError("cannot tell which preset is loaded; step with d instead")
+        steps = hits[0] - now[0]
+    steps = int(steps or 0)
+    if abs(steps) > total:
+        raise ValueError("at most %d steps" % total)
+    for _ in range(abs(steps)):
+        if steps > 0:
+            plugins.nextPreset(i, slot, glob)
+        else:
+            plugins.prevPreset(i, slot, glob)
+    return {"preset": _current_preset(i, slot, glob), "count": total, "moved": steps}
+
+
+def _op_param(r):
+    i, slot, glob = _plug_ref(r)
+    act = r.get("a") or ("many" if r.get("set") else "set" if r.get("p") is not None else "list")
+    out = {
+        "plugin": plugins.getPluginName(i, slot, False, glob),
+        "name": plugins.getPluginName(i, slot, True, glob),
+    }
+    if act == "info":
+        out.update(
+            {
+                "params": plugins.getParamCount(i, slot, glob),
+                "presets": plugins.getPresetCount(i, slot, glob),
+                "preset": _try(_current_preset, i, slot, glob),
+            }
+        )
+    elif act == "set":
+        out["param"] = _set_one(i, slot, glob, r)
+    elif act == "many":
+        items = r.get("set") or []
+        if len(items) > 40:
+            raise ValueError("at most 40 parameters per call")
+        done = []
+        for n, item in enumerate(items):
+            try:
+                done.append(_set_one(i, slot, glob, item))
+            except Exception as exc:
+                raise ValueError("item %d (%s): %s" % (n, item.get("p"), exc)) from None
+        out["params"] = done
+        out["cols"] = ["i", "name", "val", "text", "ok"]
+    elif act == "presets":
+        total, rows = _preset_names(
+            i, slot, glob, int(r.get("st") or 0), _idx(r.get("n") or 40, 1, 120, "limit")
+        )
+        out.update(
+            {
+                "count": total,
+                "cols": ["i", "name"],
+                "rows": rows,
+                "cur": _try(_current_preset, i, slot, glob),
+            }
+        )
+    elif act == "preset":
+        out.update(_op_preset(i, slot, glob, r))
+    elif act == "list":
+        find = _key(r.get("f"))
+        limit = _idx(r.get("n") or 40, 1, 120, "limit")
+        count = plugins.getParamCount(i, slot, glob)
+        rows = []
+        for k in range(int(r.get("st") or 0), count):
+            name = plugins.getParamName(k, i, slot, glob)
+            if name and (not find or find in _key(name)):
+                rows.append(_param_row(i, slot, glob, k))
+                if len(rows) >= limit:
+                    break
+        out.update({"count": count, "cols": ["i", "name", "val", "text"], "rows": rows})
+    else:
+        raise ValueError("unknown action")
     return out
 
 
@@ -719,6 +1030,189 @@ def _op_batch(r):
     return {"n": len(steps), "bad": bad}
 
 
+# ---------------------------------------------------------------- windows, keys, browser
+
+_WIN = {
+    "mixer": midi.widMixer,
+    "channels": midi.widChannelRack,
+    "playlist": midi.widPlaylist,
+    "roll": midi.widPianoRoll,
+    "browser": midi.widBrowser,
+}
+
+_KEYS = {
+    "up": lambda: ui.up(1),
+    "down": lambda: ui.down(1),
+    "left": lambda: ui.left(1),
+    "right": lambda: ui.right(1),
+    "enter": lambda: ui.enter(),
+    "escape": lambda: ui.escape(),
+    "yes": lambda: ui.yes(),
+    "no": lambda: ui.no(),
+    "cut": lambda: ui.cut(),
+    "copy": lambda: ui.copy(),
+    "paste": lambda: ui.paste(),
+    "insert": lambda: ui.insert(),
+    "delete": lambda: ui.delete(),
+    "next": lambda: ui.next(),
+    "previous": lambda: ui.previous(),
+    "tab": lambda: ui.selectWindow(False),
+    "shift_tab": lambda: ui.selectWindow(True),
+    "nextwindow": lambda: ui.nextWindow(),
+    "menu": lambda: transport.globalTransport(midi.FPT_Menu, 1),
+    "itemmenu": lambda: transport.globalTransport(midi.FPT_ItemMenu, 1),
+}
+
+
+def _press(name):
+    name = str(name).lower()
+    if name in _KEYS:
+        _KEYS[name]()
+    elif name.startswith("f") and name[1:].isdigit() and 1 <= int(name[1:]) <= 12:
+        transport.globalTransport(midi.FPT_F1 + int(name[1:]) - 1, 1)
+    else:
+        raise ValueError("unknown key %s (%s, f1-f12)" % (name, ", ".join(sorted(_KEYS))))
+
+
+def _win_state(name):
+    w = _WIN[name]
+    return {"visible": bool(ui.getVisible(w)), "focused": bool(ui.getFocused(w))}
+
+
+def _browser_item(name=None):
+    return [name or ui.getFocusedNodeCaption(), ui.getFocusedNodeFileType()]
+
+
+def _browser_walk(count, expand, want):
+    """Step down the browser tree reading each item; stop at a match or at the end of the list."""
+    rows, same, last = [], 0, None
+    for step in range(count):
+        row = _browser_item(ui.navigateBrowser(41, bool(expand)))
+        same = same + 1 if row[0] == last else 0
+        if same >= 2:
+            break
+        last = row[0]
+        rows.append(row)
+        if want and want in _key(row[0]):
+            return rows, step + 1, True
+    return rows, len(rows), False
+
+
+def _op_browser(r):
+    b = r.get("b")
+    if b == "caption":
+        return {"item": _browser_item()}
+    if b == "nav":
+        down = r.get("d") not in ("prev", "up", 40)
+        return {"item": _browser_item(ui.navigateBrowser(41 if down else 40, bool(r.get("sh"))))}
+    if b == "tab":
+        way = {"left": midi.FPT_Left, "right": midi.FPT_Right}.get(r.get("d"), 0)
+        return {"tab": ui.navigateBrowserTabs(way)}
+    if b == "toggle":
+        ui.toggleBrowserNode(int(r.get("v", -1)))
+        return {"item": _browser_item()}
+    if b == "select":
+        ui.selectBrowserMenuItem()
+        return {"item": _browser_item()}
+    if b == "preview":
+        ui.previewBrowserMenuItem()
+        return {"item": _browser_item()}
+    if b in ("scan", "goto"):
+        want = _key(r.get("q")) if b == "goto" else ""
+        if b == "goto" and not want:
+            raise ValueError("goto needs q (part of the item name)")
+        rows, steps, found = _browser_walk(
+            _idx(r.get("n") or 60, 1, 400, "count"), r.get("sh"), want
+        )
+        if b == "goto":
+            return {"found": found, "steps": steps, "item": _browser_item()}
+        return {"cols": ["name", "type"], "rows": rows}
+    raise ValueError(
+        "browser action must be caption, nav, tab, toggle, select, preview, scan or goto"
+    )
+
+
+def _op_ui(r):
+    a = r.get("a")
+    if a == "win":
+        name = r.get("w")
+        if name not in _WIN:
+            raise ValueError("window must be one of " + ", ".join(sorted(_WIN)))
+        v = r.get("v") or "?"
+        if v == "show":
+            ui.showWindow(_WIN[name])
+        elif v == "hide":
+            ui.hideWindow(_WIN[name])
+        elif v == "focus":
+            ui.showWindow(_WIN[name])
+            ui.setFocused(_WIN[name])
+        elif v != "?":
+            raise ValueError("v must be show, hide, focus or ?")
+        return _win_state(name)
+    if a == "key":
+        keys = r.get("ks") or [r.get("k")]
+        if len(keys) > 20:
+            raise ValueError("at most 20 keys per call")
+        for k in keys:
+            _press(k)
+        return {"n": len(keys), "hint": _try(ui.getHintMsg)}
+    if a == "hint":
+        return {"hint": _try(ui.getHintMsg)}
+    if a == "form":
+        return {
+            "caption": _try(ui.getFocusedFormCaption),
+            "plugin": _try(ui.getFocusedPluginName),
+            "fx": _try(mixer.getActiveEffectIndex),
+            "ch": _try(channels.selectedChannel, False, 0, True),
+            "windows": dict((n, _win_state(n)) for n in sorted(_WIN)),
+        }
+    if a == "browser":
+        return _op_browser(r)
+    raise ValueError("ui action must be win, key, hint, form or browser")
+
+
+# ---------------------------------------------------------------- capability probe, diagnostics
+
+_OPTIONAL = (
+    ("ui", "navigateBrowser"),
+    ("ui", "toggleBrowserNode"),
+    ("ui", "getFocusedNodeCaption"),
+    ("plugins", "getName"),
+    ("plugins", "getPresetCount"),
+    ("plugins", "nextPreset"),
+    ("plugins", "getParamValueString"),
+    ("mixer", "getActiveEffectIndex"),
+    ("mixer", "linkChannelToTrack"),
+    ("general", "getChangedFlag"),
+    ("general", "saveUndo"),
+    ("channels", "getChannelType"),
+    ("arrangement", "addAutoTimeMarker"),
+)
+
+
+def _op_probe(r):
+    """What this FL Studio build offers, so the server can pick a method that will work."""
+    return {
+        "ver": VERSION,
+        "fl": _try(ui.getVersion),
+        "api": _try(general.getVersion),
+        "title": _try(ui.getProgTitle),
+        "has": dict(
+            ("%s.%s" % (m, n), getattr(_MODS[m], n, None) is not None) for m, n in _OPTIONAL
+        ),
+        "n_ch": _try(channels.channelCount, True),
+        "n_trk": _try(mixer.trackCount),
+        "n_pat": _try(patterns.patternCount),
+        "changed": _try(general.getChangedFlag),
+        "port": _try(device.getPortNumber),
+        "linked": bool(_try(device.isAssigned)),
+    }
+
+
+def _op_diag(r):
+    return {"n": _diag["n"], "failed": _diag["failed"], "errors": _diag["errors"]}
+
+
 # ---------------------------------------------------------------- raw API access
 
 _MODS = {
@@ -779,4 +1273,7 @@ _OPS = {
     "note": _op_note,
     "grid": _op_grid,
     "batch": _op_batch,
+    "ui": _op_ui,
+    "probe": _op_probe,
+    "diag": _op_diag,
 }

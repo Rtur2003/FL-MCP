@@ -18,7 +18,7 @@ from mcp.server.mcpserver.tools import Tool
 from mcp.types import ToolAnnotations
 from pydantic import Field
 
-from fl_mcp import __version__, mixing, produce
+from fl_mcp import __version__, mixing, produce, units
 from fl_mcp.bridge import Bridge, FLError
 from fl_mcp.commerce import Gate, LicenseError, Spend
 from fl_mcp.music import GENRES, compose
@@ -68,26 +68,37 @@ async def _spend(*ops: str) -> AsyncIterator[Spend]:
         raise ToolError(str(exc)) from None
 
 
-async def fl_status() -> str:
+async def fl_status(
+    probe: Annotated[bool, Field(description="also report what this FL build supports")] = False,
+    log: Annotated[bool, Field(description="also report the script's recent failures")] = False,
+) -> str:
     """Project snapshot: FL version, title, tempo, play/record state, loop mode, position,
-    current pattern/channel/mixer track and counts (plus plan and credits when licensed)."""
+    current pattern/channel/mixer track and counts (plus plan and credits when licensed).
+    probe lists the API features this FL build has; log shows the controller script's last
+    errors. Use both when something does not work."""
     status = await _fl({"o": "status"})
+    if probe:
+        status["probe"] = await _fl({"o": "probe"})
+    if log:
+        status["log"] = await _fl({"o": "diag"})
     if gate.metered:
         status["account"] = await anyio.to_thread.run_sync(gate.status)
     return _out(status)
 
 
 async def fl_list(
-    kind: Literal["channels", "mixer", "patterns", "playlist"],
+    kind: Literal["channels", "mixer", "patterns", "playlist", "plugins"],
     start: Annotated[
         int, Field(ge=0, description="first index; use 'next' from the last page")
     ] = 0,
     count: Annotated[int, Field(ge=1, le=200)] = 50,
     include_unused: Annotated[bool, Field(description="also list default/empty items")] = False,
 ) -> str:
-    """List channels, mixer tracks, patterns or playlist tracks. Returns {cols,rows,next,max};
-    default/empty items are skipped. channels rows: [i,name,type,vol,pan,mute,solo,fx,plugin];
-    mixer rows: [i,name,vol,pan,mute,solo,fx(plugin names),to(destination tracks)]."""
+    """List channels, mixer tracks, patterns, playlist tracks or every plugin in the project.
+    Returns {cols,rows,next,max}; default/empty items are skipped. channels rows:
+    [i,name,type,vol,pan,mute,solo,fx,plugin]; mixer rows: [i,name,vol,pan,mute,solo,
+    fx(plugin names),to(destination tracks)]; plugins rows: [n,at(c channel rack, m mixer),
+    index,slot,plugin,name,params,presets]."""
     req = {"o": "list", "k": kind, "s": start, "n": count, "a": int(include_unused)}
     return _out(await _fl(req))
 
@@ -266,24 +277,97 @@ async def fl_notes(
 async def fl_param(
     target: Literal["channel", "mixer"],
     index: Annotated[Index, Field(description="channel index or mixer track")],
-    slot: Annotated[
-        int, Field(ge=-1, le=9, description="mixer effect slot 0-9; unused for channel")
-    ] = -1,
-    find: Annotated[str, Field(description="list only parameters whose name contains this")] = "",
-    param: Annotated[int, Field(ge=-1, description="parameter index to set")] = -1,
-    value: Annotated[float | None, Field(description="0-1; sets 'param'")] = None,
-    limit: Annotated[int, Field(ge=1, le=200)] = 40,
+    slot: Annotated[int, Field(ge=-1, le=9, description="mixer effect slot 0-9")] = -1,
+    view: Annotated[Literal["params", "info", "presets"], Field(description="read")] = "params",
+    find: Annotated[str, Field(description="list: names containing this")] = "",
+    param: Annotated[str | None, Field(description="name (part) or index")] = None,
+    value: Annotated[float | None, Field(description="0-1 position of 'param'")] = None,
+    real: Annotated[str | None, Field(description="'-6 dB', '2.5 kHz', '120 ms', '4:1'")] = None,
+    settings: Annotated[
+        str | None, Field(description="'Threshold=-18 dB, Ratio=4:1, Gain=0.6' (bare = 0-1)")
+    ] = None,
+    preset: Annotated[str | None, Field(description="preset name, or +1 / -1")] = None,
+    start: Annotated[int, Field(ge=0, description="first item to list")] = 0,
+    limit: Annotated[int, Field(ge=1, le=120)] = 40,
 ) -> str:
-    """Plugin parameters of a channel's instrument or a mixer effect slot. Without value: list
-    parameters [i,name,val] (filter with find). With param and value: set it and read it back."""
-    if value is not None and param < 0:
-        raise ToolError("value needs param: list parameters first and pass the index")
+    """Any plugin on a channel or mixer slot, stock or third party. Lists parameters
+    [i,name,val,text]; view reads info or preset names. Sets one parameter (value 0-1, or real,
+    solved against the plugin's own text so '-18 dB' really shows -18 dB) or many (settings),
+    or loads a preset."""
     if target == "mixer" and slot < 0:
         raise ToolError("mixer needs slot 0-9")
-    req: dict[str, Any] = {"o": "param", "t": target, "i": index, "s": slot, "f": find, "n": limit}
-    if value is not None:
-        req["p"], req["v"] = param, value
+    req: dict[str, Any] = {"o": "param", "t": target, "i": index, "s": slot}
+    if settings:
+        try:
+            req.update(a="many", set=units.parse_settings(settings))
+        except ValueError as exc:
+            raise ToolError(str(exc)) from None
+    elif value is not None or real is not None:
+        if param is None:
+            raise ToolError("value and real need param: a name or index (list them first)")
+        if value is not None and real is not None:
+            raise ToolError("give value or real, not both")
+        req.update(a="set", p=int(param) if param.strip().isdigit() else param)
+        req["v" if value is not None else "r"] = value if value is not None else real
+    elif preset:
+        req.update(a="preset", **({"d": int(preset)} if units.is_steps(preset) else {"q": preset}))
+    elif view != "params":
+        req.update(a=view, st=start, n=limit)
+    else:
+        req.update(a="list", f=find, st=start, n=limit)
     return _out(await _fl(req))
+
+
+_WINDOWS = Literal["mixer", "channels", "playlist", "roll", "browser"]
+_BROWSE = Literal[
+    "caption", "next", "prev", "left_tab", "right_tab", "expand", "collapse", "select", "preview",
+    "scan", "goto",
+]  # fmt: skip
+
+
+async def fl_ui(
+    action: Literal["window", "key", "browser", "form"],
+    window: _WINDOWS | None = None,
+    mode: Literal["state", "show", "hide", "focus"] = "state",
+    keys: Annotated[str | None, Field(description="comma list, e.g. 'down,enter,f8'")] = None,
+    browse: _BROWSE = "caption",
+    query: Annotated[str | None, Field(description="goto: part of an item name")] = None,
+    count: Annotated[int, Field(ge=1, le=400, description="scan/goto: steps")] = 60,
+    expand: Annotated[bool, Field(description="open folders while stepping")] = False,
+) -> str:
+    """Drive FL's own interface from inside FL, no mouse. window: show/hide/focus the mixer,
+    channels, playlist, roll or browser. key: press up,down,left,right,enter,escape,yes,no,cut,
+    copy,paste,insert,delete,next,previous,tab,menu,itemmenu,f1-f12 in the focused window (can
+    change or delete things). browser: next/prev/expand/collapse/scan/goto query, then select
+    loads the focused plugin or sample, preview plays it. form: the focused plugin window."""
+    if action == "form":
+        return _out(await _fl({"o": "ui", "a": "form"}))
+    if action == "window":
+        if window is None:
+            raise ToolError("window needs which: mixer, channels, playlist, roll or browser")
+        flag = {"state": "?"}.get(mode, mode)
+        return _out(await _fl({"o": "ui", "a": "win", "w": window, "v": flag}))
+    if action == "key":
+        names = [k.strip() for k in (keys or "").split(",") if k.strip()]
+        if not names:
+            raise ToolError("key needs keys, for example 'down,down,enter'")
+        return _out(await _fl({"o": "ui", "a": "key", "ks": names}))
+    step = {
+        "caption": {"b": "caption"},
+        "next": {"b": "nav", "d": "next", "sh": expand},
+        "prev": {"b": "nav", "d": "prev", "sh": expand},
+        "left_tab": {"b": "tab", "d": "left"},
+        "right_tab": {"b": "tab", "d": "right"},
+        "expand": {"b": "toggle", "v": 1},
+        "collapse": {"b": "toggle", "v": 0},
+        "select": {"b": "select"},
+        "preview": {"b": "preview"},
+        "scan": {"b": "scan", "n": count, "sh": expand},
+        "goto": {"b": "goto", "q": query, "n": count, "sh": expand},
+    }[browse]
+    if browse == "goto" and not query:
+        raise ToolError("goto needs query")
+    return _out(await _fl({"o": "ui", "a": "browser", **step}))
 
 
 async def fl_call(
@@ -593,6 +677,7 @@ mcp = MCPServer(
         _tool(fl_notes, **_EDIT),
         _tool(fl_param, **_EDIT),
         _tool(fl_call, readOnlyHint=False, destructiveHint=True, idempotentHint=False),
+        _tool(fl_ui, readOnlyHint=False, destructiveHint=True, idempotentHint=False),
         _tool(fl_api, **_READ),
     ],
 )

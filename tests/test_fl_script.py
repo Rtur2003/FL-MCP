@@ -52,7 +52,7 @@ def test_list_patterns_and_playlist(fl):
 
 def test_list_rejects_bad_kind(fl):
     with pytest.raises(FLError, match="kind must be"):
-        fl.call({"o": "list", "k": "plugins"})
+        fl.call({"o": "list", "k": "effects"})
 
 
 def test_set_channel_all_properties(fl):
@@ -220,7 +220,7 @@ def test_params(fl):
     ] == [3]
     assert len(fl.call({"o": "param", "t": "channel", "i": 2, "n": 1})["rows"]) == 1
     r = fl.call({"o": "param", "t": "channel", "i": 2, "p": 0, "v": 0.9})
-    assert r["param"] == [0, "Cutoff", 0.9, "0.90"]
+    assert r["param"] == [0, "Cutoff", 0.9, "0.90", 1]
     r = fl.call({"o": "param", "t": "mixer", "i": 10, "s": 0, "p": 1, "v": 0.25})
     assert r["plugin"] == "Fruity Reeverb 2" and r["param"][1:3] == ["Decay", 0.25]
 

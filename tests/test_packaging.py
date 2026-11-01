@@ -12,6 +12,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.names import NAMES
+
 pytest.importorskip("tomllib")
 
 SPEC = importlib.util.spec_from_file_location(
@@ -54,7 +56,7 @@ def test_the_manifest_matches_the_spec_and_the_code(bundle):
     key = m["user_config"]["license_key"]
     assert key["sensitive"] is True and key["required"] is False and key["type"] == "string"
     assert m["server"]["mcp_config"]["env"]["FL_MCP_LICENSE"] == "${user_config.license_key}"
-    assert len(m["tools"]) == 11 and all(t["name"] and t["description"] for t in m["tools"])
+    assert len(m["tools"]) == len(NAMES) and all(t["name"] and t["description"] for t in m["tools"])
     assert {t["name"] for t in m["tools"]} >= {"fl_produce", "fl_mix", "fl_status"}
 
 
@@ -139,4 +141,4 @@ def test_the_bundled_server_starts_and_lists_its_tools(bundle, tmp_path):
         except subprocess.TimeoutExpired:
             proc.kill()
     assert replies[1]["result"]["serverInfo"]["name"] == "fl_mcp"
-    assert len(replies[2]["result"]["tools"]) == 11
+    assert len(replies[2]["result"]["tools"]) == len(NAMES)

@@ -96,6 +96,21 @@ class FakeFL:
             ("c", 2, -1): [["Cutoff", 0.5], ["Resonance", 0.2], ["", 0.0], ["Master level", 0.8]],
             ("m", 10, 0): [["Wet", 0.3], ["Decay", 0.6]],
         }
+        self.keys, self.visible, self.focused = [], {0, 1}, 1
+        self.changed = 0
+        self.browser = [
+            ["Plugin database", -100],
+            ["Generators", -100],
+            ["3x Osc", 5],
+            ["Sytrus", 5],
+            ["Effects", -100],
+            ["Fruity Limiter", 5],
+            ["Kick 01.wav", 1],
+            ["Snare 01.wav", 1],
+        ]
+        self.browser_at, self.browser_log = 0, []
+        self.presets = {("c", 2, -1): ["Init", "Dystopian lead", "Soft pad", "Sub bass"]}
+        self.preset_at = {("c", 2, -1): 0}
 
     @staticmethod
     def _chan(name, kind, plugin=""):
@@ -170,6 +185,10 @@ class FakeFL:
             self.saves += 1
         elif command == midi.FPT_SaveNew:
             self.saves += 10
+        elif (
+            command in (midi.FPT_Menu, midi.FPT_ItemMenu) or midi.FPT_F1 <= command <= midi.FPT_F12
+        ):
+            self.keys.append(command)
         else:
             raise AssertionError(f"unexpected transport command {command}")
         return 0
@@ -212,6 +231,114 @@ class FakeFL:
 
     def ui_showWindow(self, index):
         self.windows.append(index)
+        self.visible.add(index)
+
+    def ui_hideWindow(self, index):
+        self.visible.discard(index)
+
+    def ui_getVisible(self, index):
+        return index in self.visible
+
+    def ui_getFocused(self, index):
+        return index == self.focused
+
+    def ui_setFocused(self, index):
+        self.focused = index
+
+    def _key(self, name):
+        self.keys.append(name)
+        return 0
+
+    def ui_up(self, value):
+        return self._key("up")
+
+    def ui_down(self, value):
+        return self._key("down")
+
+    def ui_left(self, value):
+        return self._key("left")
+
+    def ui_right(self, value):
+        return self._key("right")
+
+    def ui_enter(self):
+        return self._key("enter")
+
+    def ui_escape(self):
+        return self._key("escape")
+
+    def ui_yes(self):
+        return self._key("yes")
+
+    def ui_no(self):
+        return self._key("no")
+
+    def ui_cut(self):
+        return self._key("cut")
+
+    def ui_copy(self):
+        return self._key("copy")
+
+    def ui_paste(self):
+        return self._key("paste")
+
+    def ui_insert(self):
+        return self._key("insert")
+
+    def ui_delete(self):
+        return self._key("delete")
+
+    def ui_next(self):
+        return self._key("next")
+
+    def ui_previous(self):
+        return self._key("previous")
+
+    def ui_selectWindow(self, shift):
+        return self._key("shift_tab" if shift else "tab")
+
+    def ui_nextWindow(self):
+        return self._key("nextwindow")
+
+    def ui_getHintMsg(self):
+        return "Hint: " + self.browser[self.browser_at][0]
+
+    def ui_getFocusedFormCaption(self):
+        return "Fruity Limiter"
+
+    def ui_getFocusedPluginName(self):
+        return "Fruity Limiter"
+
+    def ui_navigateBrowser(self, direction, shiftHeld):
+        step = 1 if direction == 41 else -1
+        self.browser_at = max(0, min(len(self.browser) - 1, self.browser_at + step))
+        self.browser_log.append(("nav", direction, shiftHeld))
+        return self.browser[self.browser_at][0]
+
+    def ui_navigateBrowserTabs(self, direction):
+        self.browser_log.append(("tab", direction))
+        return "Tab"
+
+    def ui_toggleBrowserNode(self, value):
+        self.browser_log.append(("toggle", value))
+
+    def ui_selectBrowserMenuItem(self):
+        self.browser_log.append(("select", self.browser[self.browser_at][0]))
+
+    def ui_previewBrowserMenuItem(self):
+        self.browser_log.append(("preview", self.browser[self.browser_at][0]))
+
+    def ui_getFocusedNodeCaption(self):
+        return self.browser[self.browser_at][0]
+
+    def ui_getFocusedNodeFileType(self):
+        return self.browser[self.browser_at][1]
+
+    def general_getChangedFlag(self):
+        return self.changed
+
+    def mixer_getActiveEffectIndex(self):
+        return (10, 0)
 
     def device_isAssigned(self):
         return self.assigned
@@ -480,7 +607,8 @@ class FakeFL:
     def plugins_getPluginName(self, index, slotIndex, userName, useGlobalIndex):
         if useGlobalIndex:
             return self.chans[index]["plugin"]
-        return self.tracks[index]["slots"][slotIndex]
+        name = self.tracks[index]["slots"][slotIndex]
+        return name.upper() if userName else name
 
     def plugins_getParamCount(self, index, slotIndex, useGlobalIndex):
         return len(self._plug(index, slotIndex, useGlobalIndex)[1])
@@ -496,8 +624,55 @@ class FakeFL:
     ):
         self._plug(index, slotIndex, useGlobalIndex)[1][paramIndex][1] = value
 
+    @staticmethod
+    def param_text(kind, x):
+        """How a plugin shows normalised value x (a few families seen in FL's own plugins)."""
+        if kind == "db":
+            return f"{-60 + 60 * x:.1f} dB"
+        if kind == "hz":
+            hz = 20 * (1000**x)
+            return f"{hz / 1000:.2f} kHz" if hz >= 1000 else f"{hz:.0f} Hz"
+        if kind == "ms":
+            return f"{1 + 999 * x:.0f} ms"
+        if kind == "pct":
+            return f"{100 * x:.0f}%"
+        if kind == "ratio":
+            return f"{1 + round(x * 19):.1f}:1"
+        if kind == "pan":
+            side = "L" if x < 0.5 else "R"
+            return f"{side} {abs(x - 0.5) * 200:.0f}%"
+        if kind == "word":
+            return "On" if x >= 0.5 else "Off"
+        if kind == "silent":
+            return ""
+        return f"{x:.2f}"
+
     def plugins_getParamValueString(self, paramIndex, index, slotIndex, pickupMode, useGlobalIndex):
-        return f"{self.plugins_getParamValue(paramIndex, index, slotIndex, useGlobalIndex):.2f}"
+        entry = self._plug(index, slotIndex, useGlobalIndex)[1][paramIndex]
+        return self.param_text(entry[2] if len(entry) > 2 else "", entry[1])
+
+    def plugins_getPresetCount(self, index, slotIndex, useGlobalIndex):
+        return len(self.presets.get(self._plug(index, slotIndex, useGlobalIndex)[0], ()))
+
+    def plugins_getName(self, index, slotIndex, flag, paramIndex, useGlobalIndex):
+        key = self._plug(index, slotIndex, useGlobalIndex)[0]
+        if flag == midi.FPN_Preset:
+            names = self.presets.get(key, [])
+            if not names:
+                return ""
+            k = self.preset_at[key] if paramIndex == midi.GPN_GetCurrentPreset else paramIndex
+            return names[k] if 0 <= k < len(names) else ""
+        if flag == midi.FPN_Param:
+            return self.plugins_getParamName(paramIndex, index, slotIndex, useGlobalIndex)
+        return ""
+
+    def plugins_nextPreset(self, index, slotIndex, useGlobalIndex):
+        key = self._plug(index, slotIndex, useGlobalIndex)[0]
+        self.preset_at[key] = (self.preset_at[key] + 1) % len(self.presets[key])
+
+    def plugins_prevPreset(self, index, slotIndex, useGlobalIndex):
+        key = self._plug(index, slotIndex, useGlobalIndex)[0]
+        self.preset_at[key] = (self.preset_at[key] - 1) % len(self.presets[key])
 
 
 def load_script():

@@ -7,22 +7,10 @@ import pytest
 from mcp import Client
 
 from fl_mcp import server
+from tests.names import NAMES
 
 pytestmark = pytest.mark.anyio
 
-NAMES = [
-    "fl_status",
-    "fl_produce",
-    "fl_mix",
-    "fl_list",
-    "fl_transport",
-    "fl_set",
-    "fl_steps",
-    "fl_notes",
-    "fl_param",
-    "fl_call",
-    "fl_api",
-]
 BANNED = {
     "$ref",
     "$defs",
@@ -89,7 +77,7 @@ async def test_tool_list_is_small_flat_and_portable():
             assert prop.get("type") != "array" or "items" in prop, f"{tool.name}.{name}"
             assert prop.get("type") != "array" or "type" in prop["items"]
     size = len(json.dumps([t.model_dump(by_alias=True, exclude_none=True) for t in tools]))
-    assert size < 11500, size  # roughly 2.8k tokens for the whole server
+    assert size < 14000, size  # about 3.4k tokens for the always-on tools
 
 
 async def test_annotations_tell_clients_what_is_safe():
@@ -152,15 +140,99 @@ async def test_steps(wired):
 
 async def test_param(wired):
     r = await run("fl_param", {"target": "channel", "index": 2, "find": "cut"})
-    assert r["rows"] == [[0, "Cutoff", 0.5]]
-    r = await run("fl_param", {"target": "mixer", "index": 10, "slot": 0, "param": 0, "value": 1})
+    assert r["rows"] == [[0, "Cutoff", 0.5, "0.50"]]
+    r = await run("fl_param", {"target": "mixer", "index": 10, "slot": 0, "param": "0", "value": 1})
     assert r["param"][2] == 1.0
-    assert "needs param" in await run(
+    assert "need param" in await run(
         "fl_param", {"target": "channel", "index": 2, "value": 1}, expect_error=True
     )
     assert "needs slot" in await run(
         "fl_param", {"target": "mixer", "index": 10}, expect_error=True
     )
+
+
+async def test_param_by_name_real_units_settings_and_presets(wired):
+    f = wired.fake
+    f.tracks[12]["slots"] = {0: "Fruity Limiter"}
+    f.params[("m", 12, 0)] = [
+        ["Gain", 0.5, "db"],
+        ["Threshold", 0.7, "db"],
+        ["Attack", 0.1, "ms"],
+        ["Ratio", 0.2, "ratio"],
+    ]
+    f.presets[("m", 12, 0)] = ["Default", "Gentle", "Hard"]
+    f.preset_at[("m", 12, 0)] = 0
+    base = {"target": "mixer", "index": 12, "slot": 0}
+
+    r = await run("fl_param", {**base, "param": "thresh", "real": "-18 dB"})
+    assert r["param"][1] == "Threshold" and r["param"][4] == 1
+    assert abs(float(r["param"][3].split()[0]) + 18) < 0.2
+
+    r = await run("fl_param", {**base, "settings": "Attack=5 ms, Ratio=8:1, Gain=0.6"})
+    assert [row[3] for row in r["params"]] == ["5 ms", "8.0:1", "-24.0 dB"]
+    r = await run("fl_param", {**base, "settings": "Gain=~0.25"})
+    assert r["params"][0][1] == "Gain"
+
+    assert (await run("fl_param", {**base, "view": "info"}))["presets"] == 3
+    assert (await run("fl_param", {**base, "view": "presets"}))["cur"] == "Default"
+    assert (await run("fl_param", {**base, "preset": "hard"}))["preset"] == "Hard"
+    assert (await run("fl_param", {**base, "preset": "-1"}))["preset"] == "Gentle"
+    assert (await run("fl_param", {**base, "preset": "+2"}))["preset"] == "Default"
+
+
+@pytest.mark.parametrize(
+    ("args", "message"),
+    [
+        ({"settings": "Gain"}, "should look like Name=value"),
+        ({"settings": " , "}, "settings is empty"),
+        ({"param": "Gain", "value": 0.5, "real": "3 dB"}, "not both"),
+        ({"real": "3 dB"}, "need param"),
+        ({"param": "nope", "value": 0.5}, "no parameter named"),
+    ],
+)
+async def test_param_errors(wired, args, message):
+    wired.fake.tracks[12]["slots"] = {0: "Fruity Limiter"}
+    wired.fake.params[("m", 12, 0)] = [["Gain", 0.5, "db"]]
+    error = await run(
+        "fl_param", {"target": "mixer", "index": 12, "slot": 0, **args}, expect_error=True
+    )
+    assert message in error
+
+
+async def test_plugin_inventory_through_fl_list(wired):
+    out = await run("fl_list", {"kind": "plugins"})
+    assert out["cols"][:2] == ["i", "at"]
+    assert {row[4] for row in out["rows"]} == {"Sytrus", "Fruity Reeverb 2"}
+
+
+async def test_status_can_probe_and_show_the_script_log(wired):
+    out = await run("fl_status", {"probe": True, "log": True})
+    assert out["probe"]["has"]["ui.navigateBrowser"] is True
+    assert out["log"] == {"n": out["log"]["n"], "failed": 0, "errors": []}
+    await run("fl_call", {"calls": '[["os.system", "x"]]'}, expect_error=True)
+    assert (await run("fl_status", {"log": True}))["log"]["failed"] == 1
+
+
+async def test_fl_ui_windows_keys_and_browser(wired):
+    state = await run("fl_ui", {"action": "window", "window": "mixer", "mode": "show"})
+    assert state["visible"] is True
+    out = await run("fl_ui", {"action": "key", "keys": "down, down ,enter,f8"})
+    assert out["n"] == 4
+    scan = await run("fl_ui", {"action": "browser", "browse": "scan", "count": 5})
+    assert scan["rows"][0][0] == "Generators"
+    wired.fake.browser_at = 0
+    found = await run("fl_ui", {"action": "browser", "browse": "goto", "query": "sytrus"})
+    assert found["found"] is True
+    await run("fl_ui", {"action": "browser", "browse": "select"})
+    assert ("select", "Sytrus") in wired.fake.browser_log
+    assert (await run("fl_ui", {"action": "form"}))["plugin"] == "Fruity Limiter"
+    for args, message in [
+        ({"action": "window"}, "needs which"),
+        ({"action": "key"}, "needs keys"),
+        ({"action": "browser", "browse": "goto"}, "needs query"),
+        ({"action": "key", "keys": "launch"}, "unknown key"),
+    ]:
+        assert message in await run("fl_ui", args, expect_error=True)
 
 
 async def test_call(wired):
