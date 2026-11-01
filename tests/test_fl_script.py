@@ -363,3 +363,108 @@ def test_unlinked_output_is_reported_not_fatal(fl, capsys):
     assert "no MIDI output linked" in capsys.readouterr().out
     fl.script.OnInit()
     assert "set the MIDI output port" in capsys.readouterr().out
+
+
+# ---- real units, metering, batches
+
+
+def test_gain_finds_the_fader_position_for_a_db_target(fl):
+    r = fl.call({"o": "gain", "t": "mixer", "i": 3, "db": -6})
+    assert abs(r["db"] + 6) <= 0.05 and not r["clamped"]
+    assert abs(fl.fake.tracks[3]["vol"] - 0.8 * 10 ** (-6 / 20)) < 0.003
+    r = fl.call({"o": "gain", "t": "channel", "i": 1, "db": -3})
+    assert (
+        abs(r["db"] + 3) <= 0.05
+        and abs(fl.fake.chans[1]["vol"] - 0.78125 * 10 ** (-3 / 20)) < 0.003
+    )
+    far = fl.call({"o": "gain", "t": "mixer", "i": 3, "db": 6})  # this fader tops out near +1.9 dB
+    assert far["clamped"] and far["v"] > 0.99
+    assert fl.call({"o": "gain", "t": "mixer", "i": 3, "db": 0})["v"] == pytest.approx(
+        0.8, abs=0.006
+    )
+    for bad in (
+        {"t": "mixer", "i": 3, "db": 40},
+        {"t": "bus", "i": 0, "db": 0},
+        {"t": "mixer", "i": 300, "db": 0},
+    ):
+        with pytest.raises(FLError):
+            fl.call({"o": "gain", **bad})
+
+
+def test_eq_sets_real_frequency_and_gain(fl):
+    r = fl.call({"o": "eq", "i": 5, "b": 1, "f": 250, "g": -3})
+    assert abs(r["f"] - 250) <= 2.6 and abs(r["g"] + 3) <= 0.05
+    r = fl.call({"o": "eq", "i": 5, "b": 0, "g": 2.5, "w": 0.3})
+    assert "f" not in r and r["w"] == 0.3 and abs(r["g"] - 2.5) <= 0.05
+    for bad in ({"i": 5, "b": 3}, {"i": 5, "b": 0, "f": 5}, {"i": 5, "b": 0, "g": 99}):
+        with pytest.raises(FLError):
+            fl.call({"o": "eq", **bad})
+
+
+def test_peaks_markers_and_audition(fl):
+    fl.fake.peaks = {0: 0.91234, 3: 0.5}
+    assert fl.call({"o": "peaks", "t": [0, 3, 4]}) == {"p": [0.912, 0.5, 0.0]}
+    assert fl.call({"o": "markers", "m": [[0, "Intro"], [1536, "Drop"]]}) == {"n": 2}
+    assert fl.fake.markers == [(0, "Intro"), (1536, "Drop")]
+    fl.call({"o": "note", "c": 2, "n": 48, "v": 90})
+    assert fl.fake.auditioned == [(2, 48, 90)]
+    with pytest.raises(FLError, match="note 200"):
+        fl.call({"o": "note", "c": 2, "n": 200})
+
+
+def test_grid_replaces_steps_with_velocities_and_swing(fl):
+    r = fl.call({"o": "grid", "c": 0, "p": 2, "g": "z...y...x.z..w..", "sw": 5})
+    sp = fl.fake.chans[0]["sp"]
+    assert r == {"on": 5, "bad": 0} and fl.fake.pat == 2
+    assert fl.fake.chans[0]["steps"][2] == {0, 4, 8, 10, 13}
+    assert sp[(2, 0, 1)] == 127 and sp[(2, 4, 1)] == round(34 * 127 / 35) and (2, 13, 7) in sp
+    assert (2, 0, 7) not in sp  # swing only on off-16ths
+    fl.call({"o": "grid", "c": 0, "p": 2, "g": "z..............."})  # replaces, not merges
+    assert fl.fake.chans[0]["steps"][2] == {0}
+    fl.fake.step_limit = 16
+    assert fl.call({"o": "grid", "c": 1, "p": 3, "g": "z" * 20})["bad"] == 4  # FL dropped steps
+    for bad in (
+        {"c": 0, "p": 2, "g": "xx!"},
+        {"c": 0, "p": 0, "g": "z"},
+        {"c": 0, "p": 2, "g": "z" * 600},
+    ):
+        with pytest.raises(FLError):
+            fl.call({"o": "grid", **bad})
+
+
+def test_batch_runs_in_order_with_one_undo_step(fl):
+    steps = [
+        {"o": "tr", "a": "tempo", "v": 150},
+        {"o": "grid", "c": 0, "p": 4, "g": "z...z...z...z..."},
+        {"o": "set", "k": "pattern", "i": 4, "p": {"name": "Drop A - Drums"}},
+    ]
+    r = fl.call({"o": "batch", "u": "produce house", "s": steps})
+    assert (
+        r == {"n": 3, "bad": 0}
+        and fl.fake.bpm == 150
+        and fl.fake.pats[4]["name"] == "Drop A - Drums"
+    )
+    assert fl.fake.undo_points == [("FL MCP: produce house", 1 | 2 | 4 | 32)]
+    fl.call({"o": "batch", "s": [{"o": "tr", "a": "stop"}]})
+    assert len(fl.fake.undo_points) == 1  # no name, no undo point
+
+
+def test_batch_reports_the_failing_step_and_refuses_nesting(fl):
+    steps = [
+        {"o": "tr", "a": "tempo", "v": 111},
+        {"o": "set", "k": "channel", "i": 99, "p": {"name": "x"}},
+    ]
+    with pytest.raises(FLError, match=r"step 1 \(set\): ValueError: channel 99 out of range"):
+        fl.call({"o": "batch", "u": "x", "s": steps})
+    assert (
+        fl.fake.bpm == 111 and fl.fake.undo_points == []
+    )  # earlier steps stay, no half-named undo
+    with pytest.raises(FLError, match="cannot run inside a batch"):
+        fl.call({"o": "batch", "s": [{"o": "batch", "s": []}]})
+    with pytest.raises(FLError, match="at most 300"):
+        fl.call({"o": "batch", "s": [{"o": "tr", "a": "stop"}] * 301})
+
+
+def test_save_new_version(fl):
+    fl.call({"o": "tr", "a": "savenew"})
+    assert fl.fake.saves == 10

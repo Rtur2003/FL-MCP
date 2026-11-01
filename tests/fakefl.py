@@ -7,6 +7,7 @@ the way it would inside FL Studio. Any API function the script uses without a fa
 import functools
 import importlib.util
 import inspect
+import math
 import types
 from pathlib import Path
 from types import SimpleNamespace
@@ -88,6 +89,9 @@ class FakeFL:
         self.tlist = {
             i: {"name": f"Track {i}", "mute": 0, "solo": 0, "color": 0} for i in range(1, 501)
         }
+        self.peaks, self.markers, self.auditioned, self.undo_points = {}, [], [], []
+        self.eq = {}
+        self.step_limit = 1024
         self.params = {
             ("c", 2, -1): [["Cutoff", 0.5], ["Resonance", 0.2], ["", 0.0], ["Master level", 0.8]],
             ("m", 10, 0): [["Wet", 0.3], ["Decay", 0.6]],
@@ -164,6 +168,8 @@ class FakeFL:
             self.metro = not self.metro
         elif command == midi.FPT_Save:
             self.saves += 1
+        elif command == midi.FPT_SaveNew:
+            self.saves += 10
         else:
             raise AssertionError(f"unexpected transport command {command}")
         return 0
@@ -243,7 +249,8 @@ class FakeFL:
         self.tracks[index]["color"] = color
 
     def mixer_getTrackVolume(self, index, mode):
-        return self.tracks[index]["vol"]
+        v = self.tracks[index]["vol"]
+        return (20 * math.log10(v / 0.8) if v > 0 else -120.0) if mode == 1 else v
 
     def mixer_setTrackVolume(self, index, volume, pickupMode):
         self.tracks[index]["vol"] = volume
@@ -302,7 +309,8 @@ class FakeFL:
         return self._ch(index, useGlobalIndex)["type"]
 
     def channels_getChannelVolume(self, index, mode, useGlobalIndex):
-        return self._ch(index, useGlobalIndex)["vol"]
+        v = self._ch(index, useGlobalIndex)["vol"]
+        return (20 * math.log10(v / 0.78125) if v > 0 else -120.0) if mode else v
 
     def channels_setChannelVolume(self, index, volume, pickupMode, useGlobalIndex):
         self._ch(index, useGlobalIndex)["vol"] = volume
@@ -349,6 +357,8 @@ class FakeFL:
 
     def channels_setGridBit(self, index, position, value, useGlobalIndex):
         steps = self._ch(index, useGlobalIndex)["steps"].setdefault(self.pat, set())
+        if value and position >= self.step_limit:
+            return  # FL ignores steps beyond the pattern
         (steps.add if value else steps.discard)(position)
         self.pats.setdefault(self.pat, self._pattern(self.pat))
 
@@ -417,6 +427,46 @@ class FakeFL:
 
     def playlist_selectTrack(self, index):
         self.tlist[index]["selected"] = True
+
+    def channels_midiNoteOn(self, indexGlobal, note, velocity, channel):
+        self.auditioned.append((indexGlobal, note, velocity))
+
+    def arrangement_addAutoTimeMarker(self, time, name):
+        self.markers.append((time, name))
+
+    def general_saveUndo(self, undoName, flags, update):
+        self.undo_points.append((undoName, flags))
+
+    def mixer_getTrackPeaks(self, index, mode):
+        assert mode == 2
+        fn = getattr(self, "peak_fn", None)
+        return fn(index) if fn else self.peaks.get(index, 0.0)
+
+    def mixer_getEqBandCount(self):
+        return 3
+
+    def _eq(self, index, band):
+        return self.eq.setdefault((index, band), {"g": 0.5, "f": 0.5, "w": 0.5})
+
+    def mixer_getEqGain(self, index, band, mode):
+        v = self._eq(index, band)["g"]
+        return (v - 0.5) * 36 if mode == 1 else v
+
+    def mixer_setEqGain(self, index, band, value):
+        self._eq(index, band)["g"] = value
+
+    def mixer_getEqFrequency(self, index, band, mode):
+        v = self._eq(index, band)["f"]
+        return 20 * 1000**v if mode == 1 else v
+
+    def mixer_setEqFrequency(self, index, band, value):
+        self._eq(index, band)["f"] = value
+
+    def mixer_getEqBandwidth(self, index, band):
+        return self._eq(index, band)["w"]
+
+    def mixer_setEqBandwidth(self, index, band, value):
+        self._eq(index, band)["w"] = value
 
     # ---- plugins
 

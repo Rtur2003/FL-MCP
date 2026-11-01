@@ -20,9 +20,10 @@ from typing import Any
 log = logging.getLogger("fl_mcp")
 
 PROTO = 1
+SCRIPT_VERSION = 2  # FL script revision this server needs (new ops)
 REQ_CH, RES_CH = 14, 15
 BEGIN, DATA, SUM_A, SUM_B = 102, 103, 104, 105
-MAX_REQ = 4096
+MAX_REQ = 16384
 DEFAULT_PORT = "FL MCP"
 
 
@@ -179,7 +180,7 @@ class Bridge:
             self._open()
             if self.info is None and req.get("o") != "ping":
                 self.info = self._roundtrip(dumps({"o": "ping"}), timeout)
-                if self.info.get("proto") != PROTO:
+                if self.info.get("proto") != PROTO or self.info.get("ver", 0) < SCRIPT_VERSION:
                     self.info = None
                     raise FLError(
                         "FL MCP script in FL Studio is outdated: run `fl-mcp install`, "

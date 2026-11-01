@@ -111,7 +111,7 @@ async def test_real_stdio_server_speaks_mcp():
     env = {**os.environ, "FL_MCP_TIMEOUT": "0.2", "FL_MCP_PORT": "no such port"}
     params = StdioServerParameters(command=sys.executable, args=["-m", "fl_mcp"], env=env)
     async with Client(params) as client:
-        assert len((await client.list_tools()).tools) == 9
+        assert len((await client.list_tools()).tools) == 11
         api = await client.call_tool("fl_api", {"module": "transport", "query": "isplaying"})
         assert api.content[0].text == "isPlaying()->bool"
         status = await client.call_tool("fl_status", {})

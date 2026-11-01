@@ -12,6 +12,8 @@ pytestmark = pytest.mark.anyio
 
 NAMES = [
     "fl_status",
+    "fl_produce",
+    "fl_mix",
     "fl_list",
     "fl_transport",
     "fl_set",
@@ -71,7 +73,7 @@ def walk(node, path=""):
 async def test_tool_list_is_small_flat_and_portable():
     async with Client(server.mcp) as client:
         tools = (await client.list_tools()).tools
-        assert client.instructions and "fl_steps" in client.instructions
+        assert client.instructions and "fl_produce" in client.instructions
     assert [t.name for t in tools] == NAMES
     for tool in tools:
         assert re.fullmatch(r"[a-z][a-z0-9_]{2,40}", tool.name)
@@ -87,7 +89,7 @@ async def test_tool_list_is_small_flat_and_portable():
             assert prop.get("type") != "array" or "items" in prop, f"{tool.name}.{name}"
             assert prop.get("type") != "array" or "type" in prop["items"]
     size = len(json.dumps([t.model_dump(by_alias=True, exclude_none=True) for t in tools]))
-    assert size < 9500, size  # roughly 2.4k tokens for the whole server
+    assert size < 11500, size  # roughly 2.8k tokens for the whole server
 
 
 async def test_annotations_tell_clients_what_is_safe():

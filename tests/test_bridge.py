@@ -72,6 +72,12 @@ def test_outdated_script_is_detected(fl):
     assert fl.bridge.info is None
 
 
+def test_old_script_revision_is_detected(fl):
+    fl.script.VERSION = 1
+    with pytest.raises(FLError, match="outdated"):
+        fl.call({"o": "status"})
+
+
 def test_fl_side_errors_become_flerrors(fl):
     with pytest.raises(FLError, match="channel 9 out of range"):
         fl.call({"o": "steps", "c": 9})
@@ -79,7 +85,7 @@ def test_fl_side_errors_become_flerrors(fl):
 
 def test_oversized_request_is_rejected_locally(fl):
     with pytest.raises(FLError, match="request too large"):
-        fl.call({"o": "call", "c": [["mixer.getTrackName", 1]] * 300})
+        fl.call({"o": "call", "c": [["mixer.getTrackName", 1]] * 1000})
     assert fl.bridge.sent == 0
 
 

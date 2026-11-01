@@ -16,18 +16,22 @@ from mcp.server.mcpserver.tools import Tool
 from mcp.types import ToolAnnotations
 from pydantic import Field
 
-from fl_mcp import __version__
+from fl_mcp import __version__, mixing, produce
 from fl_mcp.bridge import Bridge, FLError
+from fl_mcp.music import GENRES, compose
 from fl_mcp.paths import data_dir
 
 INSTRUCTIONS = (
-    "Controls a running FL Studio through the FL MCP controller script (if calls time out, the "
-    "user should run `fl-mcp doctor`). Indices: channels and mixer tracks 0-based (mixer 0 = "
-    "Master, 1-125 inserts), patterns and playlist tracks 1-based. Volume 0-1 (0.8 = 0 dB), pan "
-    "-1..1, colors #RRGGBB. FL's API cannot create channels or plugins or place playlist clips. "
-    "Drums and simple lines: fl_steps. Melodies and chords: fl_notes queues notes, then the user "
-    "must run Tools > Scripting > FL MCP in the piano roll. Inspect with fl_status/fl_list, "
-    "change with fl_set; use fl_api + fl_call only for anything else."
+    "Controls the FL Studio running on this computer through the FL MCP controller script "
+    "(if calls time out, the user should run `fl-mcp doctor`). Indices: channels and mixer tracks "
+    "0-based (mixer 0 = Master, 1-125 inserts), patterns and playlist tracks 1-based. Volume 0-1 "
+    "(0.8 = 0 dB), pan -1..1, colors #RRGGBB. MIDI note 60 is C4 (FL's piano roll labels it C5). "
+    "FL's API cannot create channels or plugins or place playlist clips. To make music fast use "
+    "fl_produce: one call builds a genre-aware song plan, writes drums into the Channel Rack and "
+    "exports a MIDI file with everything. fl_mix measures and balances levels while the project "
+    "plays. Melodies and chords reach the piano roll through fl_notes (the user runs Tools > "
+    "Scripting > FL MCP once). Inspect with fl_status/fl_list, change with fl_set; use fl_api + "
+    "fl_call only for anything else."
 )
 
 bridge = Bridge()
@@ -289,6 +293,179 @@ async def fl_call(
     return _out(await _fl({"o": "call", "c": batch}))
 
 
+async def _thread(fn: Any, *args: Any, **kwargs: Any) -> Any:
+    try:
+        return await anyio.to_thread.run_sync(functools.partial(fn, *args, **kwargs))
+    except (FLError, ValueError) as exc:
+        raise ToolError(str(exc)) from None
+
+
+def _find_pattern(plan: Any, ref: str) -> int:
+    if ref.isdigit() and int(ref) < len(plan.patterns):
+        return int(ref)
+    for i, pat in enumerate(plan.patterns):
+        if pat.name.lower() == ref.lower():
+            return i
+    raise ToolError("pattern not found; use fl_produce action=show to see the names")
+
+
+Genre = Literal[tuple(GENRES)]  # type: ignore[valid-type]
+
+
+async def fl_produce(
+    action: Annotated[
+        Literal["make", "plan", "apply", "queue", "midi", "show", "genres"],
+        Field(description="make = plan + deliver; apply = deliver a stored plan"),
+    ] = "make",
+    genre: Genre | None = None,
+    key: Annotated[str | None, Field(description="'A minor', 'F# dorian'; default random")] = None,
+    bpm: Annotated[int | None, Field(ge=40, le=220, description="default: the genre's")] = None,
+    length: Annotated[
+        Literal["sketch", "short", "full"], Field(description="about 20, 60 or 90 bars")
+    ] = "short",
+    mood: Literal["dark", "bright", "chill", "aggressive", "epic"] | None = None,
+    energy: Annotated[float, Field(ge=0, le=1, description="density and fills")] = 0.75,
+    seed: Annotated[int | None, Field(ge=0, description="same seed, same song")] = None,
+    roles: Annotated[str | None, Field(description="only these, e.g. 'kick,bass,lead'")] = None,
+    plan: Annotated[str | None, Field(description="plan id; default the latest")] = None,
+    channels: Annotated[
+        str | None, Field(description="role to channel index, e.g. 'kick=0,bass=3'")
+    ] = None,
+    pattern: Annotated[str | None, Field(description="queue/show: pattern name or index")] = None,
+    role: Annotated[str | None, Field(description="queue: role to send to the piano roll")] = None,
+) -> str:
+    """Fast production. make builds a genre-aware song plan (sections, drums, bass, chords, melody,
+    mix targets) and delivers it: drums and one-shots fill matching Channel Rack channels as named
+    patterns with tempo, markers, EQ and pan; the whole song is also written as a MIDI file to drag
+    into FL. Channels are matched by name (kick, snare, hat, bass, lead...); channels overrides.
+    queue sends one melodic part to the piano roll. Also: plan, apply, midi, show, genres."""
+    if action == "genres":
+        return _out({k: [g.name, *g.bpm, g.default_scale] for k, g in GENRES.items()})
+    if action in ("make", "plan"):
+        if not genre:
+            raise ToolError("genre is required; see action=genres")
+        picked = [r.strip() for r in roles.split(",") if r.strip()] if roles else None
+        built = await _thread(
+            compose,
+            genre,
+            key=key,
+            bpm=bpm,
+            length=length,
+            mood=mood,
+            energy=energy,
+            seed=seed,
+            roles=picked,
+        )
+        await _thread(produce.save_plan, built)
+    else:
+        built = await _thread(produce.load_plan, plan or "")
+    override = await _thread(produce.parse_map, channels) if channels else None
+    out: dict[str, Any] = {"plan": built.summary()}
+    if action == "show":
+        if pattern:
+            pat = built.patterns[_find_pattern(built, pattern)]
+            out = {
+                "pattern": pat.name,
+                "bars": pat.bars,
+                "parts": {
+                    r: [[round(e.t, 2), round(e.d, 2), e.p, e.v] for e in x.events[:24]]
+                    for r, x in pat.parts.items()
+                    if role in (None, r)
+                },
+            }
+        return _out(out)
+    if action == "queue":
+        if not (pattern and role):
+            raise ToolError("queue needs pattern and role")
+        idx = _find_pattern(built, pattern)
+        part = built.patterns[idx].parts.get(role)
+        if part is None:
+            raise ToolError(f"pattern '{built.patterns[idx].name}' has no {role}")
+        state = await _thread(produce.live_state, built.id)
+        if role not in state["mapping"]:
+            raise ToolError(f"no channel for {role}; pass channels='{role}=<index>' when applying")
+        rows = [_note([e.p, e.t, e.d, e.v]) for e in part.events]
+        roll = await _fl({"o": "roll", "c": state["mapping"][role], "p": state["base"] + 1 + idx})
+        _write_json(
+            data_dir() / "inbox.json",
+            {"serial": secrets.randbelow(2**31), "replace": True, "notes": rows},
+        )
+        return _out(
+            {
+                "queued": len(rows),
+                "channel": roll["ch"],
+                "pattern": roll["pat"],
+                "next": "In FL's piano roll run Tools > Scripting > FL MCP, then press Accept.",
+            }
+        )
+    if action in ("make", "apply"):
+        try:
+            out["live"] = await _thread(produce.apply_live, bridge.call, built, override)
+        except ToolError as exc:
+            if action == "apply":
+                raise
+            out["live"] = f"not applied: {exc}"
+    if action in ("make", "midi"):
+        out["midi"] = str(await _thread(produce.export_midi, built))
+        out["midi_note"] = (
+            "Drag it into FL Studio: every track becomes a channel, sections are markers."
+        )
+    return _out(out)
+
+
+async def fl_mix(
+    action: Annotated[
+        Literal["meter", "balance"],
+        Field(description="meter reads; balance also moves faders"),
+    ] = "meter",
+    seconds: Annotated[float, Field(ge=1, le=30, description="how long to play and measure")] = 6.0,
+    bar: Annotated[float | None, Field(ge=1, description="start playing from this bar")] = None,
+    plan: Annotated[
+        str | None, Field(description="balance: plan for role targets; default latest")
+    ] = None,
+    targets: Annotated[
+        str | None, Field(description="balance: explicit 'track=peak_dB' list, e.g. '1=-8,2=-9'")
+    ] = None,
+) -> str:
+    """Measure the mix with the mixer's own peak meters while the project plays (stops again if it
+    was stopped). meter returns per-track peak dBFS and activity. balance moves faders so each role
+    lands on its target peak (kick -8, bass -9, hats -20...) and keeps the master below -3 dBFS.
+    Play the loudest section: use bar. Needs the project to be playing audio from the playlist."""
+    mixer_rows = await _thread(produce.rows, bridge.call, "mixer")
+    used = [r[0] for r in mixer_rows]
+    names = {r[0]: r[1] for r in mixer_rows}
+    if action == "meter":
+        result = await _thread(mixing.meter, bridge.call, used, seconds, bar)
+        return _out(
+            {
+                "cols": ["track", "name", "peak_db", "active"],
+                "rows": [[t, names[t], v["peak_db"], v["active"]] for t, v in result.items()],
+                "clipping": [t for t, v in result.items() if v["clips"]],
+            }
+        )
+    goals: dict[int, float] = {}
+    if targets:
+        try:
+            goals = {int(k): float(v) for k, v in (p.split("=") for p in targets.split(","))}
+        except ValueError:
+            raise ToolError("targets look like '1=-8,2=-9'") from None
+    else:
+        built = await _thread(produce.load_plan, plan or "")
+        chans = await _thread(produce.rows, bridge.call, "channels")
+        mapping = await _thread(produce.mapping_for, built.id, [c[1] for c in chans])
+        for r, ch in mapping.items():
+            track = chans[ch][7] if ch < len(chans) else 0
+            if track >= 1 and r in built.mix:
+                goals[track] = max(goals.get(track, -99.0), built.mix[r].peak_db)
+        if not goals:
+            raise ToolError(
+                "no channel is routed to its own mixer track; route channels to inserts first"
+            )
+    report = await _thread(mixing.balance, bridge.call, goals, seconds, bar)
+    report["names"] = {t: names.get(t, "") for t in report["peaks_db"]}
+    return _out(report)
+
+
 @functools.cache
 def _api() -> dict[str, list[str]]:
     return json.loads(resources.files("fl_mcp").joinpath("api.json").read_text(encoding="utf-8"))
@@ -360,6 +537,8 @@ mcp = MCPServer(
     instructions=INSTRUCTIONS,
     tools=[
         _tool(fl_status, **_READ),
+        _tool(fl_produce, readOnlyHint=False, destructiveHint=False, idempotentHint=False),
+        _tool(fl_mix, readOnlyHint=False, destructiveHint=False, idempotentHint=False),
         _tool(fl_list, **_READ),
         _tool(fl_transport, **_ACT),
         _tool(fl_set, **_EDIT),

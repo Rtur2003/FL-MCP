@@ -2,7 +2,7 @@
 
 import json
 import statistics
-from functools import lru_cache
+from functools import cache
 
 import pytest
 
@@ -16,7 +16,7 @@ SEEDS = (1, 2, 3)
 TOL = 0.06  # beats of slack for humanised starts
 
 
-@lru_cache(maxsize=None)
+@cache
 def make(genre: str, seed: int, length: str = "short") -> Plan:
     return compose(genre, seed=seed, length=length)
 
@@ -210,7 +210,7 @@ def test_harmony_and_melody_follow_the_key(genre, seed):
             part = pat.parts.get(role)
             for e in part.events if part else ():
                 bar = int(e.t // 4 + 1e-9)
-                # strum/ornament starts can slip a hair before a bar line; look at the bar it belongs to
+                # strum and ornament starts can slip just before a bar line
                 allowed = scale | chord_pcs(min(bar, pat.bars - 1))
                 if role in ("chords", "pad"):
                     assert e.p % 12 in chord_pcs(bar % pat.bars) | scale

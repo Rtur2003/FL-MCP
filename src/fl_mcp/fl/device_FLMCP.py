@@ -21,12 +21,12 @@ import plugins
 import transport
 import ui
 
-VERSION = 1
+VERSION = 2
 PROTO = 1
 
 _IN, _OUT = 14, 15
 _BEGIN, _DATA, _SUM_A, _SUM_B = 102, 103, 104, 105
-_MAX_IN, _MAX_OUT = 8192, 8192
+_MAX_IN, _MAX_OUT = 20000, 8192
 
 _rx = {"fid": -1, "buf": bytearray(), "sa": -1}
 _last = {"key": None, "body": b""}
@@ -480,6 +480,8 @@ def _op_tr(r):
         transport.setSongPos(int(round((bar - 1) * general.getRecPPB())), midi.SONGLENGTH_ABSTICKS)
     elif a == "save":
         transport.globalTransport(midi.FPT_Save, 1)
+    elif a == "savenew":
+        transport.globalTransport(midi.FPT_SaveNew, 1)
     elif a == "undo":
         general.undo()
     else:
@@ -577,6 +579,146 @@ def _op_roll(r):
     }
 
 
+# ---------------------------------------------------------------- real units, metering, batches
+
+
+def _db(x):
+    return round(max(-120.0, float(x)), 2)
+
+
+def _solve(setter, getter, target, tol, lo=0.0, hi=1.0):
+    """Find the normalised value whose real-unit read-back matches `target` (monotonic rising)."""
+    a, b = lo, hi
+    mid, val = a, None
+    for _ in range(24):
+        mid = (a + b) / 2
+        setter(mid)
+        val = getter()
+        if abs(val - target) <= tol:
+            break
+        if val < target:
+            a = mid
+        else:
+            b = mid
+    return mid, val
+
+
+def _op_gain(r):
+    """Set a fader to a level in dB; the exact curve is found by reading the dB value back."""
+    k = r.get("t")
+    if k == "mixer":
+        i = _idx(r["i"], 0, mixer.trackCount() - 2, "track")
+        setter, getter = lambda x: mixer.setTrackVolume(i, x), lambda: mixer.getTrackVolume(i, 1)
+    elif k == "channel":
+        i = _idx(r["i"], 0, channels.channelCount(True) - 1, "channel")
+        setter, getter = (
+            lambda x: channels.setChannelVolume(i, x, midi.PIM_None, True),
+            lambda: channels.getChannelVolume(i, True, True),
+        )
+    else:
+        raise ValueError("target must be mixer or channel")
+    # "db" is absolute; "d" changes the current level by that many dB
+    db = (
+        _num(r["db"], -90, 12, "db")
+        if r.get("db") is not None
+        else max(-90.0, min(12.0, getter() + _num(r["d"], -60, 60, "d")))
+    )
+    mid, got = _solve(setter, getter, db, 0.05)
+    return {"v": _r(mid), "db": _db(got), "clamped": abs(got - db) > 0.25}
+
+
+def _op_eq(r):
+    """Built-in mixer EQ: set frequency (Hz) and gain (dB) of one band, verified by read-back."""
+    i = _idx(r["i"], 0, mixer.trackCount() - 2, "track")
+    b = _idx(r["b"], 0, mixer.getEqBandCount() - 1, "band")
+    out = {"b": b}
+    if r.get("f") is not None:
+        hz = _num(r["f"], 20, 20000, "frequency")
+        _, got = _solve(
+            lambda x: mixer.setEqFrequency(i, b, x),
+            lambda: mixer.getEqFrequency(i, b, 1),
+            hz,
+            hz * 0.01,
+        )
+        out["f"] = round(got, 1)
+    if r.get("g") is not None:
+        db = _num(r["g"], -24, 24, "gain")
+        _, got = _solve(
+            lambda x: mixer.setEqGain(i, b, x), lambda: mixer.getEqGain(i, b, 1), db, 0.05
+        )
+        out["g"] = _db(got)
+    if r.get("w") is not None:
+        mixer.setEqBandwidth(i, b, _num(r["w"], 0, 1, "bandwidth"))
+    out["w"] = _r(mixer.getEqBandwidth(i, b))
+    return out
+
+
+def _op_peaks(r):
+    ts = [_idx(t, 0, mixer.trackCount() - 2, "track") for t in r["t"][:64]]
+    return {"p": [_r(mixer.getTrackPeaks(t, 2)) for t in ts]}
+
+
+def _op_markers(r):
+    for ticks, name in r["m"][:64]:
+        arrangement.addAutoTimeMarker(_idx(ticks, 0, 10**9, "time"), str(name)[:40])
+    return {"n": len(r["m"][:64])}
+
+
+def _op_note(r):
+    c = _idx(r["c"], 0, channels.channelCount(True) - 1, "channel")
+    channels.midiNoteOn(c, _idx(r["n"], 0, 127, "note"), _idx(r.get("v", 100), 0, 127, "velocity"))
+    return {"c": c}
+
+
+def _op_grid(r):
+    """Replace one channel's steps in a pattern from a string: '.' = off, 1-9/a-z = velocity."""
+    c = _idx(r["c"], 0, channels.channelCount(True) - 1, "channel")
+    pat = _idx(r["p"], 1, patterns.patternMax(), "pattern")
+    g = str(r["g"])
+    if len(g) > 512 or any(ch not in ".0123456789abcdefghijklmnopqrstuvwxyz" for ch in g):
+        raise ValueError("grid must be at most 512 characters of . 0-9 a-z")
+    if pat != patterns.patternNumber():
+        patterns.jumpToPattern(pat)
+    sw = _idx(r.get("sw") or 0, 0, 48, "swing")
+    on = bad = 0
+    for s, ch in enumerate(g):
+        want = ch not in ".0"
+        if want != bool(channels.getGridBit(c, s, True)):
+            channels.setGridBit(c, s, want, True)
+        if want:
+            on += 1
+            vel = round(int(ch, 36) * 127 / 35)
+            channels.setStepParameterByIndex(c, pat, s, midi.pVelocity, vel, True)
+            if sw and s % 2:
+                channels.setStepParameterByIndex(c, pat, s, midi.pShift, sw, True)
+    for s in range(len(g)):  # verify what FL actually kept
+        if (g[s] not in ".0") != bool(channels.getGridBit(c, s, True)):
+            bad += 1
+    return {"on": on, "bad": bad}
+
+
+def _op_batch(r):
+    """Run many ops in one request; one undo step covers them all."""
+    steps = r["s"]
+    if len(steps) > 300:
+        raise ValueError("at most 300 steps per batch")
+    bad = 0
+    for n, sub in enumerate(steps):
+        if sub.get("o") in ("batch", "ping"):
+            raise ValueError("step %d: %s cannot run inside a batch" % (n, sub.get("o")))
+        try:
+            res = _run(sub)
+        except Exception as exc:
+            raise ValueError("step %d (%s): %s" % (n, sub.get("o"), _err(exc))) from None
+        if isinstance(res, dict):
+            bad += int(res.get("bad") or 0)
+    if r.get("u"):
+        general.saveUndo(
+            "FL MCP: " + str(r["u"])[:40], midi.UF_EE | midi.UF_PR | midi.UF_PL | midi.UF_Knob
+        )
+    return {"n": len(steps), "bad": bad}
+
+
 # ---------------------------------------------------------------- raw API access
 
 _MODS = {
@@ -630,4 +772,11 @@ _OPS = {
     "param": _op_param,
     "roll": _op_roll,
     "call": _op_call,
+    "gain": _op_gain,
+    "eq": _op_eq,
+    "peaks": _op_peaks,
+    "markers": _op_markers,
+    "note": _op_note,
+    "grid": _op_grid,
+    "batch": _op_batch,
 }
