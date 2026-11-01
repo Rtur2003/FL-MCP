@@ -9,6 +9,8 @@ The server talks to FL Studio through a virtual MIDI port called `FL MCP`. Three
 3. In FL Studio open Options > MIDI Settings. Under Input select the `FL MCP` port, set Controller type to `FL MCP`, enable it. Under Output select the same port and give it the same port number as the input.
 4. Restart FL Studio. Run `fl-mcp doctor` (each layer in one line), then `fl-mcp selftest` (every feature, small writes put back, report saved to `selftest.json`).
 
+`fl-mcp selftest --deep` additionally loads Fruity Balance through FL's browser onto a mixer track and undoes it: it tells you whether adding plugins works on your FL build (save the project first; if undo does not take it back, delete the plugin by hand).
+
 Optional: `fl-mcp desktop on` lets the model see FL's screen and press its keys (`fl_desk`). It stays inside FL windows and stops when the mouse is in the top-left corner. The audio tools need the audio extra: `uv tool install "fl-mcp[audio]"`.
 
 ## When something does not work

@@ -36,7 +36,7 @@ fl-mcp setup
 - Output: select `FL MCP`, enable it, port number the **same `N`**.
 - Restart FL Studio (or reselect the controller type to reload the script).
 
-**4. Check:** `fl-mcp doctor` (each layer in one line), then `fl-mcp selftest` (every feature, with a report).
+**4. Check:** `fl-mcp doctor` (each layer in one line), then `fl-mcp selftest` (every feature, with a report; `--deep` also loads a plugin through FL's browser and undoes it).
 
 **5. Add to your client:** `fl-mcp config <client>` prints the exact text and file for `claude-desktop`, `claude-code`, `cursor`, `vscode`, `windsurf`, `gemini` and `codex` (`--source git` to run from this repository, `--source local` to run from the Python that is installed). For example:
 
@@ -65,7 +65,7 @@ The plugin starts the server and adds five skills (**setup**, **produce**, **mix
 | `fl_param` | **Any plugin**, stock or third party: list parameters by name, set one in real units (`real="-18 dB"`), set many (`settings="Threshold=-18 dB, Ratio=4:1"`), read and load presets |
 | `fl_list` | channels, mixer tracks, patterns, playlist tracks or every plugin in the project |
 | `fl_library` | indexes your sample packs and plugins; ranks samples for a role by name and by measured sound; picks a coherent drum kit for a genre |
-| `fl_ui` | drives FL's own interface from inside FL, no mouse: show and focus windows, press keys, walk the browser and load the focused plugin or sample |
+| `fl_ui` | drives FL's own interface from inside FL, no mouse: show and focus windows, press keys, walk the browser; `load` finds a plugin or sample by name, loads it onto a mixer track or as a new channel, and checks that it appeared |
 | `fl_status` | FL version, project, tempo, state; `probe` lists the API features this FL build has, `log` the script's last errors |
 | `fl_transport` | play, pause, stop, record, loop mode, metronome, tempo, position (bar), save, undo |
 | `fl_set` | name, color, volume, pan, mute, solo, routing (`fx`, `send`/`level`), select on a channel, mixer track, pattern or playlist track |

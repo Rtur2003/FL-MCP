@@ -21,7 +21,7 @@ import plugins
 import transport
 import ui
 
-VERSION = 3
+VERSION = 4
 PROTO = 1
 
 _IN, _OUT = 14, 15
@@ -1083,9 +1083,12 @@ def _browser_item(name=None):
     return [name or ui.getFocusedNodeCaption(), ui.getFocusedNodeFileType()]
 
 
-def _browser_walk(count, expand, want):
-    """Step down the browser tree reading each item; stop at a match or at the end of the list."""
+def _browser_walk(count, expand, want, here=False):
+    """Step down the browser tree reading each item; stop at a match or at the end of the list.
+    With here, the item that has the focus now is checked before the first step."""
     rows, same, last = [], 0, None
+    if here and want and want in _key(_browser_item()[0]):
+        return [_browser_item()], 0, True
     for step in range(count):
         row = _browser_item(ui.navigateBrowser(41, bool(expand)))
         same = same + 1 if row[0] == last else 0
@@ -1117,18 +1120,27 @@ def _op_browser(r):
     if b == "preview":
         ui.previewBrowserMenuItem()
         return {"item": _browser_item()}
+    if b == "top":
+        last, same = None, 0
+        for _ in range(_idx(r.get("n") or 400, 1, 600, "count")):
+            name = _browser_item(ui.navigateBrowser(40, False))[0]
+            same = same + 1 if name == last else 0
+            if same >= 2:
+                break
+            last = name
+        return {"item": _browser_item(), "done": same >= 2}
     if b in ("scan", "goto"):
         want = _key(r.get("q")) if b == "goto" else ""
         if b == "goto" and not want:
             raise ValueError("goto needs q (part of the item name)")
         rows, steps, found = _browser_walk(
-            _idx(r.get("n") or 60, 1, 400, "count"), r.get("sh"), want
+            _idx(r.get("n") or 60, 1, 400, "count"), r.get("sh"), want, bool(r.get("here"))
         )
         if b == "goto":
             return {"found": found, "steps": steps, "item": _browser_item()}
         return {"cols": ["name", "type"], "rows": rows}
     raise ValueError(
-        "browser action must be caption, nav, tab, toggle, select, preview, scan or goto"
+        "browser action must be caption, nav, tab, toggle, select, preview, scan, goto or top"
     )
 
 

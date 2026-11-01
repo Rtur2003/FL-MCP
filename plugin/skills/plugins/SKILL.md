@@ -58,7 +58,7 @@ Quick recipes: **kick** Fruity Kick, tune the pitch to the song's root note, sho
 
 ## Adding a plugin or a sample
 
-FL's API cannot create plugins, so load them the way a person does, driven from inside FL: the automation guide shows the `fl_ui` browser route (`browse=goto query="Fruity Limiter"`, then `select`) and the `fl_desk` fallback. Afterwards check with `fl_list kind=plugins` that it landed on the track you meant.
+FL's API cannot create plugins, so load them the way a person does, driven from inside FL: `fl_ui action=load query="Fruity Limiter" index=<mixer track>` (no `index` for an instrument or sample, which becomes a new channel). It checks that something really appeared and tells you where; the automation guide has the step-by-step route and the `fl_desk` fallback. Afterwards `fl_list kind=plugins` confirms the track and slot.
 
 ## Sounds on disk
 

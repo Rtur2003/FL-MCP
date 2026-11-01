@@ -20,7 +20,7 @@ from typing import Any
 log = logging.getLogger("fl_mcp")
 
 PROTO = 1
-SCRIPT_VERSION = 3  # FL script revision this server needs (plugin engine, ui, probe)
+SCRIPT_VERSION = 4  # FL script revision this server needs (plugin engine, ui, probe, browser top)
 REQ_CH, RES_CH = 14, 15
 BEGIN, DATA, SUM_A, SUM_B = 102, 103, 104, 105
 MAX_REQ = 16384

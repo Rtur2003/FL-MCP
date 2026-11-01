@@ -30,6 +30,7 @@ from fl_mcp import (
     mixing,
     produce,
     render,
+    uiload,
     units,
 )
 from fl_mcp.bridge import Bridge, FLError
@@ -427,25 +428,30 @@ async def fl_audio(
 _WINDOWS = Literal["mixer", "channels", "playlist", "roll", "browser"]
 _BROWSE = Literal[
     "caption", "next", "prev", "left_tab", "right_tab", "expand", "collapse", "select", "preview",
-    "scan", "goto",
+    "scan", "goto", "top",
 ]  # fmt: skip
 
 
 async def fl_ui(
-    action: Literal["window", "key", "browser", "form"],
+    action: Literal["window", "key", "browser", "form", "load"],
     window: _WINDOWS | None = None,
     mode: Literal["state", "show", "hide", "focus"] = "state",
     keys: Annotated[str | None, Field(description="comma list: 'down,enter,f8'")] = None,
     browse: _BROWSE = "caption",
-    query: Annotated[str | None, Field(description="goto: part of an item name")] = None,
+    query: Annotated[str | None, Field(description="goto/load: part of an item name")] = None,
     count: Annotated[int, Field(ge=1, le=400, description="scan/goto: steps")] = 60,
     expand: Annotated[bool, Field(description="open folders while stepping")] = False,
+    index: Annotated[int | None, Field(ge=0, description="load: mixer track of an effect")] = None,
 ) -> str:
     """Drive FL's own interface from inside FL, no mouse. window: show/hide/focus the mixer,
     channels, playlist, roll or browser. key: press up,down,left,right,enter,escape,yes,no,cut,
     copy,paste,insert,delete,next,previous,tab,menu,itemmenu,f1-f12 in the focused window (can
-    change or delete things). browser: next/prev/expand/collapse/scan/goto, then select loads the
-    focused plugin or sample, preview plays it. form: the focused plugin window."""
+    change or delete things). browser: next/prev/expand/collapse/scan/goto/top, then select loads
+    the focused plugin or sample, preview plays it. load: finds query in the browser and loads it
+    (an effect onto mixer track index, else an instrument or sample), checked by what appeared.
+    form: the focused plugin window."""
+    if action == "load":
+        return _out(await _thread(uiload.load, bridge.call, query or "", index, 400))
     if action == "form":
         return _out(await _fl({"o": "ui", "a": "form"}))
     if action == "window":
@@ -468,6 +474,7 @@ async def fl_ui(
         "collapse": {"b": "toggle", "v": 0},
         "select": {"b": "select"},
         "preview": {"b": "preview"},
+        "top": {"b": "top", "n": count},
         "scan": {"b": "scan", "n": count, "sh": expand},
         "goto": {"b": "goto", "q": query, "n": count, "sh": expand},
     }[browse]

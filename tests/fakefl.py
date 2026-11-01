@@ -108,7 +108,7 @@ class FakeFL:
             ["Kick 01.wav", 1],
             ["Snare 01.wav", 1],
         ]
-        self.browser_at, self.browser_log = 0, []
+        self.browser_at, self.browser_log, self.loads = 0, [], []
         self.presets = {("c", 2, -1): ["Init", "Dystopian lead", "Soft pad", "Sub bass"]}
         self.preset_at = {("c", 2, -1): 0}
 
@@ -221,6 +221,12 @@ class FakeFL:
 
     def general_undo(self):
         self.undos += 1
+        if self.loads:  # undo takes back the last thing the browser loaded
+            where = self.loads.pop()
+            if where[0] == "m":
+                del self.tracks[where[1]]["slots"][where[2]]
+            else:
+                self.chans.pop(where[1])
         return 0
 
     def ui_getVersion(self, mode):
@@ -323,7 +329,20 @@ class FakeFL:
         self.browser_log.append(("toggle", value))
 
     def ui_selectBrowserMenuItem(self):
-        self.browser_log.append(("select", self.browser[self.browser_at][0]))
+        name, kind = self.browser[self.browser_at]
+        self.browser_log.append(("select", name))
+        if kind != 5:
+            return
+        above = [n for n, k in self.browser[: self.browser_at] if k == -100]
+        if above[-1:] == ["Effects"]:  # an effect goes to the first free slot of the selected track
+            slots = self.tracks[self.cur_track]["slots"]
+            free = next((i for i in range(10) if i not in slots), None)
+            if free is not None:
+                slots[free] = name
+                self.loads.append(("m", self.cur_track, free))
+        elif above[-1:] == ["Generators"]:  # an instrument becomes a new channel
+            self.chans.append(self._chan(name, 2, name))
+            self.loads.append(("c", len(self.chans) - 1))
 
     def ui_previewBrowserMenuItem(self):
         self.browser_log.append(("preview", self.browser[self.browser_at][0]))

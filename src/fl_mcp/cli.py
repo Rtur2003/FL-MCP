@@ -53,7 +53,7 @@ def _selftest(args: argparse.Namespace) -> int:
     from fl_mcp import selftest
     from fl_mcp.bridge import Bridge
 
-    report = selftest.run(Bridge().call)
+    report = selftest.run(Bridge().call, args.deep)
     if args.json:
         print(json.dumps(report, indent=2))
     else:
@@ -204,6 +204,14 @@ def main(argv: list[str] | None = None) -> None:
     sub.add_parser("account", help="show plan, credits and prices")
     test = sub.add_parser("selftest", help="check every feature against the running FL Studio")
     test.add_argument("--json", action="store_true", help="print the report as JSON")
+    test.add_argument(
+        "--deep",
+        nargs="?",
+        const="Fruity Balance",
+        metavar="PLUGIN",
+        help="also load PLUGIN (default Fruity Balance) through FL's browser and undo it; "
+        "save your project first",
+    )
     desktop = sub.add_parser("desktop", help="let the model see and drive FL's screen (opt-in)")
     desktop.add_argument("action", choices=["on", "off", "test"])
     conf = sub.add_parser("config", help="print the text that registers this server with a client")

@@ -48,7 +48,7 @@ The scripting API is the main door. Because it is limited, there are more (the *
 | Missing in the API | Route used |
 |---|---|
 | Create channels, patterns, playlist clips | A written `.flp` built on a template (`flp.py`), including cloned **sampler channels** that point at real files; the user (or `fl_desk macro=open`) opens it |
-| Load a plugin or sample | FL's own browser driven from inside FL (`fl_ui`: focus, step to the item, select); the desktop tier as the fallback |
+| Load a plugin or sample | FL's own browser driven from inside FL (`uiload.py`: select the target track, focus the browser, go to the top, walk to the first item named like the query, select it, then read the plugin inventory before and after; the next same-named item is tried when nothing appeared); the desktop tier as the fallback |
 | Write notes to a pattern | Drums: the step sequencer. Melody and chords: the piano roll script reads `~/.fl-mcp/inbox.json`; `fl_desk macro=script` runs it with FL's "run last script" shortcut and checks `state.json` for the queued serial. Everything: a MIDI file |
 | Render or export audio | FL's command line (`FL64.exe /R /E<fmt> project.flp`, `render.py`), or File > Export through the desktop tier for the project that is open (`desk.export`) |
 | Measure the mix | `audio.py` on the rendered file (BS.1770 loudness, true peak, spectrum, stereo); mixer peak meters during playback for levels |

@@ -11,7 +11,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from fl_mcp import __version__, audio, desk, install, library, paths, render, units
+from fl_mcp import __version__, audio, desk, install, library, paths, render, uiload, units
 from fl_mcp.bridge import SCRIPT_VERSION
 
 OK, FAIL, SKIP = "ok", "fail", "skip"
@@ -53,6 +53,21 @@ class Run:
         return status != FAIL
 
     # -- the checks
+
+    def deep_load(self, name: str) -> str:
+        """Load a plugin through FL's browser, see it appear, undo it, see it gone."""
+        rows = self.ctx.get("mixer", {}).get("rows", [])
+        track = next((r[0] for r in rows if r[0] >= 1), 1)
+        before = len(uiload.inventory(self.call))
+        got = uiload.load(self.call, name, track)
+        where = got["loaded"][0]
+        self.call({"o": "tr", "a": "undo"})
+        if len(uiload.inventory(self.call)) > before:
+            raise RuntimeError(
+                f"{where['plugin']} was loaded (mixer {track}, slot {where['slot']}) but undo "
+                "did not remove it: delete it by hand"
+            )
+        return f"{where['plugin']} loaded on mixer {track} through the browser, then undone"
 
     def link(self) -> str:
         info = self.call({"o": "ping"})
@@ -220,7 +235,9 @@ class Run:
         return f"{s['backend']} backend; FL window '{s['fl']['title']}'"
 
 
-def run(call: Call) -> dict[str, Any]:
+def run(call: Call, deep: str | None = None) -> dict[str, Any]:
+    """All checks. deep names a plugin to load through the browser and undo again (it changes
+    the project for a moment, so it is opt-in)."""
     t = Run(call)
     if not t.check("link", t.link):
         for name in ("status", "features", "lists", "mixer write", "tempo write", "plugin params"):
@@ -236,6 +253,8 @@ def run(call: Call) -> dict[str, Any]:
         t.check("plugin presets", t.presets)
         t.check("windows", t.windows)
         t.check("browser", t.browser)
+        if deep:
+            t.check("browser load + undo", lambda: t.deep_load(deep))
     t.check("piano roll script", t.piano_roll)
     t.check("library", t.library_index)
     t.check("audio analysis", t.audio_tools)

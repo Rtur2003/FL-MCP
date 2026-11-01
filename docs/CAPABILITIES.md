@@ -24,7 +24,7 @@ Confidence: **verified** = tested against real FL files or a reference implement
 | Whole song as notes | File | verified | Standard MIDI File, a track per part, section markers |
 | Whole song as a project, with samples | File | verified (format), unseen (FL accepting cloned sampler channels) | `.flp` on a template; checked against FL 20.8.4 and an independent parser |
 | Open or save a project | Desktop | unseen | `fl_desk macro=open` / `save` |
-| Create a channel, load a plugin or sample | UI, then Desktop | unseen | `fl_ui` browser route; `fl_desk` fallback with screenshots; or generated `.flp` |
+| Create a channel, load a plugin or sample | UI, then Desktop | tested (fake browser) / unseen | `fl_ui action=load` checks by inventory diff that something appeared; `fl-mcp selftest --deep` tests it on your FL; `fl_desk` fallback; or generated `.flp` |
 | Place playlist clips | File | verified | In a written `.flp` |
 | Window state, key presses, browser walking | UI | tested / unseen | Needs `ui.navigateBrowser` and friends (`probe` says) |
 | Render or export audio | Command line, Desktop | unseen | `FL64.exe /R /E<fmt>` on a saved project; `fl_desk macro=export` for the open project |

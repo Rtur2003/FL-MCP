@@ -28,7 +28,7 @@ def test_everything_the_fake_offers_passes_and_the_rest_is_skipped_with_a_reason
     assert not failed, failed
     for name in ("link", "status", "features", "lists", "mixer write", "tempo write", "windows"):
         assert checks[name]["status"] == "ok", (name, checks[name])
-    assert "script v3" in checks["link"]["detail"]
+    assert "script v4" in checks["link"]["detail"]
     assert report["summary"]["fail"] == 0 and report["summary"]["ok"] >= 7
     assert (
         checks["desktop"]["status"] == "skip" and "fl-mcp desktop on" in checks["desktop"]["detail"]
