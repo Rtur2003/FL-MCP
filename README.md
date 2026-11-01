@@ -1,29 +1,29 @@
 # FL-MCP
 
-MCP server for **FL Studio**. Any MCP client that can start a local server (Claude, Codex CLI, Gemini CLI, Cursor, VS Code, local models) can inspect and control the FL Studio running on your computer, and can produce a whole song fast: pick a genre, get drums in the Channel Rack, a MIDI file with every part, or a finished `.flp` project.
+MCP server for **FL Studio**. Any MCP client that can start a local server (Claude, Codex CLI, Gemini CLI, Cursor, VS Code, local models) can inspect and control the FL Studio running on your computer: drive every plugin by name and in real units, produce a whole song fast, mix and master it by measurement, and do the things FL's scripting API cannot.
 
 - **Local.** The server runs on your machine and talks to FL Studio through a virtual MIDI port. No cloud is involved in controlling FL.
-- **11 tools, about 2.6k tokens** for the whole list. Flat schemas (no `$ref`/`anyOf`/`title`) and plain JSON results, so small and strict models can use them.
+- **14 tools, about 4k tokens** for the whole list (a test holds the line). Flat schemas (no `$ref`/`anyOf`/`title`) and plain JSON results, so small and strict models can use them. An opt-in 15th tool, `fl_desk`, adds screen and keyboard control.
+- **Beyond the API.** Where FL's scripting API stops (load a plugin, write notes, export audio, create channels), a ladder of other routes takes over: FL's own UI driven from inside FL, generated `.flp` projects, FL's command-line render, and the desktop. See `docs/CAPABILITIES.md`.
+- **Guides for every client.** What a model needs to know about producing, mixing and plugins ships as MCP resources and prompts, and as a Claude Code plugin with skills.
 - **Safe link to FL:** a small controller script inside FL answers framed MIDI CC messages. No `exec`/`eval`, no network, no SysEx. Only allowlisted FL API modules are reachable.
 - Windows and macOS, FL Studio 2024+ (scripting API 33+). Python 3.10-3.12 (`python-rtmidi` has no wheels for 3.13+; `uv` picks a matching Python for you).
 
-> **Status.** The controller script runs against a fake FL built on the official API stubs, and every FL call is checked against those stubs. The `.flp` reader and writer are verified against real FL Studio 20.8.4 project files and an independent parser. It has **not** been run against a live FL Studio yet; please open an issue if something behaves differently.
+> **Status.** The controller script runs against a fake FL built on the official API stubs, and every FL call is checked against those stubs. The `.flp` reader and writer are verified against real FL Studio 20.8.4 project files and an independent parser. The loudness meter is checked against the ITU-R BS.1770 reference filter and test tones. It has **not** been run against a live FL Studio yet. After setup run `fl-mcp selftest`: it checks every layer against your FL, puts back what it touched, and saves a report you can send with an issue.
 
 ## Setup
 
 **1. Install** (needs [uv](https://docs.astral.sh/uv/)):
 
 ```bash
-uv tool install git+https://github.com/Rtur2003/FL-MCP
+uv tool install "fl-mcp[audio] @ git+https://github.com/Rtur2003/FL-MCP"
 ```
 
 ```bash
-fl-mcp install
+fl-mcp setup
 ```
 
-`fl-mcp install` copies the controller script and the piano roll script into `Documents/Image-Line/FL Studio/Settings` (use `--fl-dir` if your user data folder is elsewhere).
-
-Claude Desktop can instead install the `.mcpb` extension (`python packaging/build_mcpb.py` builds it); you still do steps 2 and 3.
+`fl-mcp setup` copies the controller script and the piano roll script into `Documents/Image-Line/FL Studio/Settings`, checks the MIDI port, and prints the exact text that registers the server with your client. (`fl-mcp install` does only the copying; `--fl-dir` points at a user data folder elsewhere.) The `audio` extra adds numpy, scipy and soundfile for loudness analysis; leave it out for a smaller install.
 
 **2. Loopback MIDI port**
 
@@ -36,40 +36,46 @@ Claude Desktop can instead install the `.mcpb` extension (`python packaging/buil
 - Output: select `FL MCP`, enable it, port number the **same `N`**.
 - Restart FL Studio (or reselect the controller type to reload the script).
 
-Check everything with `fl-mcp doctor`.
+**4. Check:** `fl-mcp doctor` (each layer in one line), then `fl-mcp selftest` (every feature, with a report; `--deep` also loads a plugin through FL's browser and undoes it).
 
-**4. Add to your client** (stdio):
+**5. Add to your client:** `fl-mcp config <client>` prints the exact text and file for `claude-desktop`, `claude-code`, `cursor`, `vscode`, `windsurf`, `gemini` and `codex` (`--source git` to run from this repository, `--source local` to run from the Python that is installed). For example:
 
-```json
-{ "mcpServers": { "fl-studio": { "command": "fl-mcp" } } }
+```bash
+claude mcp add fl-studio -- uvx --from "fl-mcp[audio]" fl-mcp
 ```
 
-| Client | How |
-|---|---|
-| Claude Code | `claude mcp add fl-studio -- fl-mcp` |
-| Claude Desktop, Cursor, Gemini CLI | the JSON above (`claude_desktop_config.json`, `~/.cursor/mcp.json`, `~/.gemini/settings.json`) |
-| VS Code | `.vscode/mcp.json`: `{ "servers": { "fl-studio": { "type": "stdio", "command": "fl-mcp" } } }` |
-| Codex CLI | `~/.codex/config.toml`: `[mcp_servers.fl-studio]` with `command = "fl-mcp"` |
+Claude Desktop can instead install the `.mcpb` extension (`python packaging/build_mcpb.py` builds it); you still do steps 2 and 3.
 
-Without installing: `"command": "uvx", "args": ["--from", "git+https://github.com/Rtur2003/FL-MCP", "fl-mcp"]`.
+### Claude Code plugin
+
+```
+/plugin marketplace add Rtur2003/FL-MCP
+/plugin install fl-studio@fl-mcp
+```
+
+The plugin starts the server and adds five skills (**setup**, **produce**, **mix**, **plugins**, **automation**) and a `mix-engineer` subagent. See `plugin/README.md`.
 
 ## Tools
 
 | Tool | What it does |
 |---|---|
-| `fl_produce` | **Fast production.** Builds a genre-aware song plan and delivers it (see below) |
-| `fl_mix` | Measures the mix with FL's own peak meters while the project plays; `balance` moves faders to role targets (kick -8 dB, bass -9 dB, hats -20 dB...) |
-| `fl_status` | FL version, project title, tempo, play/record state, position, current pattern/channel/track |
-| `fl_list` | channels, mixer tracks, patterns or playlist tracks (paged, unused ones skipped) |
+| `fl_produce` | **Fast production.** Builds a genre-aware song plan and delivers it: drums into the Channel Rack, a MIDI file, or a finished `.flp` with samples (see below) |
+| `fl_mix` | `doctor` finds problems worst first; `meter` and `balance` use FL's peak meters while the project plays (kick -8 dB, bass -9 dB, hats -20 dB...); `chain` checks each track's plugins against its role and sets compressor, limiter, reverb and delay values by meaning |
+| `fl_audio` | **Hear the mix.** LUFS (integrated, short-term, momentary), loudness range, true peak, crest factor, clipping, DC, stereo width and mono loss, a 7-band spectrum and plain advice; renders the project first (the open one through `fl_desk`, or a saved `.flp` through FL's command line with FL closed), compares with a reference; `master` moves the master limiter's gain until the loudness hits the genre's target, measuring after each step |
+| `fl_param` | **Any plugin**, stock or third party: list parameters by name, set one in real units (`real="-18 dB"`), set many (`settings="Threshold=-18 dB, Ratio=4:1"`), read and load presets |
+| `fl_list` | channels, mixer tracks, patterns, playlist tracks or every plugin in the project |
+| `fl_library` | indexes your sample packs and plugins; ranks samples for a role by name and by measured sound; picks a coherent drum kit for a genre |
+| `fl_ui` | drives FL's own interface from inside FL, no mouse: show and focus windows, press keys, walk the browser; `load` finds a plugin or sample by name, loads it onto a mixer track or as a new channel, and checks that it appeared |
+| `fl_status` | FL version, project, tempo, state; `probe` lists the API features this FL build has, `log` the script's last errors |
 | `fl_transport` | play, pause, stop, record, loop mode, metronome, tempo, position (bar), save, undo |
 | `fl_set` | name, color, volume, pan, mute, solo, routing (`fx`, `send`/`level`), select on a channel, mixer track, pattern or playlist track |
 | `fl_steps` | step sequencer of a channel: set/clear steps, velocity, pitch; reads back |
 | `fl_notes` | queue piano roll notes and read the piano roll back |
-| `fl_param` | list and set plugin parameters of a channel instrument or a mixer effect slot |
 | `fl_call` | raw FL scripting API, batched (`modules`: transport mixer channels patterns playlist plugins ui general arrangement) |
 | `fl_api` | API reference for `fl_call`: signatures and `midi` constants; works without FL |
+| `fl_desk` | *opt-in* (`fl-mcp desktop on`). See and drive FL's screen: screenshots, keys, clicks, and macros that run the piano roll script, export audio, open and save projects |
 
-Try: *"Make a 128 BPM techno track in F# minor, then balance the mix."*
+Try: *"Make a 128 BPM techno track in F# minor, then mix and master it."*
 
 ## Fast production
 
@@ -82,17 +88,29 @@ Try: *"Make a 128 BPM techno track in F# minor, then balance the mix."*
 | `apply`, `midi` | deliver or export a stored plan again |
 | `queue` | send one melodic part to the piano roll (see below) |
 | `inspect` | read a template `.flp`: channels, roles it can fill, patterns, playlist |
-| `flp` | write a full project: your template plus every pattern with all notes and the playlist |
+| `flp` | write a full project: your template plus every pattern with all notes and the playlist; `sounds=auto` also adds sample channels from one pack that `fl_library` chose |
 
-**Templates.** FL's scripting API cannot create channels, plugins or playlist clips, so a finished project is built on a template `.flp` you made: the instruments you want, one named pattern with at least one note, and one clip in the playlist. The template is never modified; the result is a new file next to the plans. Channel names are matched to roles (`Kick`, `808 Bass`, `Lead Synth`...); `channels="kick=0,bass=3"` overrides the match.
+**Templates.** A finished project is built on a template `.flp` you made (any saved project with one named pattern holding a note and one playlist clip). It is never modified; the result is a new file. Channel names are matched to roles (`Kick`, `808 Bass`, `Lead Synth`...); `channels="kick=0,bass=3"` overrides the match. Open the result with `fl_desk macro=open` (desktop control on) or by hand.
 
 ### Piano roll notes
 
-FL's API cannot write notes. `fl_notes` and `fl_produce action=queue` write them to `~/.fl-mcp/inbox.json`, select the channel and open the piano roll. You then run **Tools > Scripting > FL MCP** in the piano roll and press Accept (repeat runs do not duplicate notes). That run also exports the piano roll, so `fl_notes(read=true)` can confirm and read it back. Notes are `[midi_note, start_beat, length_beats, velocity]`.
+FL's API cannot write notes. `fl_notes` and `fl_produce action=queue` write them to `~/.fl-mcp/inbox.json`, select the channel and open the piano roll. Apply them with `fl_desk macro=script` (it presses FL's "run last script" shortcut and confirms the notes arrived) or run **Tools > Scripting > FL MCP** yourself once and press Accept. That run also exports the piano roll, so `fl_notes(read=true)` confirms and reads it back. Notes are `[midi_note, start_beat, length_beats, velocity]`.
+
+## Desktop control (opt-in)
+
+```bash
+fl-mcp desktop on      # then restart your AI client; `off` undoes it, `test` takes a screenshot
+```
+
+`fl_desk` gives the model eyes and hands for what no API covers: `shot` returns a picture of FL's windows (dialogs included), `click`/`double`/`right`/`drag`/`scroll` take positions off the last picture, `type` and `key` enter text and combos (`mod+s`; `mod` is Ctrl on Windows, Cmd on a Mac). Safety: input goes to FL windows only (FL is brought forward first, and nothing is sent if that fails), keys that close windows or leave FL are blocked, and moving the mouse to the top-left corner stops everything. Windows uses user32/GDI (no extra packages); macOS uses System Events and `screencapture` (grant Accessibility and Screen Recording; `cliclick` adds double-click, right-click and drag).
+
+## Guides, prompts and resources
+
+`fl://guide/setup`, `produce`, `mix`, `plugins` and `automation` are MCP resources (markdown, with tables filled from the real genre and plugin data). The prompts `make_beat`, `mix_check`, `master`, `fix_connection` and `load_plugin` carry the task plus the relevant guide, so clients that surface prompts as slash commands get one-shot workflows. The Claude Code plugin's skills are generated from the same files (`python scripts/build_plugin.py`; a test fails if they drift).
 
 ## Limits
 
-FL's scripting API cannot create channels or plugins, load samples, place playlist clips, or render audio; this server does not fake those. It works around them where a documented route exists (step sequencer, piano roll script, MIDI file, template project) and says so when it cannot. `docs/CAPABILITIES.md` lists what is possible and what is not.
+FL's scripting API cannot create channels or plugins, load samples, place playlist clips, or render audio; this server does not fake those. The `.flp` writer, FL's own UI, the command-line render and the desktop tier cover them; each reports plainly when it cannot. `docs/CAPABILITIES.md` lists what is possible, by which route, and how sure we are. `docs/RESEARCH.md` records what other FL, Ableton and DaVinci Resolve MCPs do and how paid MCP access is built.
 
 ## Licence and credits
 
@@ -104,14 +122,19 @@ This repository builds an **unmetered** server: nothing needs a licence. A comme
 |---|---|---|
 | `FL_MCP_PORT` | `FL MCP` | MIDI port name (substring match; `IAC` is tried on macOS) |
 | `FL_MCP_TIMEOUT` | `2.5` | seconds to wait per attempt (two attempts) |
-| `FL_MCP_DIR` | `~/.fl-mcp` | folder for plans, output and the piano roll exchange (set it before `fl-mcp install`) |
+| `FL_MCP_DIR` | `~/.fl-mcp` | folder for plans, output, the library index and the piano roll exchange (set it before `fl-mcp install`) |
+| `FL_MCP_SAMPLES` | unset | extra sample folders for `fl_library` (path-separated) |
+| `FL_MCP_FL_DIR` | auto | FL Studio install folder(s) (for the command-line render) |
+| `FL_MCP_PROJECTS` | unset | extra folders where finished projects and exports are looked for |
+| `FL_MCP_DESKTOP` | unset | `1` turns `fl_desk` on, `0` off (overrides `fl-mcp desktop`) |
+| `FL_MCP_FL_PROCESS` | unset | extra process name(s) that count as FL Studio for `fl_desk` |
 | `FL_MCP_DEBUG` | unset | log to stderr |
 | `FL_MCP_SERVICE` | unset | licence service address (https); unset means unmetered |
-| `FL_MCP_LICENSE` | unset | licence key to sign in with automatically (set by the desktop extension) |
+| `FL_MCP_LICENSE` | unset | licence key to sign in with automatically (set by the desktop extension and the plugin) |
 
 ## Troubleshooting
 
-Run `fl-mcp doctor`. Typical causes of *No answer from FL Studio*: the port is not enabled for both input and output with the same port number, controller type is not `FL MCP`, the script was installed after FL started, or a modal dialog is open in FL. `FL MCP script is outdated`: run `fl-mcp install` again and restart FL. The FL script log is in `View > Script output`.
+Run `fl-mcp doctor`, then `fl-mcp selftest`. Typical causes of *No answer from FL Studio*: the port is not enabled for both input and output with the same port number, controller type is not `FL MCP`, the script was installed after FL started, or a modal dialog is open in FL. `FL MCP script is outdated`: run `fl-mcp install` again and restart FL. The FL script log is in `View > Script output`; `fl_status log=true` shows the script's own error list. The `setup` guide has a symptom-to-fix table.
 
 ## How it works
 
@@ -122,7 +145,9 @@ The server sends each request as JSON framed in 7-bit MIDI CC messages (channel 
 ```bash
 uv venv --python 3.12 && uv pip install -e ".[dev]"
 .venv/bin/pytest && .venv/bin/ruff check . && .venv/bin/ruff format --check .
-.venv/bin/python scripts/gen_api_index.py   # refresh src/fl_mcp/api.json from the API stubs
+.venv/bin/python scripts/gen_api_index.py    # refresh src/fl_mcp/api.json from the API stubs
+.venv/bin/python scripts/build_plugin.py     # regenerate plugin/ after editing a guide
+claude plugin validate plugin --strict       # when the claude CLI is installed
 ```
 
 MIT licensed. The API index holds only function signatures and constants generated from [fl-studio-api-stubs](https://github.com/MaddyGuthridge/FL-Studio-API-Stubs). See `NOTICE` for how the `.flp` format knowledge was gathered.

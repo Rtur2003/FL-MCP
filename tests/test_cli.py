@@ -8,6 +8,7 @@ from mcp import Client, StdioServerParameters
 from fl_mcp import cli, paths
 from fl_mcp.bridge import Bridge, FLError
 from fl_mcp.install import DEVICE, PYSCRIPT, install, targets
+from tests.names import NAMES
 
 pytestmark = pytest.mark.anyio
 
@@ -111,7 +112,7 @@ async def test_real_stdio_server_speaks_mcp():
     env = {**os.environ, "FL_MCP_TIMEOUT": "0.2", "FL_MCP_PORT": "no such port"}
     params = StdioServerParameters(command=sys.executable, args=["-m", "fl_mcp"], env=env)
     async with Client(params) as client:
-        assert len((await client.list_tools()).tools) == 11
+        assert len((await client.list_tools()).tools) == len(NAMES)
         api = await client.call_tool("fl_api", {"module": "transport", "query": "isplaying"})
         assert api.content[0].text == "isPlaying()->bool"
         status = await client.call_tool("fl_status", {})
@@ -120,3 +121,136 @@ async def test_real_stdio_server_speaks_mcp():
         and "MIDI" in status.content[0].text
         or "FL Studio" in status.content[0].text
     )
+
+
+# ---- selftest, desktop, config, setup
+
+
+def test_config_prints_ready_text_for_every_client(capsys):
+    from fl_mcp import clients
+
+    for name in clients.CLIENTS:
+        where, text = clients.snippet(name, "pypi")
+        if name == "claude-code":
+            assert text.startswith("claude mcp add fl-studio -- ") and "fl-mcp" in text
+        elif name == "codex":
+            assert text.startswith("[mcp_servers.fl-studio]") and 'args = ["--from"' in text
+            if sys.version_info >= (3, 11):
+                import tomllib
+
+                assert tomllib.loads(text)["mcp_servers"]["fl-studio"]["args"][-1] == "fl-mcp"
+        else:
+            doc = json.loads(text)
+            server = (doc.get("mcpServers") or doc["servers"])["fl-studio"]
+            assert server["args"] == ["--from", "fl-mcp[audio]", "fl-mcp"]
+            assert ("type" in server) is (name == "vscode")
+    assert json.loads(clients.snippet("cursor", "pypi", audio=False)[1])["mcpServers"]["fl-studio"][
+        "args"
+    ] == ["fl-mcp"]
+    git = json.loads(clients.snippet("cursor", "git")[1])["mcpServers"]["fl-studio"]["args"]
+    assert git[1].endswith("@ git+https://github.com/Rtur2003/FL-MCP")
+    local = json.loads(clients.snippet("cursor", "local")[1])["mcpServers"]["fl-studio"]
+    assert local["command"] == sys.executable and local["args"] == ["-m", "fl_mcp"]
+    with pytest.raises(ValueError, match="source must"):
+        clients.snippet("cursor", "ftp")
+    with pytest.raises(ValueError, match="client must"):
+        clients.snippet("emacs")
+    with pytest.raises(SystemExit) as info:
+        cli.main(["config", "codex", "--source", "git"])
+    assert info.value.code == 0 and "[mcp_servers.fl-studio]" in capsys.readouterr().out
+
+
+def test_desktop_control_is_switched_with_one_command(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("FL_MCP_DIR", str(tmp_path))
+    monkeypatch.delenv("FL_MCP_DESKTOP", raising=False)
+    with pytest.raises(SystemExit) as info:
+        cli.main(["desktop", "on"])
+    assert info.value.code == 0 and (tmp_path / "desktop.on").is_file()
+    assert "top-left corner" in capsys.readouterr().out
+    with pytest.raises(SystemExit):
+        cli.main(["desktop", "off"])
+    assert not (tmp_path / "desktop.on").exists()
+
+
+def test_desktop_test_explains_an_unsupported_system(monkeypatch, tmp_path, capsys):
+    from fl_mcp import desk
+
+    monkeypatch.setenv("FL_MCP_DIR", str(tmp_path))
+    monkeypatch.setattr(desk.sys, "platform", "linux")
+    with pytest.raises(SystemExit) as info:
+        cli.main(["desktop", "test"])
+    assert info.value.code == 1 and "Windows and macOS" in capsys.readouterr().err
+
+
+def test_desktop_test_takes_a_screenshot_when_fl_is_there(monkeypatch, tmp_path, capsys):
+    from fl_mcp import desk
+    from tests.fakedesk import FL, FakeDesk
+
+    monkeypatch.setenv("FL_MCP_DIR", str(tmp_path))
+    monkeypatch.setattr(desk, "make_backend", lambda: FakeDesk(front=FL))
+    with pytest.raises(SystemExit) as info:
+        cli.main(["desktop", "test"])
+    out = capsys.readouterr().out
+    assert info.value.code == 0 and "saved to" in out
+    assert (tmp_path / "desk-test.png").read_bytes().startswith(b"\x89PNG")
+
+
+def test_selftest_prints_a_report_and_saves_it(monkeypatch, fl, tmp_path, capsys):
+    import fl_mcp.bridge
+
+    monkeypatch.setenv("FL_MCP_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("FL_MCP_FL_DIR", str(tmp_path / "nowhere"))
+    monkeypatch.setattr(fl_mcp.bridge, "Bridge", lambda: fl.bridge)
+    with pytest.raises(SystemExit) as info:
+        cli.main(["selftest"])
+    out = capsys.readouterr().out
+    assert info.value.code == 0 and "[ ok ] link" in out and "report saved to" in out
+    assert (tmp_path / "data" / "selftest.json").is_file()
+    with pytest.raises(SystemExit):
+        cli.main(["selftest", "--json"])
+    assert json.loads(capsys.readouterr().out)["summary"]["fail"] == 0
+
+
+def test_selftest_exit_code_follows_failures(monkeypatch, tmp_path, capsys):
+    import fl_mcp.bridge
+
+    class Dead:
+        def call(self, req):
+            raise FLError("No answer from FL Studio")
+
+    monkeypatch.setenv("FL_MCP_DIR", str(tmp_path))
+    monkeypatch.setattr(fl_mcp.bridge, "Bridge", Dead)
+    with pytest.raises(SystemExit) as info:
+        cli.main(["selftest"])
+    assert info.value.code == 1 and "[FAIL] link" in capsys.readouterr().out
+
+
+def test_setup_installs_checks_and_shows_what_is_left(monkeypatch, fl_home, tmp_path, capsys):
+    from tests.test_bridge import FakeMido
+
+    monkeypatch.setitem(sys.modules, "mido", FakeMido([], []))
+    monkeypatch.setenv("FL_MCP_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(
+        Bridge, "call", lambda self, req: (_ for _ in ()).throw(FLError("No answer"))
+    )
+    with pytest.raises(SystemExit) as info:
+        cli.main(["setup", "--fl-dir", str(fl_home), "--desktop"])
+    out = capsys.readouterr().out
+    assert info.value.code == 1
+    assert "[ok] scripts" in out and "[!!] midi port" in out and "[ok] desktop" in out
+    assert "Options > MIDI Settings" in out and "mcpServers" in out and "No answer" in out
+    assert (tmp_path / "data" / "desktop.on").is_file()
+
+
+def test_setup_without_fl_data_says_so(monkeypatch, tmp_path, capsys):
+    from tests.test_bridge import FakeMido
+
+    monkeypatch.setitem(sys.modules, "mido", FakeMido(["FL MCP 1"], ["FL MCP 1"]))
+    monkeypatch.setenv("FL_MCP_DIR", str(tmp_path))
+    monkeypatch.setattr(Bridge, "call", lambda self, req: {"ver": 3})
+    with pytest.raises(SystemExit) as info:
+        cli.main(["setup", "--fl-dir", str(tmp_path / "nothing")])
+    out = capsys.readouterr().out
+    assert info.value.code == 0 and "[!!] scripts" in out and "[ok] midi port" in out
+    assert "FL Studio answers" in out

@@ -1,0 +1,594 @@
+{
+  "_note": "Starting points, not laws. Values are what experienced producers reach for first; the ear decides.",
+  "kinds": [
+    [
+      "limiter",
+      [
+        "limiter",
+        "soft clipper",
+        "clipper",
+        "maximizer",
+        "pro-l",
+        "ozone"
+      ]
+    ],
+    [
+      "comp",
+      [
+        "compressor",
+        "maximus",
+        "squeeze",
+        "emphasis",
+        "pro-c",
+        "pro-mb",
+        " ott",
+        "neutron",
+        "kickstart",
+        "volumeshaper",
+        "transient",
+        "gate"
+      ]
+    ],
+    [
+      "eq",
+      [
+        "parametric eq",
+        "equalizer",
+        "equaliser",
+        " eq",
+        "eq ",
+        "pro-q",
+        "soothe",
+        "frequency splitter"
+      ]
+    ],
+    [
+      "reverb",
+      [
+        "reeverb",
+        "reverb",
+        "luxeverb",
+        "convolver",
+        "valhalla",
+        "pro-r",
+        "verb"
+      ]
+    ],
+    [
+      "delay",
+      [
+        "delay",
+        "echo"
+      ]
+    ],
+    [
+      "drive",
+      [
+        "fast dist",
+        "overdrive",
+        "waveshaper",
+        "distructor",
+        "distortion",
+        "saturat",
+        "blood",
+        "decapitator",
+        "soundgoodizer"
+      ]
+    ],
+    [
+      "mod",
+      [
+        "chorus",
+        "flanger",
+        "phaser",
+        "hyper chorus",
+        "vibrato",
+        "tremolo"
+      ]
+    ],
+    [
+      "stereo",
+      [
+        "stereo enhancer",
+        "stereo shaper",
+        "balance",
+        "imager",
+        "widener"
+      ]
+    ],
+    [
+      "filter",
+      [
+        "filter",
+        "love philter",
+        "wah"
+      ]
+    ],
+    [
+      "pitch",
+      [
+        "pitcher",
+        "newtone",
+        "newtime",
+        "vocoder",
+        "vocodex",
+        "autotune",
+        "melodyne"
+      ]
+    ],
+    [
+      "meter",
+      [
+        "wave candy",
+        "spectroman",
+        "span",
+        "meter",
+        "analy",
+        "tuner"
+      ]
+    ]
+  ],
+  "order": {
+    "gate": 0,
+    "eq": 1,
+    "comp": 2,
+    "drive": 3,
+    "filter": 3,
+    "pitch": 3,
+    "mod": 4,
+    "stereo": 5,
+    "delay": 6,
+    "reverb": 7,
+    "limiter": 9,
+    "meter": 10
+  },
+  "stock": {
+    "eq": "Fruity Parametric EQ 2",
+    "comp": "Fruity Limiter (its compressor section) or Maximus",
+    "limiter": "Fruity Limiter",
+    "reverb": "Fruity Reeverb 2 or LuxeVerb",
+    "delay": "Fruity Delay 3",
+    "drive": "Fruity Fast Dist or Fruity WaveShaper",
+    "mod": "Fruity Chorus",
+    "stereo": "Fruity Stereo Shaper",
+    "filter": "Fruity Filter",
+    "meter": "Wave Candy"
+  },
+  "intents": {
+    "threshold": {
+      "words": [
+        "threshold",
+        "thresh",
+        "thr"
+      ],
+      "unit": "db"
+    },
+    "ratio": {
+      "words": [
+        "ratio"
+      ],
+      "unit": "ratio"
+    },
+    "attack": {
+      "words": [
+        "attack",
+        "att"
+      ],
+      "unit": "ms"
+    },
+    "release": {
+      "words": [
+        "release",
+        "rel"
+      ],
+      "unit": "ms"
+    },
+    "knee": {
+      "words": [
+        "knee"
+      ],
+      "unit": "db"
+    },
+    "makeup": {
+      "words": [
+        "makeup",
+        "make up",
+        "gain",
+        "output",
+        "level"
+      ],
+      "unit": "db"
+    },
+    "ceiling": {
+      "words": [
+        "ceiling",
+        "ceil",
+        "out ceiling"
+      ],
+      "unit": "db"
+    },
+    "wet": {
+      "words": [
+        "wet",
+        "mix",
+        "amount",
+        "drywet"
+      ],
+      "unit": "%"
+    },
+    "decay": {
+      "words": [
+        "decay",
+        "reverb time",
+        "rt60",
+        "room size",
+        "size",
+        "length"
+      ],
+      "unit": ""
+    },
+    "predelay": {
+      "words": [
+        "predelay",
+        "pre delay",
+        "pre-delay"
+      ],
+      "unit": "ms"
+    },
+    "lowcut": {
+      "words": [
+        "low cut",
+        "lowcut",
+        "high pass",
+        "highpass",
+        "hpf",
+        "hp freq"
+      ],
+      "unit": "hz"
+    },
+    "highcut": {
+      "words": [
+        "high cut",
+        "highcut",
+        "low pass",
+        "lowpass",
+        "lpf",
+        "lp freq"
+      ],
+      "unit": "hz"
+    },
+    "feedback": {
+      "words": [
+        "feedback",
+        "fdbk",
+        "regen"
+      ],
+      "unit": "%"
+    },
+    "time": {
+      "words": [
+        "time",
+        "delay"
+      ],
+      "unit": "ms"
+    },
+    "width": {
+      "words": [
+        "width",
+        "stereo",
+        "separation"
+      ],
+      "unit": "%"
+    },
+    "drive": {
+      "words": [
+        "drive",
+        "distortion",
+        "amount",
+        "overdrive"
+      ],
+      "unit": ""
+    },
+    "limitgain": {
+      "words": [
+        "input gain",
+        "in gain",
+        "gain",
+        "input",
+        "drive"
+      ],
+      "unit": "db"
+    },
+    "limitthreshold": {
+      "words": [
+        "threshold",
+        "thresh",
+        "thr"
+      ],
+      "unit": "db"
+    }
+  },
+  "recipes": {
+    "kick": {
+      "want": [
+        "comp"
+      ],
+      "set": {
+        "comp": {
+          "threshold": "-12 dB",
+          "ratio": "3:1",
+          "attack": "15 ms",
+          "release": "80 ms"
+        }
+      },
+      "why": "Gentle control so the kick hits the same every bar; keep the transient (attack 10-30 ms)."
+    },
+    "snare": {
+      "want": [
+        "comp"
+      ],
+      "set": {
+        "comp": {
+          "threshold": "-14 dB",
+          "ratio": "4:1",
+          "attack": "8 ms",
+          "release": "100 ms"
+        }
+      },
+      "why": "Fast enough to catch the body, slow enough to let the crack through."
+    },
+    "clap": {
+      "want": [
+        "comp"
+      ],
+      "set": {
+        "comp": {
+          "threshold": "-14 dB",
+          "ratio": "3:1",
+          "attack": "10 ms",
+          "release": "90 ms"
+        }
+      },
+      "why": "Light control; most of a clap's character is its reverb tail on a send."
+    },
+    "hat": {
+      "want": [],
+      "set": {},
+      "why": "Usually no dynamics: high-pass and level are enough."
+    },
+    "ohat": {
+      "want": [],
+      "set": {},
+      "why": "Same as the closed hat; a little reverb on a send."
+    },
+    "perc": {
+      "want": [],
+      "set": {},
+      "why": "Pan and level first; add a send for space."
+    },
+    "bass": {
+      "want": [
+        "comp"
+      ],
+      "set": {
+        "comp": {
+          "threshold": "-18 dB",
+          "ratio": "4:1",
+          "attack": "20 ms",
+          "release": "150 ms"
+        }
+      },
+      "why": "Even out the low end so it sits steady under the kick; drive adds harmonics on small speakers."
+    },
+    "chords": {
+      "want": [
+        "comp"
+      ],
+      "set": {
+        "comp": {
+          "threshold": "-20 dB",
+          "ratio": "2:1",
+          "attack": "30 ms",
+          "release": "200 ms"
+        }
+      },
+      "why": "Light glue; a send reverb gives width without washing the mix."
+    },
+    "pad": {
+      "want": [
+        "reverb"
+      ],
+      "set": {
+        "reverb": {
+          "wet": "30%",
+          "predelay": "30 ms"
+        }
+      },
+      "why": "Pads live on space; keep the low end clean with a low cut."
+    },
+    "lead": {
+      "want": [
+        "comp",
+        "delay"
+      ],
+      "set": {
+        "comp": {
+          "threshold": "-18 dB",
+          "ratio": "3:1",
+          "attack": "10 ms",
+          "release": "120 ms"
+        },
+        "delay": {
+          "feedback": "35%",
+          "wet": "20%"
+        }
+      },
+      "why": "Keep it in front with steady level; a delay (ideally on a send) adds depth."
+    },
+    "arp": {
+      "want": [
+        "delay"
+      ],
+      "set": {
+        "delay": {
+          "feedback": "30%",
+          "wet": "25%"
+        }
+      },
+      "why": "Rhythmic delay turns a simple arp into movement."
+    },
+    "fx": {
+      "want": [],
+      "set": {},
+      "why": "Risers and impacts need level and reverb, not dynamics."
+    },
+    "drums": {
+      "want": [
+        "comp"
+      ],
+      "set": {
+        "comp": {
+          "threshold": "-16 dB",
+          "ratio": "3:1",
+          "attack": "30 ms",
+          "release": "150 ms"
+        }
+      },
+      "why": "Bus compression glues the kit; a slow attack keeps the transients."
+    },
+    "master": {
+      "want": [
+        "limiter"
+      ],
+      "set": {
+        "limiter": {
+          "ceiling": "-1.0 dB"
+        }
+      },
+      "why": "A ceiling at -1 dB leaves room for lossy encoding; do not chase loudness before the mix is balanced."
+    }
+  },
+  "instruments": {
+    "3x osc": {
+      "role": [
+        "bass",
+        "lead",
+        "pad"
+      ],
+      "note": "Three oscillators: the quickest way to a clean sub or simple saw."
+    },
+    "fl keys": {
+      "role": [
+        "chords"
+      ],
+      "note": "Piano and electric piano sampler."
+    },
+    "fpc": {
+      "role": [
+        "drums"
+      ],
+      "note": "Pad-based drum sampler; pad names come from the kit."
+    },
+    "fruity kick": {
+      "role": [
+        "kick"
+      ],
+      "note": "Kick synth: tune the pitch and decay."
+    },
+    "drumsynth live": {
+      "role": [
+        "kick",
+        "snare",
+        "hat",
+        "perc"
+      ],
+      "note": "Synthesised drums."
+    },
+    "sytrus": {
+      "role": [
+        "lead",
+        "bass",
+        "pad",
+        "chords"
+      ],
+      "note": "FM/subtractive hybrid with many presets."
+    },
+    "harmor": {
+      "role": [
+        "lead",
+        "pad",
+        "bass"
+      ],
+      "note": "Additive synth; strong presets for leads and pads."
+    },
+    "sakura": {
+      "role": [
+        "lead",
+        "pluck"
+      ],
+      "note": "Physical model of plucked strings."
+    },
+    "toxic biohazard": {
+      "role": [
+        "lead",
+        "bass"
+      ],
+      "note": "Aggressive modulation synth."
+    },
+    "transistor bass": {
+      "role": [
+        "bass"
+      ],
+      "note": "Acid bass line machine."
+    },
+    "wasp": {
+      "role": [
+        "lead",
+        "bass"
+      ],
+      "note": "Gritty monosynth."
+    },
+    "flex": {
+      "role": [
+        "lead",
+        "pad",
+        "chords",
+        "bass"
+      ],
+      "note": "Preset-based synth with a large library."
+    },
+    "kepler": {
+      "role": [
+        "pad",
+        "lead"
+      ],
+      "note": "Vintage-flavoured polysynth."
+    },
+    "plucked": {
+      "role": [
+        "lead",
+        "arp"
+      ],
+      "note": "Physical model: plucks and guitars."
+    },
+    "sampler": {
+      "role": [
+        "kick",
+        "snare",
+        "hat",
+        "clap",
+        "perc",
+        "fx"
+      ],
+      "note": "A sample on a channel: the standard way to play one-shots."
+    },
+    "direct wave": {
+      "role": [
+        "pad",
+        "chords",
+        "lead"
+      ],
+      "note": "Multisample player."
+    }
+  }
+}

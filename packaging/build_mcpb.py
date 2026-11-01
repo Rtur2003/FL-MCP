@@ -7,7 +7,6 @@ bundle meters nothing.
 """
 
 import argparse
-import asyncio
 import json
 import re
 import sys
@@ -24,11 +23,13 @@ from fl_mcp import __version__  # noqa: E402
 
 STAMP = (2024, 1, 1, 0, 0, 0)  # fixed, so the same source gives the same bytes
 LONG = (
-    "Controls the FL Studio running on this computer: transport, mixer, channels, patterns, "
-    "step sequencer and piano roll, plus fast genre-aware production that writes drums into the "
-    "Channel Rack and exports a MIDI file or a finished .flp. Setup: install loopMIDI (Windows) "
-    "or enable the IAC Driver (macOS), create a port named 'FL MCP', then run `uvx fl-mcp "
-    "install` once to copy the controller script into FL Studio."
+    "Controls the FL Studio running on this computer: every plugin by name and in real units, "
+    "mixer, channels, patterns, step sequencer and piano roll; fast genre-aware production "
+    "(drums into the Channel Rack, a MIDI file or a finished .flp with samples); mixing and "
+    "mastering by measurement (loudness, true peak, stereo, spectrum); and, opt-in, the screen "
+    "and keyboard for what FL's scripting API cannot do. Setup: install loopMIDI (Windows) or "
+    "enable the IAC Driver (macOS), create a port named 'FL MCP', then run `uvx fl-mcp setup` "
+    "once to copy the controller script into FL Studio and `uvx fl-mcp selftest` to check it."
 )
 
 
@@ -41,7 +42,7 @@ def first_sentence(text: str) -> str:
 def tool_list() -> list[dict]:
     from fl_mcp import server
 
-    tools = asyncio.run(server.mcp.list_tools())
+    tools = server._tools(True)  # fl_desk too: it is off until the user switches it on
     return [{"name": t.name, "description": first_sentence(t.description or "")} for t in tools]
 
 
@@ -64,7 +65,10 @@ def manifest() -> dict:
             "mcp_config": {
                 "command": "uv",
                 "args": ["run", "--directory", "${__dirname}", "src/server.py"],
-                "env": {"FL_MCP_LICENSE": "${user_config.license_key}"},
+                "env": {
+                    "FL_MCP_LICENSE": "${user_config.license_key}",
+                    "FL_MCP_DESKTOP": "${user_config.desktop}",
+                },
             },
         },
         "tools": tool_list(),
@@ -76,7 +80,14 @@ def manifest() -> dict:
                 "description": "Only needed for the credit-based tools; leave empty otherwise.",
                 "sensitive": True,
                 "required": False,
-            }
+            },
+            "desktop": {
+                "type": "boolean",
+                "title": "Desktop control",
+                "description": "Let the model see FL Studio's screen and press its keys (only "
+                "while an FL window is in front). Off by default.",
+                "default": False,
+            },
         },
         "compatibility": {"platforms": ["darwin", "win32"]},
     }
@@ -84,7 +95,8 @@ def manifest() -> dict:
 
 def bundle_pyproject() -> str:
     project = tomllib.loads((ROOT / "pyproject.toml").read_text("utf-8"))["project"]
-    deps = "\n".join(f"    {json.dumps(d)}," for d in project["dependencies"])
+    wanted = [*project["dependencies"], *project["optional-dependencies"]["audio"]]
+    deps = "\n".join(f"    {json.dumps(d)}," for d in wanted)
     return (
         f'[project]\nname = "fl-mcp-bundle"\nversion = "{__version__}"\n'
         f'requires-python = "{project["requires-python"]}"\ndependencies = [\n{deps}\n]\n'

@@ -6,11 +6,11 @@ The product is the **local** FL-MCP server. A customer installs it on the comput
 
 | Free, offline, no licence | Uses credits (default price) |
 |---|---|
-| `fl_status` `fl_list` `fl_transport` `fl_set` `fl_steps` `fl_notes` `fl_param` `fl_call` `fl_api` | new song plan: `fl_produce` with a genre (5) |
+| `fl_status` `fl_list` `fl_transport` `fl_set` `fl_steps` `fl_notes` `fl_param` `fl_call` `fl_api` `fl_library` `fl_ui` `fl_audio` `fl_desk` | new song plan: `fl_produce` with a genre (5) |
 | `fl_produce` with `genres`, `show`, `queue`, `apply`, `midi`, `inspect` on a plan you have | project file: `fl_produce` writing a `.flp` (3, on top of the plan) |
-| `fl_mix` `meter` | mix balancing: `fl_mix balance` (2) |
+| `fl_mix` `meter`, `doctor`, `chain` | mix balancing: `fl_mix balance` (2) |
 
-Reasoning: the credits meter the finished work (a plan, a project, a balanced mix), not compute, because the compute is the customer's own. Re-delivering a plan you already paid for is free. A full project is 8 credits.
+Reasoning: the credits meter the finished work (a plan, a project, a balanced mix), not compute, because the compute is the customer's own. Measuring (`fl_audio`), plugin control, sound search and the desktop tier cost the service nothing, so they stay free; they are what makes the metered tools worth buying. Re-delivering a plan you already paid for is free. A full project is 8 credits.
 
 The numbers above and below are **placeholders** from `service/flmcp_service/plans.py`. Change them in a JSON file (`FLMCP_CONFIG`) without touching code.
 

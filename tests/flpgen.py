@@ -39,6 +39,27 @@ def item(pos, pat, length, track, extra=b""):
     return base + extra
 
 
+def sampler_block(iid, name="Sampler", route=0):
+    """The events FL writes for a Sampler channel without a sample (ids and sizes as in FL 20.8)."""
+    E = Event
+    levels = struct.pack("<IIiIII", 6400, 10000, 0, 256, 256, 0)
+    return [
+        E(64, struct.pack("<H", iid)),
+        E(21, bytes([0])),
+        E(201, b"\x00\x00"),
+        E(212, bytes(52)),
+        E(203, txt(name)),
+        E(155, bytes(4)),
+        E(128, bytes([0x5C, 0x65, 0x6A, 0])),
+        E(0, b"\x01"),
+        E(22, bytes([route])),
+        E(219, levels),
+        E(215, bytes(158)),
+        E(143, struct.pack("<I", 10)),
+        E(20, b"\x00"),
+    ]
+
+
 def template(
     version="20.8.4.2576",
     ppq=96,
@@ -46,6 +67,7 @@ def template(
     seed=True,
     wide=False,
     channels=("Kick", "808 Bass", "Lead"),
+    sampler=False,
 ):
     E = Event
     ev = [
@@ -72,6 +94,8 @@ def template(
                 E(158, b"\xff\xff\xff\xff"),
                 E(164, bytes(4)),
             ]
+    if sampler:
+        ev += sampler_block(len(channels), "Sampler")
     ev += [
         E(99, struct.pack("<H", 1)),
         E(
@@ -83,7 +107,7 @@ def template(
     ]
     ev += [E(99, struct.pack("<H", 2)), E(233, b""), E(203, txt("mixer slot name")), E(11, b"\x01")]
     body = b"".join(e.encode() for e in ev)
-    header = b"FLhd" + struct.pack("<IHHH", 6, 0, len(channels), ppq)
+    header = b"FLhd" + struct.pack("<IHHH", 6, 0, len(channels) + int(sampler), ppq)
     return header + b"FLdt" + struct.pack("<I", len(body)) + body
 
 

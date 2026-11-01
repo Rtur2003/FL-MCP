@@ -16,6 +16,7 @@ from fl_mcp.music.plan import Plan
 PPQS = (24, 48, 72, 96, 120, 144, 168, 192, 384, 768, 960)
 TEMPO, VERSION = 156, 199
 NEW_CHAN, CHAN_TYPE, CHAN_NAME, PLUGIN_NAME, SAMPLE_PATH = 64, 21, 203, 201, 196
+CHAN_ROUTE, CHAN_COLOR, CHAN_LEVELS = 22, 128, 219  # insert number, RGB, pan and volume
 NEW_PAT, PAT_NAME, PAT_COLOR, NOTES = 65, 193, 150, 224
 NEW_ARR, PLAYLIST = 99, 233
 PATTERN_EVENTS = {26, 150, 157, 158, 160, 161, 162, 164, 193, 223, 224, 226}
@@ -172,6 +173,75 @@ class Flp:
             )
         return out
 
+    def _channel_spans(self) -> dict[int, tuple[int, int]]:
+        """channel iid -> (first event, one past the last): up to the next channel, pattern list
+        or arrangement, because FL writes the pattern list in the middle of the first channel."""
+        spans = {}
+        for i, e in enumerate(self.events):
+            if e.id != NEW_CHAN:
+                continue
+            j = i + 1
+            while j < len(self.events) and self.events[j].id not in (NEW_CHAN, NEW_PAT, NEW_ARR):
+                j += 1
+            spans[struct.unpack("<H", e.data)[0]] = (i, j)
+        return spans
+
+    def inserts_in_use(self) -> set[int]:
+        used = set()
+        for s, e in self._channel_spans().values():
+            used |= {x.data[0] for x in self.events[s:e] if x.id == CHAN_ROUTE}
+        return used
+
+    def add_sampler(
+        self,
+        name: str,
+        sample: str,
+        insert: int = 0,
+        color: tuple[int, int, int] | None = None,
+        volume: float | None = None,
+        pan: float | None = None,
+    ) -> int:
+        """Add a Sampler channel playing `sample`, cloned from a sampler channel FL wrote."""
+        spans = self._channel_spans()
+        kinds = {c.iid: c.kind for c in self.channels()}
+        seeds = [iid for iid, kind in kinds.items() if kind == "sampler"]
+        if not seeds:
+            raise FlpError(
+                "the template needs one Sampler channel (it can be empty) to build sample channels"
+            )
+        if not 0 <= insert <= 125:
+            raise FlpError("insert must be 0-125")
+        start, stop = spans[seeds[0]]
+        block = [Event(e.id, e.data) for e in self.events[start:stop]]
+        iid = max(spans, default=-1) + 1
+        block[0] = Event(NEW_CHAN, struct.pack("<H", iid))
+
+        def put(eid: int, data: bytes) -> None:
+            for k, e in enumerate(block):
+                if e.id == eid:
+                    block[k] = Event(eid, data)
+                    return
+            block.append(Event(eid, data))
+
+        put(CHAN_NAME, _utf16(name))
+        put(SAMPLE_PATH, _utf16(sample))
+        put(CHAN_ROUTE, bytes([insert]))
+        if color is not None:
+            put(CHAN_COLOR, bytes([*color, 0]))
+        levels = next((e for e in block if e.id == CHAN_LEVELS), None)
+        if levels is not None and (volume is not None or pan is not None):
+            data = bytearray(levels.data)
+            if pan is not None:
+                struct.pack_into("<I", data, 0, round((max(-1.0, min(1.0, pan)) + 1) * 6400))
+            if volume is not None:
+                struct.pack_into("<I", data, 4, round(max(0.0, min(1.0, volume)) * 12800))
+            put(CHAN_LEVELS, bytes(data))
+        last_end = max(stop_ for _, stop_ in spans.values())
+        self.events[last_end:last_end] = block
+        count = len(spans) + 1
+        self.header = self.header[:10] + struct.pack("<H", count) + self.header[12:]
+        return iid
+
     def _pattern_blocks(self) -> dict[int, dict[str, list[tuple[int, int]]]]:
         """pattern iid -> {'notes': [(start, end)], 'meta': [(start, end)]} event index ranges."""
         blocks: dict[int, dict[str, list[tuple[int, int]]]] = {}
@@ -240,6 +310,7 @@ class Flp:
             "channels": [[c.iid, c.name, c.kind] for c in self.channels()],
             "patterns": len(pats),
             "named_pattern_with_notes": self._seed_pattern() is not None,
+            "sampler_channel": any(c.kind == "sampler" for c in self.channels()),
             "playlist_items": len(self.playlist_items()),
         }
 
@@ -372,8 +443,13 @@ def build(
     out: Path,
     mapping: dict[str, int] | None = None,
     playlist: str = "append",
+    sounds: dict[str, str] | None = None,
+    inserts: bool = True,
 ) -> dict:
-    """Write `out` = template + the plan's patterns and playlist. The template is never changed."""
+    """Write `out` = template + the plan's patterns and playlist. The template is never changed.
+
+    sounds maps a role to a sample file: that role then gets a new Sampler channel playing it
+    (on its own mixer insert unless inserts is False), instead of a channel of the template."""
     from fl_mcp.produce import GROUP_COLORS, detect_roles
 
     flp = Flp.parse(Path(template).read_bytes())
@@ -384,6 +460,26 @@ def build(
         if not 0 <= i < len(chans):
             raise FlpError(f"channel index {i} for {r} is out of range 0..{len(chans) - 1}")
         iids[r] = chans[i].iid
+    created: dict[str, dict] = {}
+    insert = max(flp.inserts_in_use(), default=0)
+    for role in plan.roles:
+        sample = (sounds or {}).get(role)
+        if not sample:
+            continue
+        mix = plan.mix.get(role)
+        color = GROUP_COLORS.get(_group_of(role), "#999999").lstrip("#")
+        if inserts:
+            insert += 1
+            if insert > 125:
+                raise FlpError("the mixer has no free insert left for another channel")
+        iids[role] = flp.add_sampler(
+            role.capitalize(),
+            sample,
+            insert if inserts else 0,
+            tuple(int(color[k : k + 2], 16) for k in (0, 2, 4)),
+            pan=mix.pan if mix else None,
+        )
+        created[role] = {"iid": iids[role], "insert": insert if inserts else 0, "sample": sample}
     existing = flp.patterns()
     base = max(existing, default=0)
     if base + len(plan.patterns) > 999:
@@ -425,5 +521,13 @@ def build(
         "channels": {r: c for r, c in iids.items() if r in plan.roles},
         "no_channel": sorted(skipped),
         "unmatched_channels": unmatched,
+        "created": created,
         "tempo": plan.bpm,
     }
+
+
+def _group_of(role: str) -> str:
+    """The colour group a role belongs to, as the composer groups them."""
+    from fl_mcp.music.compose import GROUPS
+
+    return next((name for name, roles in GROUPS if role in roles), "FX")
