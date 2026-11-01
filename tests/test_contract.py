@@ -74,7 +74,8 @@ def test_script_header_is_what_fl_expects():
 
 
 def test_script_stays_compatible_with_older_embedded_pythons():
-    banned = (ast.Match, ast.NamedExpr, ast.TypeAlias)
+    names = ("Match", "NamedExpr", "TypeAlias")  # TypeAlias exists only in ast of Python 3.12+
+    banned = tuple(getattr(ast, name) for name in names if hasattr(ast, name))
     for node in ast.walk(TREE):
         assert not isinstance(node, banned), f"line {node.lineno}"
         if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
