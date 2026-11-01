@@ -14,12 +14,13 @@ from typing import Annotated, Any, Literal
 
 import anyio
 from mcp.server import MCPServer
+from mcp.server.mcpserver import Image
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.server.mcpserver.tools import Tool
 from mcp.types import ToolAnnotations
 from pydantic import Field
 
-from fl_mcp import __version__, audio, chain, library, mixing, produce, render, units
+from fl_mcp import __version__, audio, chain, desk, library, mixing, produce, render, units
 from fl_mcp.bridge import Bridge, FLError
 from fl_mcp.commerce import Gate, LicenseError, Spend
 from fl_mcp.music import GENRES, compose
@@ -36,6 +37,11 @@ INSTRUCTIONS = (
     "measures and balances levels while the project plays. Melodies and chords reach the piano "
     "roll through fl_notes (the user runs Tools > Scripting > FL MCP once). Inspect with "
     "fl_status/fl_list, change with fl_set; use fl_api + fl_call only for anything else."
+)
+DESK_NOTE = (
+    " fl_desk is on: it sees FL's screen and presses keys and buttons in FL only. Use it for what "
+    "the API cannot do: macro=script applies queued piano roll notes, macro=export bakes audio, "
+    "macro=open loads a project. Take a shot first; click positions are read off the shot."
 )
 CREDITS_NOTE = (
     " fl_produce (new plans, .flp projects) and fl_mix balance use licence credits; fl_status "
@@ -263,7 +269,9 @@ async def fl_notes(
             "queued": len(rows),
             "channel": roll["ch"],
             "pattern": roll["pat"],
-            "next": "In FL's piano roll run Tools > Scripting > FL MCP, then press Accept.",
+            "next": "Call fl_desk macro=script to apply them."
+            if desk.enabled()
+            else "In FL's piano roll run Tools > Scripting > FL MCP, then press Accept.",
         }
     )
 
@@ -370,8 +378,8 @@ async def fl_audio(
 ) -> str:
     """Hear the mix. analyze: LUFS (integrated, short-term, momentary), loudness range, true peak,
     crest, clipping, DC, stereo width, mono loss, 7-band spectrum and plain advice against the
-    genre's or target loudness. render: FL's command-line export of a saved .flp (Windows), then
-    analyze. compare: against a reference track. Needs the audio extra."""
+    genre's or target loudness. render: export, then analyze: FL's command line for a saved .flp,
+    or the open project through fl_desk when on. compare: with a reference. Needs audio extra."""
     if action == "status":
         return _out({"analysis": audio.available(), **await _thread(render.status)})
     goal = target if target is not None else (GENRES[genre].lufs if genre else None)
@@ -384,12 +392,16 @@ async def fl_audio(
         return _out(await _thread(audio.compare, mine, reference))
     made: dict[str, Any] | None = None
     if action == "render":
-        flp = project or await _thread(render.newest_project)
-        if not flp:
-            raise ToolError(
-                "no project to render: save it in FL (Ctrl+S) and call again, or pass project"
-            )
-        made = await _thread(render.render, flp, fmt)
+        if not project and desk.enabled() and fmt in ("wav", "mp3"):  # the open project, as is
+            target = data_dir() / "exports" / f"mix-{int(time.time())}.{fmt}"
+            made = await _thread(lambda: desk.get().export(target, fmt))
+        else:
+            flp = project or await _thread(render.newest_project)
+            if not flp:
+                raise ToolError(
+                    "no project to render: save it in FL (Ctrl+S) and call again, or pass project"
+                )
+            made = await _thread(render.render, flp, fmt)
         path = made["audio"]
     path = path or await _thread(render.newest_audio)
     if not path:
@@ -451,6 +463,93 @@ async def fl_ui(
     if browse == "goto" and not query:
         raise ToolError("goto needs query")
     return _out(await _fl({"o": "ui", "a": "browser", **step}))
+
+
+async def fl_desk(
+    action: Literal[
+        "status",
+        "shot",
+        "click",
+        "double",
+        "right",
+        "drag",
+        "scroll",
+        "type",
+        "key",
+        "wait",
+        "macro",
+    ],
+    x: Annotated[int | None, Field(ge=0, description="position in the last shot")] = None,
+    y: Annotated[int | None, Field(ge=0)] = None,
+    to_x: Annotated[int | None, Field(ge=0, description="drag: end position")] = None,
+    to_y: Annotated[int | None, Field(ge=0)] = None,
+    text: Annotated[str | None, Field(description="type: the text")] = None,
+    keys: Annotated[
+        str | None, Field(description="key: 'mod+s' or 'down,enter'; mod = Ctrl/Cmd")
+    ] = None,
+    amount: Annotated[int, Field(ge=-20, le=20, description="scroll: clicks, up is +")] = 3,
+    ms: Annotated[int, Field(ge=0, le=10000)] = 500,
+    macro: Literal["script", "export", "open", "save"] | None = None,
+    path: Annotated[
+        str | None, Field(description="macro export: new audio file; open: .flp")
+    ] = None,
+    full: Annotated[bool, Field(description="shot: the whole screen, not only FL")] = False,
+    look: Annotated[bool, Field(description="return a screenshot after acting")] = True,
+) -> list[Any]:
+    """See and drive FL Studio's screen, like a person: for what the scripting API cannot do. shot
+    returns a picture; click, double, right, drag and scroll take positions from the last shot;
+    type enters text, key presses combos (blocked: closing and system keys). Input only goes to FL
+    and stops if the mouse is in the top-left corner. macro: script applies queued piano roll
+    notes, export renders the open project to audio, open loads a .flp, save saves."""
+    folder = data_dir()
+
+    def work() -> tuple[dict[str, Any], bytes | None]:
+        d = desk.get()
+        if action == "status":
+            return d.status(), None
+        if action == "wait":
+            d.wait(ms)
+            return {"waited_ms": ms}, None
+        if action == "shot":
+            png, meta = d.shot(full)
+            return meta, png
+        info: dict[str, Any] = {"did": action}
+        if action in ("click", "double", "right", "drag", "scroll"):
+            if x is None or y is None:
+                raise ToolError(f"{action} needs x and y, read off a shot")
+            d.point(action, x, y, to_x, to_y, amount)
+            info["at"] = [x, y]
+        elif action == "type":
+            info["typed"] = d.write(text or "")
+        elif action == "key":
+            info["keys"] = d.press(keys or "")
+        elif macro == "script":
+            info.update(d.script(folder))
+        elif macro == "export":
+            target = Path(path) if path else folder / "exports" / f"mix-{int(time.time())}.wav"
+            info.update(d.export(target, target.suffix.lstrip(".").lower() or "wav"))
+        elif macro == "open":
+            info.update(d.open_project(Path(path or "")))
+        elif macro == "save":
+            info.update(d.save())
+        else:
+            raise ToolError("macro needs script, export, open or save")
+        if not look:
+            return info, None
+        d.sleep(0.4)
+        png, _ = d.shot(full)
+        return info, png
+
+    if action == "macro" and macro == "script":
+        try:  # the shortcut only reaches the piano roll when that window has the focus
+            await _fl({"o": "ui", "a": "win", "w": "roll", "v": "focus"})
+        except ToolError:
+            pass
+    info, png = await _thread(work)
+    out: list[Any] = [_out(info)]
+    if png is not None:
+        out.append(Image(data=png, format="png"))
+    return out
 
 
 async def fl_call(
@@ -754,11 +853,9 @@ _READ = dict(readOnlyHint=True, destructiveHint=False, idempotentHint=True)
 _EDIT = dict(readOnlyHint=False, destructiveHint=False, idempotentHint=True)
 _ACT = dict(readOnlyHint=False, destructiveHint=False, idempotentHint=False)
 
-mcp = MCPServer(
-    "fl_mcp",
-    version=__version__,
-    instructions=INSTRUCTIONS + (CREDITS_NOTE if gate.metered else ""),
-    tools=[
+
+def _tools(with_desk: bool) -> list[Tool]:
+    tools = [
         _tool(fl_status, **_READ),
         _tool(fl_produce, readOnlyHint=False, destructiveHint=False, idempotentHint=False),
         _tool(fl_mix, readOnlyHint=False, destructiveHint=False, idempotentHint=False),
@@ -771,9 +868,21 @@ mcp = MCPServer(
         _tool(fl_call, readOnlyHint=False, destructiveHint=True, idempotentHint=False),
         _tool(fl_library, **_EDIT),
         _tool(fl_ui, readOnlyHint=False, destructiveHint=True, idempotentHint=False),
-        _tool(fl_audio, **_READ),
+        _tool(fl_audio, **_ACT),
         _tool(fl_api, **_READ),
-    ],
+    ]
+    if with_desk:
+        tools.append(_tool(fl_desk, readOnlyHint=False, destructiveHint=True, idempotentHint=False))
+    return tools
+
+
+mcp = MCPServer(
+    "fl_mcp",
+    version=__version__,
+    instructions=INSTRUCTIONS
+    + (CREDITS_NOTE if gate.metered else "")
+    + (DESK_NOTE if desk.enabled() else ""),
+    tools=_tools(desk.enabled()),
 )
 
 
