@@ -343,6 +343,8 @@ async def test_audio_without_a_path_takes_the_latest_export(mixdown, monkeypatch
 
 
 async def test_audio_render_exports_with_fl_then_analyzes(mixdown, monkeypatch, tmp_path):
+    from fl_mcp.bridge import Bridge
+
     flp = tmp_path / "song.flp"
     flp.write_bytes(b"FLhd")
     calls = []
@@ -351,6 +353,7 @@ async def test_audio_render_exports_with_fl_then_analyzes(mixdown, monkeypatch, 
         calls.append((str(project), fmt))
         return {"audio": str(mixdown), "fmt": fmt, "seconds": 12.0}
 
+    monkeypatch.setattr(server, "bridge", Bridge("__offline__"))
     monkeypatch.setattr(server.render, "render", fake_render)
     out = await run("fl_audio", {"action": "render", "project": str(flp), "fmt": "flac"})
     assert calls == [(str(flp), "flac")]

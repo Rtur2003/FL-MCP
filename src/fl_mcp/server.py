@@ -477,7 +477,7 @@ async def fl_ui(
     (an effect onto mixer track index, else an instrument or sample), checked by what appeared.
     form: the focused plugin window."""
     if action == "load":
-        return _out(await _thread(uiload.load, bridge.call, query or "", index, 400))
+        return _out(await _thread(uiload.load, bridge.call, query or "", index))
     if action == "form":
         return _out(await _fl({"o": "ui", "a": "form"}))
     if action == "window":

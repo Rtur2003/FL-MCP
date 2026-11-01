@@ -4,13 +4,14 @@ FL's scripting API cannot create plugins, but its browser can be walked from ins
 focused item loaded. Whether that worked is decided by what appeared in the project, not by the
 browser's answer: the plugin inventory is read before and after."""
 
+import time
 from collections import Counter
 from collections.abc import Callable
 from typing import Any
 
 Call = Callable[[dict[str, Any]], Any]
 ATTEMPTS = 6  # several browser items can share a name (the plugin, its preset folder...)
-CHUNKS = 8  # the browser is walked in pieces of `steps` items, this many at most
+CHUNKS = 10  # the browser is walked in pieces of `steps` items, this many at most
 
 
 def inventory(call: Call) -> list[list[Any]]:
@@ -56,7 +57,7 @@ def _find(call: Call, name: str, steps: int) -> dict[str, Any]:
     return hit
 
 
-def load(call: Call, name: str, track: int | None = None, steps: int = 400) -> dict[str, Any]:
+def load(call: Call, name: str, track: int | None = None, steps: int = 80) -> dict[str, Any]:
     """Load the first browser item named like `name`; an effect goes to mixer `track`."""
     if not name.strip():
         raise ValueError("load needs query: the plugin or sample name")
@@ -65,21 +66,40 @@ def load(call: Call, name: str, track: int | None = None, steps: int = 400) -> d
         call({"o": "set", "k": "mixer", "i": track, "p": {"select": True}})
     before = inventory(call)
     call({"o": "ui", "a": "win", "w": "browser", "v": "show"})
-    for _ in range(CHUNKS):  # to the top of the tree, however long it is
-        if call({"o": "ui", "a": "browser", "b": "top", "n": steps}).get("done"):
-            break
     stops: list[str] = []
-    for _ in range(ATTEMPTS):
-        hit = _find(call, name, steps)
-        if not hit.get("found"):
+    for tab in ("plugins", "all"):
+        for chunk in range(CHUNKS):  # to the top of the tree, however long it is
+            req: dict[str, Any] = {"o": "ui", "a": "browser", "b": "top", "n": steps}
+            if chunk == 0:
+                req["tab"] = tab
+            if call(req).get("done"):
+                break
+        for _ in range(ATTEMPTS):
+            hit = _find(call, name, steps)
+            if not hit.get("found"):
+                break
+            item = str(hit["item"][0])
+            stops.append(item)
+            sel = call({"o": "ui", "a": "browser", "b": "select", "new": track is None})
+            fresh = _new(before, inventory(call))
+            if not fresh and isinstance(sel, dict) and sel.get("popup"):
+                time.sleep(0.08)
+                call(
+                    {
+                        "o": "ui",
+                        "a": "browser",
+                        "b": "select",
+                        "confirm": True,
+                        "new": track is None,
+                    }
+                )
+                time.sleep(0.12)
+                fresh = _new(before, inventory(call))
+            if fresh:
+                return {"loaded": fresh, "via": item}
+            call({"o": "ui", "a": "browser", "b": "nav", "d": "next", "sh": True})
+        if stops:
             break
-        item = str(hit["item"][0])
-        stops.append(item)
-        call({"o": "ui", "a": "browser", "b": "select", "new": track is None})
-        fresh = _new(before, inventory(call))
-        if fresh:
-            return {"loaded": fresh, "via": item}
-        call({"o": "ui", "a": "browser", "b": "nav", "d": "next", "sh": True})
     if not stops:
         raise ValueError(
             f"'{name}' is not in FL's browser (searched up to {CHUNKS * steps} items from the "

@@ -1073,11 +1073,33 @@ _KEYS = {
     "itemmenu": lambda: transport.globalTransport(midi.FPT_ItemMenu, 1),
 }
 
+_VK = {"escape": 0x1B, "enter": 0x0D, "up": 0x26, "down": 0x28, "left": 0x25, "right": 0x27}
+
+
+def _win_key(vk):
+    if getattr(ui, "__file__", None) is not None:
+        return False
+    try:
+        import ctypes
+
+        u32 = getattr(ctypes, "windll", None)
+        if u32 is not None:
+            u32.user32.keybd_event(vk, 0, 0, 0)
+            u32.user32.keybd_event(vk, 0, 2, 0)
+            return True
+    except Exception:
+        pass
+    return False
+
 
 def _press(name):
     name = str(name).lower()
     if name in _KEYS:
-        _KEYS[name]()
+        try:
+            _KEYS[name]()
+        except RuntimeError:
+            if name not in _VK or not _win_key(_VK[name]):
+                raise
     elif name.startswith("f") and name[1:].isdigit() and 1 <= int(name[1:]) <= 12:
         transport.globalTransport(midi.FPT_F1 + int(name[1:]) - 1, 1)
     else:
@@ -1130,11 +1152,19 @@ def _browser_walk(count, expand, want, here=False):
     return rows, len(rows), False
 
 
+def _close_popup():
+    if _try(ui.isInPopupMenu):
+        _try(ui.left, 1)
+        _try(ui.escape)
+        _try(ui.closeActivePopupMenu)
+
+
 def _op_browser(r):
     b = r.get("b")
     if b == "caption":
         return {"item": _browser_item()}
     if b == "nav":
+        _close_popup()
         down = r.get("d") not in ("prev", "up", 40)
         return {"item": _browser_item(ui.navigateBrowser(41 if down else 40, bool(r.get("sh"))))}
     if b == "tab":
@@ -1144,24 +1174,43 @@ def _op_browser(r):
         ui.toggleBrowserNode(int(r.get("v", -1)))
         return {"item": _browser_item()}
     if b == "select":
+        if r.get("confirm"):
+            if _try(ui.isInPopupMenu):
+                if not (_try(ui.getHintMsg) or "").strip():
+                    ui.down(1)
+                ui.enter()
+                _win_key(0x0D)
+            return {"item": _browser_item(), "popup": bool(_try(ui.isInPopupMenu))}
         if not ui.getVisible(midi.widBrowser):
             ui.showWindow(midi.widBrowser)
         if _try(ui.isBrowserAutoHide):
             _try(ui.setBrowserAutoHide, False)
+        if (
+            r.get("new") is False
+            and ui.getVisible(midi.widMixer)
+            and not ui.getFocused(midi.widMixer)
+        ):
+            ui.setFocused(midi.widMixer)
         ui.selectBrowserMenuItem()
-        if _try(ui.isInPopupMenu):
+        pop = bool(_try(ui.isInPopupMenu))
+        if pop:
             ui.down(1)
-            if r.get("new") and "new channel" not in (_try(ui.getHintMsg) or "").lower():
-                ui.down(1)
             ui.enter()
-        return {"item": _browser_item()}
+        return {"item": _browser_item(), "popup": pop}
     if b == "preview":
         ui.previewBrowserMenuItem()
         return {"item": _browser_item()}
     if b == "top":
+        _close_popup()
+        want_tab = _key(r.get("tab"))
+        if want_tab:
+            for _ in range(8):
+                t = _key(_try(ui.navigateBrowserTabs, midi.FPT_Right))
+                if not t or t == "tab" or want_tab in t:
+                    break
         _browser_item()
         last, same = None, 0
-        for _ in range(_idx(r.get("n") or 400, 1, 600, "count")):
+        for _ in range(_idx(r.get("n") or 80, 1, 600, "count")):
             name = _browser_item(ui.navigateBrowser(40, False))[0]
             same = same + 1 if name == last else 0
             if same >= 2:

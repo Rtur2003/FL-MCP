@@ -372,6 +372,9 @@ class FakeFL:
     def ui_isInPopupMenu(self):
         return self.in_popup
 
+    def ui_closeActivePopupMenu(self):
+        self.in_popup = False
+
     def ui_isBrowserAutoHide(self):
         return False
 
