@@ -11,6 +11,7 @@ NAMES = [
     "fl_notes",
     "fl_param",
     "fl_call",
+    "fl_library",
     "fl_ui",
     "fl_api",
 ]

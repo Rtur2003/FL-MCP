@@ -10,6 +10,16 @@ out = {
     "tempo": proj.tempo,
     "ppq": proj.ppq,
     "channels": [[c.iid, c.name] for c in proj.channels],
+    "detail": {
+        c.iid: {
+            "name": c.name,
+            "insert": getattr(c, "insert", None),
+            "pan": getattr(c, "pan", None),
+            "volume": getattr(c, "volume", None),
+            "sample": getattr(c, "sample_path", None) and str(c.sample_path),
+        }
+        for c in proj.channels
+    },
     "patterns": {
         p.iid: {
             "name": p.name,

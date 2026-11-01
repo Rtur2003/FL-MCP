@@ -382,5 +382,109 @@ def test_real_project_patch_is_read_back_identically_by_an_independent_parser(tm
     assert all(x in got["playlist"] for x in orig["playlist"])
 
 
+@real
+@pytest.mark.skipif(not ORACLE, reason="needs FL_MCP_ORACLE_PYTHON: Python <= 3.10 with pyflp")
+def test_real_project_with_sample_channels_is_read_back_by_an_independent_parser(tmp_path):
+    plan = compose("house", seed=5, length="sketch")
+    out = tmp_path / "samples.flp"
+    sounds = {"kick": r"C:\Samples\My Kick.wav", "clap": r"C:\Samples\My Clap.wav"}
+    report = build(Path(FIXTURES) / "fl2084.flp", plan, out, sounds=sounds)
+    dump = Path(__file__).parent / "oracle_dump.py"
+    got = json.loads(
+        subprocess.run(
+            [ORACLE, str(dump), str(out)], check=True, capture_output=True, text=True
+        ).stdout
+    )
+    orig = json.loads(
+        subprocess.run(
+            [ORACLE, str(dump), str(Path(FIXTURES) / "fl2084.flp")],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+    )
+    assert len(got["channels"]) == len(orig["channels"]) + 2
+    for role, made in report["created"].items():
+        detail = got["detail"][str(made["iid"])]
+        assert detail["name"] == role.capitalize()
+        assert detail["insert"] == made["insert"] and detail["sample"] == sounds[role]
+        assert detail["volume"] == 10000 and isinstance(detail["pan"], int)
+    assert all(got["detail"][k] == v for k, v in orig["detail"].items()), "old channels unchanged"
+    notes = [n for p in got["patterns"].values() for n in p["notes"]]
+    owners = {n[4] for n in notes}
+    assert {m["iid"] for m in report["created"].values()} <= owners
+
+
 def test_module_constants_match_the_observed_format():
     assert flp.NOTE.size == 24 and flp.PL_BASE == 20480
+
+
+# ---- sample channels cloned from a Sampler channel FL wrote
+
+
+def test_a_sampler_channel_is_cloned_with_its_own_sample_insert_colour_and_levels():
+    raw = template(sampler=True)
+    p = Flp.parse(raw)
+    before = [e.encode() for e in p.events]
+    iid = p.add_sampler(
+        "Kick", r"C:\Samples\Kick 01.wav", insert=3, color=(1, 2, 3), volume=0.5, pan=-1.0
+    )
+    assert iid == 4
+    out = Flp.parse(p.dumps())
+    by = {c.iid: c for c in out.channels()}
+    assert (by[4].name, by[4].kind) == ("Kick", "sampler") and len(by) == 5
+    assert struct.unpack("<H", p.dumps()[10:12])[0] == 5, "the header counts the channels"
+    start, stop = out._channel_spans()[4]
+    block = {e.id: e.data for e in out.events[start:stop]}
+    assert block[196].decode("utf-16le").rstrip("\x00") == r"C:\Samples\Kick 01.wav"
+    assert block[22] == b"\x03" and block[128] == bytes([1, 2, 3, 0])
+    assert struct.unpack("<II", block[219][:8]) == (0, 6400)
+    assert out.events[stop].id == flp.NEW_ARR, "inserted before the arrangement"
+    rest = [e.encode() for e in out.events[:start]] + [e.encode() for e in out.events[stop:]]
+    assert rest == before, "everything that was there is untouched"
+    assert out.inserts_in_use() == {0, 3}
+
+
+def test_sampler_clones_get_distinct_ids_and_keep_the_pattern_list_intact():
+    p = Flp.parse(template(sampler=True))
+    ids = [p.add_sampler(n, f"/s/{n}.wav", insert=i + 1) for i, n in enumerate(["a", "b", "c"])]
+    assert ids == [4, 5, 6]
+    out = Flp.parse(p.dumps())
+    assert [c.name for c in out.channels()][-3:] == ["a", "b", "c"]
+    assert out.patterns() == Flp.parse(template(sampler=True)).patterns()
+
+
+def test_sample_channels_need_a_sampler_in_the_template_and_a_valid_insert():
+    with pytest.raises(FlpError, match="needs one Sampler channel"):
+        Flp.parse(template()).add_sampler("Kick", "/s/k.wav")
+    with pytest.raises(FlpError, match="insert must be 0-125"):
+        Flp.parse(template(sampler=True)).add_sampler("Kick", "/s/k.wav", insert=126)
+
+
+def test_build_with_sounds_makes_a_channel_per_role_on_its_own_insert(tmp_path):
+    src = tmp_path / "template.flp"
+    src.write_bytes(template(channels=("Lead", "Sub Bass"), sampler=True))
+    plan = compose("house", seed=3, length="sketch")
+    sounds = {"kick": "/s/kick.wav", "clap": "/s/clap.wav", "hat": "/s/hat.wav"}
+    report = build(src, plan, tmp_path / "x.flp", sounds=sounds)
+    made = report["created"]
+    assert set(made) == {"kick", "clap", "hat"}
+    assert report["channels"]["kick"] == made["kick"]["iid"]
+    assert [made[r]["insert"] for r in ("kick", "clap", "hat")] == [1, 2, 3]
+    assert "kick" not in report["no_channel"] and "perc" in report["no_channel"]
+    result = Flp.parse((tmp_path / "x.flp").read_bytes())
+    assert {c.name for c in result.channels()} >= {"Kick", "Clap", "Hat"}
+    blob = b"".join(e.data for e in result.events if e.id == 224)
+    owners = {struct.unpack_from("<H", blob, k + 6)[0] for k in range(0, len(blob), 24)}
+    assert made["kick"]["iid"] in owners and made["clap"]["iid"] in owners
+
+
+def test_sounds_can_share_the_master_and_a_missing_sampler_is_reported(tmp_path):
+    src = tmp_path / "t.flp"
+    src.write_bytes(template(sampler=True))
+    plan = compose("house", seed=3, length="sketch")
+    report = build(src, plan, tmp_path / "x.flp", sounds={"kick": "/s/k.wav"}, inserts=False)
+    assert report["created"]["kick"]["insert"] == 0
+    src.write_bytes(template())
+    with pytest.raises(FlpError, match="needs one Sampler channel"):
+        build(src, plan, tmp_path / "y.flp", sounds={"kick": "/s/k.wav"})

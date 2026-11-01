@@ -9,6 +9,7 @@ import secrets
 import time
 from collections.abc import AsyncIterator
 from importlib import resources
+from pathlib import Path
 from typing import Annotated, Any, Literal
 
 import anyio
@@ -18,7 +19,7 @@ from mcp.server.mcpserver.tools import Tool
 from mcp.types import ToolAnnotations
 from pydantic import Field
 
-from fl_mcp import __version__, mixing, produce, units
+from fl_mcp import __version__, chain, library, mixing, produce, units
 from fl_mcp.bridge import Bridge, FLError
 from fl_mcp.commerce import Gate, LicenseError, Spend
 from fl_mcp.music import GENRES, compose
@@ -45,6 +46,7 @@ bridge = Bridge()
 gate = Gate()
 Beats = Annotated[float, Field(ge=0)]
 Index = Annotated[int, Field(ge=0)]
+Genre = Literal[tuple(GENRES)]  # type: ignore[valid-type]
 
 
 async def _fl(req: dict[str, Any]) -> Any:
@@ -318,6 +320,51 @@ async def fl_param(
     return _out(await _fl(req))
 
 
+async def fl_library(
+    action: Literal["scan", "find", "kit", "plugins", "info"],
+    role: Annotated[
+        str | None, Field(description="kick snare clap hat ohat perc bass fx chords pad lead")
+    ] = None,
+    genre: Genre | None = None,
+    query: Annotated[str | None, Field(description="words to match in names and folders")] = None,
+    path: Annotated[str | None, Field(description="info: a sample file")] = None,
+    limit: Annotated[int, Field(ge=1, le=50)] = 10,
+) -> str:
+    """Sounds and plugins on this computer. scan indexes FL's sample packs, the folders in
+    FL_MCP_SAMPLES and the plugin database (once, and again after adding sounds). find ranks
+    samples for a role by name and by measured sound (length, decay, brightness, low end). kit
+    picks one sample per drum role from a single pack for a genre; give fl_produce sounds=auto to
+    build a project with it. plugins lists what is installed. info measures one file."""
+    if action == "scan":
+        return _out(await _thread(library.scan, 45.0))
+    if action == "plugins":
+        rows = await _thread(library.list_plugins, query, role, limit)
+        return _out(
+            {
+                "cols": ["name", "kind", "format"],
+                "rows": [[p["name"], p["kind"], p["format"]] for p in rows],
+            }
+        )
+    if action == "info":
+        if not path:
+            raise ToolError("info needs path")
+        found = await _thread(library.analyze, path)
+        return _out({"role": library.classify_name(Path(path)), "features": found})
+    if action == "kit":
+        picked = await _thread(library.pick_kit, genre, list(library.DRUMS), None)
+        sounds = "; ".join(f"{r}={c['p']}" for r, c in picked.items())
+        return _out(
+            {"kit": {r: [c["p"], c["k"], c["score"]] for r, c in picked.items()}, "sounds": sounds}
+        )
+    found = await _thread(library.find, role, genre, query, limit)
+    cols = ["path", "pack", "score", "dur", "decay_ms"]
+    rows = [
+        [c["p"], c["k"], c["score"], (c["f"] or {}).get("dur"), (c["f"] or {}).get("decay_ms")]
+        for c in found
+    ]
+    return _out({"cols": cols, "rows": rows})
+
+
 _WINDOWS = Literal["mixer", "channels", "playlist", "roll", "browser"]
 _BROWSE = Literal[
     "caption", "next", "prev", "left_tab", "right_tab", "expand", "collapse", "select", "preview",
@@ -414,9 +461,6 @@ def _find_pattern(plan: Any, ref: str) -> int:
     raise ToolError("pattern not found; use fl_produce action=show to see the names")
 
 
-Genre = Literal[tuple(GENRES)]  # type: ignore[valid-type]
-
-
 async def fl_produce(
     action: Annotated[
         Literal["make", "plan", "apply", "queue", "midi", "flp", "inspect", "show", "genres"],
@@ -442,13 +486,16 @@ async def fl_produce(
         str | None, Field(description="path of a .flp project to build on; never modified")
     ] = None,
     replace_playlist: Annotated[bool, Field(description="flp: drop the template's clips")] = False,
+    sounds: Annotated[
+        str | None,
+        Field(description="flp: 'auto' = a drum kit from fl_library, or 'kick=path; snare=path'"),
+    ] = None,
 ) -> str:
-    """Fast production. make builds a genre-aware plan (sections, drums, bass, chords, melody,
-    mix targets) and delivers it: drums fill matching Channel Rack channels as named patterns
-    with tempo, markers, EQ and pan, and a MIDI file carries everything. Channels are matched
-    by name (kick, hat, bass, lead...). With template (a .flp) flp and make also write a full
-    project: patterns with all notes plus the playlist. queue sends one part to the piano roll;
-    inspect reads a template."""
+    """Fast production. make: builds a genre-aware plan (sections, drums, bass, chords, melody,
+    mix targets) and delivers it: drums go into Channel Rack channels matched by name (kick,
+    hat, bass...) as named patterns with tempo, markers, EQ and pan, and a MIDI file holds every
+    part. With template (a .flp), make and flp write a full project (all notes, the playlist;
+    sounds adds sample channels). queue: one part to the piano roll. inspect: read a template."""
     if action == "genres":
         return _out({k: [g.name, *g.bpm, g.default_scale] for k, g in GENRES.items()})
     if action == "inspect":
@@ -531,7 +578,7 @@ async def fl_produce(
                 out["live"] = f"not applied: {exc}"
         if writes_flp:
             out["flp"] = await _thread(
-                produce.export_flp, built, template, override, replace_playlist
+                produce.export_flp, built, template, override, replace_playlist, sounds
             )
             bill.ok("produce.flp")
         if action in ("make", "midi"):
@@ -544,22 +591,35 @@ async def fl_produce(
 
 async def fl_mix(
     action: Annotated[
-        Literal["meter", "balance"],
-        Field(description="meter reads; balance also moves faders"),
+        Literal["meter", "balance", "doctor", "chain"],
+        Field(description="meter/doctor read; balance moves faders; chain checks plugins"),
     ] = "meter",
     seconds: Annotated[float, Field(ge=1, le=30, description="how long to play and measure")] = 6.0,
     bar: Annotated[float | None, Field(ge=1, description="start playing from this bar")] = None,
     plan: Annotated[
-        str | None, Field(description="balance: plan for role targets; default latest")
+        str | None, Field(description="balance/chain: plan for role targets; default latest")
     ] = None,
     targets: Annotated[
         str | None, Field(description="balance: explicit 'track=peak_dB' list, e.g. '1=-8,2=-9'")
     ] = None,
+    track: Annotated[int | None, Field(ge=0, description="chain: one mixer track")] = None,
+    role: Annotated[str | None, Field(description="chain: role such as kick, bass, master")] = None,
+    apply: Annotated[bool, Field(description="chain: set the role's starting values")] = False,
 ) -> str:
-    """Measure the mix with the mixer's own peak meters while the project plays (stops again if it
-    was stopped). meter returns per-track peak dBFS and activity. balance moves faders so each role
-    lands on its target peak (kick -8, bass -9, hats -20...) and keeps the master below -3 dBFS.
-    Play the loudest section: use bar. Needs the project to be playing audio from the playlist."""
+    """Measure and fix the mix with the mixer's peak meters while the project plays (stops again
+    if it was stopped). meter: peak dBFS per track. balance: faders to role targets (kick -8,
+    bass -9, hats -20; master under -3). doctor: problems worst first (clipping, headroom,
+    routing, pan, missing plugins). chain: plugins on a track vs what its role wants; apply sets
+    compressor, limiter, reverb and delay values by meaning on plugins already there."""
+    if action == "doctor":
+        return _out(await _thread(chain.doctor, bridge.call, seconds, bar, plan))
+    if action == "chain":
+        pairs = await _thread(chain.targets, bridge.call, plan, track, role)
+        reports = await _thread(chain.analyze, bridge.call, pairs)
+        out: dict[str, Any] = {"tracks": reports}
+        if apply:
+            out["applied"] = await _thread(chain.apply, bridge.call, reports)
+        return _out(out)
     mixer_rows = await _thread(produce.rows, bridge.call, "mixer")
     used = [r[0] for r in mixer_rows]
     names = {r[0]: r[1] for r in mixer_rows}
@@ -677,6 +737,7 @@ mcp = MCPServer(
         _tool(fl_notes, **_EDIT),
         _tool(fl_param, **_EDIT),
         _tool(fl_call, readOnlyHint=False, destructiveHint=True, idempotentHint=False),
+        _tool(fl_library, **_EDIT),
         _tool(fl_ui, readOnlyHint=False, destructiveHint=True, idempotentHint=False),
         _tool(fl_api, **_READ),
     ],

@@ -272,12 +272,47 @@ def _template(path: str) -> Path:
     return f
 
 
+def parse_sounds(
+    plan: Plan, template: str, override: dict[str, int] | None, text: str
+) -> dict[str, str]:
+    """role -> sample path from 'auto' (a kit from the library for drum roles the template lacks)
+    or 'kick=C:/x/kick.wav; snare=...'."""
+    from fl_mcp import library
+
+    if text.strip().lower() == "auto":
+        project = flp.Flp.parse(_template(template).read_bytes())
+        have = detect_roles([c.name for c in project.channels()])[0]
+        have.update(override or {})
+        missing = [r for r in plan.roles if r in library.DRUMS and r not in have]
+        kit = library.pick_kit(plan.genre, missing, seed=plan.seed) if missing else {}
+        return {r: c["p"] for r, c in kit.items()}
+    out = {}
+    for part in text.split(";"):
+        role, eq, path = part.partition("=")
+        role, path = role.strip().lower(), path.strip().strip("\"'")
+        if not eq or not role or not path:
+            raise ValueError(f"'{part.strip()}' should look like role=path")
+        if role not in plan.roles:
+            raise ValueError(f"the plan has no {role} part (roles: {', '.join(plan.roles)})")
+        if not path.startswith("%") and not Path(path).expanduser().is_file():
+            raise ValueError(f"sample not found: {path}")
+        out[role] = path if path.startswith("%") else str(Path(path).expanduser())
+    return out
+
+
 def export_flp(
-    plan: Plan, template: str, override: dict[str, int] | None = None, replace: bool = False
+    plan: Plan,
+    template: str,
+    override: dict[str, int] | None = None,
+    replace: bool = False,
+    sounds: str | None = None,
 ) -> dict[str, Any]:
     """Write template + plan (patterns, notes, playlist) as a new project; the template is kept."""
     out = paths.data_dir() / "out" / f"{plan.id}.flp"
-    return flp.build(_template(template), plan, out, override, "replace" if replace else "append")
+    picked = parse_sounds(plan, template, override, sounds) if sounds else None
+    return flp.build(
+        _template(template), plan, out, override, "replace" if replace else "append", picked
+    )
 
 
 def inspect_flp(template: str) -> dict[str, Any]:

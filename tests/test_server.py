@@ -77,7 +77,7 @@ async def test_tool_list_is_small_flat_and_portable():
             assert prop.get("type") != "array" or "items" in prop, f"{tool.name}.{name}"
             assert prop.get("type") != "array" or "type" in prop["items"]
     size = len(json.dumps([t.model_dump(by_alias=True, exclude_none=True) for t in tools]))
-    assert size < 14000, size  # about 3.4k tokens for the always-on tools
+    assert size < 16000, size  # about 4k tokens for the always-on tools
 
 
 async def test_annotations_tell_clients_what_is_safe():
