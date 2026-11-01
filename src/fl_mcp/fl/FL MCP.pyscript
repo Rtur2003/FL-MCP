@@ -1,0 +1,66 @@
+import json
+import os
+import time
+
+import flpianoroll as flp
+
+DIR = "@DIR@"
+if DIR.startswith("@"):
+    DIR = os.path.join(os.path.expanduser("~"), ".fl-mcp")
+INBOX = os.path.join(DIR, "inbox.json")
+STATE = os.path.join(DIR, "state.json")
+MAX_EXPORT = 2000
+
+
+def createDialog():
+    return flp.ScriptDialog(
+        "FL MCP", "Adds the notes queued by the FL MCP server and exports the piano roll.")
+
+
+def apply(form):
+    try:
+        _run()
+    except Exception as exc:
+        flp.Utils.ShowMessage("FL MCP: %s: %s" % (type(exc).__name__, exc))
+
+
+def _queue():
+    try:
+        with open(INBOX, encoding="utf-8") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return None
+
+
+def _run():
+    score = flp.score
+    ppq = score.PPQ
+    queue = _queue()
+    if queue:
+        if queue.get("replace"):
+            score.clearNotes(True)
+        have = set()
+        for i in range(score.noteCount):
+            n = score.getNote(i)
+            have.add((n.number, n.time, n.length))
+        for pitch, start, length, velocity in queue["notes"]:
+            key = (int(pitch), int(round(start * ppq)), max(1, int(round(length * ppq))))
+            if key in have:
+                continue
+            have.add(key)
+            note = flp.Note()
+            note.number, note.time, note.length = key
+            note.velocity = max(0.0, min(1.0, velocity / 127.0))
+            score.addNote(note)
+    notes = []
+    for i in range(min(score.noteCount, MAX_EXPORT)):
+        n = score.getNote(i)
+        notes.append([n.number, round(n.time / ppq, 4), round(n.length / ppq, 4),
+                      int(round(n.velocity * 127))])
+    state = {"ts": time.time(), "ppq": ppq, "count": score.noteCount,
+             "serial": queue.get("serial") if queue else None, "notes": notes}
+    os.makedirs(DIR, exist_ok=True)
+    tmp = STATE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(state, f, separators=(",", ":"))
+    os.replace(tmp, STATE)
