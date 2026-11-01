@@ -269,3 +269,17 @@ def test_diag_keeps_the_last_failures(fl):
     assert out["failed"] == 14 and len(out["errors"]) == 12
     assert out["errors"][-1][1] == "set" and "out of range" in out["errors"][-1][2]
     assert out["n"] >= 14
+
+
+def test_browser_walk_skips_heavy_folders_and_handles_popup_menu(fl):
+    fl.fake.browser.insert(0, ("Current project", -101))
+    fl.fake.browser.insert(1, ("Plugin presets", -100))
+    fl.fake.browser_at = 0
+    fl.fake.browser_log.clear()
+    found = fl.call({"o": "ui", "a": "browser", "b": "goto", "q": "fruity lim"})
+    assert found["found"] is True and found["item"][0] == "Fruity Limiter"
+    nav_shifts = [sh for op, _, sh in fl.fake.browser_log if op == "nav"]
+    assert nav_shifts[:2] == [False, False]  # skipped expanding Current project and Plugin presets
+    fl.fake.ui_isInPopupMenu = lambda: True
+    fl.call({"o": "ui", "a": "browser", "b": "select"})
+    assert "down" in fl.fake.keys and "enter" in fl.fake.keys

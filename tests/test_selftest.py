@@ -109,7 +109,7 @@ def test_default_mixer_and_param_failure_do_not_cascade(fl, home):
         if req["o"] == "list" and req.get("k") == "mixer" and req.get("a") == 1:
             out = fl.call(req)
             return {**out, "rows": out["rows"][:1]}
-        if req["o"] == "param" and req.get("a") == "params":
+        if req["o"] == "param" and req.get("a") == "list":
             raise FLError("param error")
         return fl.call(req)
 
