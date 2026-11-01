@@ -250,7 +250,7 @@ def mapping_for(plan_id: str, names: list[str]) -> dict[str, int]:
 def live_state(plan_id: str) -> dict[str, Any]:
     path = plans_dir() / f"{plan_id}.live"
     if not path.is_file():
-        raise ValueError("apply this plan to FL Studio first (fl_produce action=apply target=live)")
+        raise ValueError("apply this plan to FL Studio first (fl_produce action=apply)")
     return json.loads(path.read_text(encoding="utf-8"))
 
 

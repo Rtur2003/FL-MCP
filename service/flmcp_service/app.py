@@ -157,6 +157,8 @@ def create_app(settings: Settings | None = None, clock: Callable[[], float] = ti
         secret = s.webhook_secrets.get(provider)
         if secret is None:
             raise ApiError(404, "unknown_provider", "no such provider")
+        if int(request.headers.get("content-length") or 0) > MAX_WEBHOOK:
+            raise ApiError(413, "too_large", "event too large")
         body = await request.body()
         if len(body) > MAX_WEBHOOK:
             raise ApiError(413, "too_large", "event too large")

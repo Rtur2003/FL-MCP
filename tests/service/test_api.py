@@ -364,3 +364,18 @@ def test_a_licence_whose_plan_was_removed_is_explained(svc):
     other = TestClient(create_app(Settings(db=svc.settings.db, config=config), svc.clock))
     r = other.post("/v1/activate", json={"key": key, "device_id": "device-0001", "name": "x"})
     assert r.status_code == 409 and r.json()["code"] == "unknown_plan"
+
+
+def test_an_oversized_webhook_is_refused_before_it_is_read(svc):
+    r = svc.http.post(
+        "/v1/webhooks/generic",
+        content=b"x" * (webhooks_limit() + 1),
+        headers={"X-FLMCP-Signature": "t=1,v1=00"},
+    )
+    assert r.status_code == 413 and r.json()["code"] == "too_large"
+
+
+def webhooks_limit():
+    from flmcp_service.app import MAX_WEBHOOK
+
+    return MAX_WEBHOOK

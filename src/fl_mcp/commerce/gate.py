@@ -5,6 +5,7 @@ reserve credits before they work and settle afterwards: the customer pays for wh
 and a hold nobody settles returns by itself. All other tools never touch the network.
 """
 
+import http.client
 import json
 import logging
 import os
@@ -70,7 +71,7 @@ def _transport(base: str, timeout: float = 10.0) -> Post:
                 raw, code = res.read(1_000_000), res.status
         except urllib.error.HTTPError as exc:
             raw, code = exc.read(1_000_000), exc.code
-        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        except (urllib.error.URLError, TimeoutError, OSError, http.client.HTTPException) as exc:
             reason = getattr(exc, "reason", exc)
             raise LicenseError(
                 f"Could not reach the licence service ({host.netloc}): {reason}. Tools that use "

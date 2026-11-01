@@ -262,3 +262,16 @@ def test_an_unfilled_extension_placeholder_is_not_mistaken_for_a_key(gate, monke
     monkeypatch.setenv("FL_MCP_LICENSE", "${user_config.license_key}")
     out = gate.status()
     assert out["signed_in"] is False and "fl-mcp login" in out["note"]
+
+
+def test_a_connection_that_breaks_mid_answer_is_reported_not_crashed_on(monkeypatch):
+    import http.client
+    import urllib.request
+
+    def broken(self, *_args, **_kwargs):
+        raise http.client.IncompleteRead(b"")
+
+    monkeypatch.setattr(urllib.request.OpenerDirector, "open", broken)
+    post = gate_module._transport("https://licence.example.test")
+    with pytest.raises(LicenseError, match="Could not reach the licence service"):
+        post("GET", "/v1/account", None, "token")
