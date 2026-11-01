@@ -84,7 +84,8 @@ def manifest() -> dict:
 
 def bundle_pyproject() -> str:
     project = tomllib.loads((ROOT / "pyproject.toml").read_text("utf-8"))["project"]
-    deps = "\n".join(f"    {json.dumps(d)}," for d in project["dependencies"])
+    wanted = [*project["dependencies"], *project["optional-dependencies"]["audio"]]
+    deps = "\n".join(f"    {json.dumps(d)}," for d in wanted)
     return (
         f'[project]\nname = "fl-mcp-bundle"\nversion = "{__version__}"\n'
         f'requires-python = "{project["requires-python"]}"\ndependencies = [\n{deps}\n]\n'

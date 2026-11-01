@@ -307,3 +307,79 @@ async def test_api_reference_needs_no_fl():
     assert "more; narrow" in await run("fl_api", {"module": "midi"})
     assert await run("fl_api", {"module": "mixer", "query": "zzz"}) == "no match"
     assert "unknown module" in await run("fl_api", {"module": "os"}, expect_error=True)
+
+
+# ---- fl_audio
+
+
+@pytest.fixture
+def mixdown(tmp_path):
+    np = pytest.importorskip("numpy")
+    sf = pytest.importorskip("soundfile")
+    pytest.importorskip("scipy")
+    t = np.arange(48000 * 12) / 48000
+    tone = (10 ** (-23 / 20) * np.sin(2 * np.pi * 997 * t)).astype("float32")
+    path = tmp_path / "mix.wav"
+    sf.write(str(path), np.stack([tone, tone], axis=1), 48000, subtype="FLOAT")
+    return path
+
+
+async def test_audio_analysis_is_judged_against_the_genre_loudness(mixdown):
+    out = await run("fl_audio", {"path": str(mixdown), "genre": "house"})
+    assert out["lufs_i"] == pytest.approx(-23.0, abs=0.2) and out["target_lufs"] == -8.0
+    assert any("quieter than the -8.0 target" in tip for tip in out["advice"])
+    plain = await run("fl_audio", {"path": str(mixdown)})
+    assert plain["target_lufs"] == -14.0
+    custom = await run("fl_audio", {"path": str(mixdown), "target": -23.0})
+    assert not [t for t in custom["advice"] if "louder" in t or "quieter" in t]
+
+
+async def test_audio_without_a_path_takes_the_latest_export(mixdown, monkeypatch, tmp_path):
+    monkeypatch.setenv("FL_MCP_PROJECTS", str(mixdown.parent))
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    assert (await run("fl_audio", {}))["file"] == str(mixdown)
+    monkeypatch.setenv("FL_MCP_PROJECTS", str(tmp_path / "empty"))
+    assert "no audio file" in await run("fl_audio", {}, expect_error=True)
+
+
+async def test_audio_render_exports_with_fl_then_analyzes(mixdown, monkeypatch, tmp_path):
+    flp = tmp_path / "song.flp"
+    flp.write_bytes(b"FLhd")
+    calls = []
+
+    def fake_render(project, fmt):
+        calls.append((str(project), fmt))
+        return {"audio": str(mixdown), "fmt": fmt, "seconds": 12.0}
+
+    monkeypatch.setattr(server.render, "render", fake_render)
+    out = await run("fl_audio", {"action": "render", "project": str(flp), "fmt": "flac"})
+    assert calls == [(str(flp), "flac")]
+    assert out["render"]["seconds"] == 12.0 and out["lufs_i"] == pytest.approx(-23.0, abs=0.2)
+    monkeypatch.setenv("FL_MCP_PROJECTS", str(tmp_path / "empty"))
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    error = await run("fl_audio", {"action": "render"}, expect_error=True)
+    assert "save it in FL" in error
+
+
+async def test_audio_compare_needs_a_reference(mixdown, tmp_path):
+    error = await run("fl_audio", {"action": "compare", "path": str(mixdown)}, expect_error=True)
+    assert "needs reference" in error
+    out = await run(
+        "fl_audio", {"action": "compare", "path": str(mixdown), "reference": str(mixdown)}
+    )
+    assert out["loudness_diff_lu"] == 0 and out["tonal"] == []
+
+
+async def test_audio_status_and_missing_libraries_are_explained(mixdown, monkeypatch, tmp_path):
+    monkeypatch.setenv("FL_MCP_FL_DIR", str(tmp_path / "nowhere"))
+    monkeypatch.setenv("FL_MCP_PROJECTS", str(tmp_path / "empty"))
+    status = await run("fl_audio", {"action": "status"})
+    assert status["analysis"] is True and status["fl_exe"] is None
+
+    def missing():
+        raise ValueError("audio analysis needs numpy, scipy and soundfile: install the audio extra")
+
+    monkeypatch.setattr(server.audio, "_libs", missing)
+    assert (await run("fl_audio", {"action": "status"}))["analysis"] is False
+    error = await run("fl_audio", {"path": str(mixdown)}, expect_error=True)
+    assert "audio extra" in error

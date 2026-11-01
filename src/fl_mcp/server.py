@@ -19,7 +19,7 @@ from mcp.server.mcpserver.tools import Tool
 from mcp.types import ToolAnnotations
 from pydantic import Field
 
-from fl_mcp import __version__, chain, library, mixing, produce, units
+from fl_mcp import __version__, audio, chain, library, mixing, produce, render, units
 from fl_mcp.bridge import Bridge, FLError
 from fl_mcp.commerce import Gate, LicenseError, Spend
 from fl_mcp.music import GENRES, compose
@@ -71,13 +71,13 @@ async def _spend(*ops: str) -> AsyncIterator[Spend]:
 
 
 async def fl_status(
-    probe: Annotated[bool, Field(description="also report what this FL build supports")] = False,
-    log: Annotated[bool, Field(description="also report the script's recent failures")] = False,
+    probe: Annotated[bool, Field(description="also list this FL build's API features")] = False,
+    log: Annotated[bool, Field(description="also list the script's recent errors")] = False,
 ) -> str:
     """Project snapshot: FL version, title, tempo, play/record state, loop mode, position,
-    current pattern/channel/mixer track and counts (plus plan and credits when licensed).
-    probe lists the API features this FL build has; log shows the controller script's last
-    errors. Use both when something does not work."""
+    current pattern/channel/mixer track, counts (plus credits when licensed). probe lists the
+    API features this FL build has; log shows the script's last errors: use both when
+    something does not work."""
     status = await _fl({"o": "status"})
     if probe:
         status["probe"] = await _fl({"o": "probe"})
@@ -97,10 +97,8 @@ async def fl_list(
     include_unused: Annotated[bool, Field(description="also list default/empty items")] = False,
 ) -> str:
     """List channels, mixer tracks, patterns, playlist tracks or every plugin in the project.
-    Returns {cols,rows,next,max}; default/empty items are skipped. channels rows:
-    [i,name,type,vol,pan,mute,solo,fx,plugin]; mixer rows: [i,name,vol,pan,mute,solo,
-    fx(plugin names),to(destination tracks)]; plugins rows: [n,at(c channel rack, m mixer),
-    index,slot,plugin,name,params,presets]."""
+    Returns {cols,rows,next,max}; cols names each row's fields (plugins: where it sits, its slot,
+    parameter and preset counts). Default and empty items are skipped."""
     req = {"o": "list", "k": kind, "s": start, "n": count, "a": int(include_unused)}
     return _out(await _fl(req))
 
@@ -112,8 +110,8 @@ async def fl_transport(
     value: Annotated[
         float | None,
         Field(
-            description="tempo: BPM 10-522; position: bar number (1 = start); loop: 1 song, "
-            "0 pattern; record/metronome: 1 on, 0 off, omit to toggle"
+            description="tempo: BPM; position: bar (1 = start); loop: 1 song, 0 pattern; "
+            "record/metronome: 1 on, 0 off, omit toggles"
         ),
     ] = None,
 ) -> str:
@@ -133,11 +131,9 @@ async def fl_set(
     mute: bool | None = None,
     solo: bool | None = None,
     fx: Annotated[int | None, Field(description="channel: target mixer track")] = None,
-    send: Annotated[
-        int | None, Field(description="mixer: also route this track to track N")
-    ] = None,
+    send: Annotated[int | None, Field(description="mixer: route to track N")] = None,
     level: Annotated[float | None, Field(description="send level 0-1; -1 removes the send")] = None,
-    select: Annotated[bool | None, Field(description="make it the current item")] = None,
+    select: bool | None = None,
 ) -> str:
     """Change only the given properties of a channel, mixer track, pattern or playlist track.
     channel: name color volume pan mute solo fx select. mixer: name color volume pan mute solo
@@ -169,10 +165,8 @@ async def fl_steps(
     off: Annotated[list[int] | None, Field(description="steps to turn off")] = None,
     clear: Annotated[bool, Field(description="turn all steps off first")] = False,
     pattern: Annotated[int, Field(ge=0, description="pattern to edit, 0 = current")] = 0,
-    velocity: Annotated[int | None, Field(ge=0, le=127, description="for the 'on' steps")] = None,
-    pitch: Annotated[
-        int | None, Field(ge=0, le=127, description="MIDI note for 'on' steps")
-    ] = None,
+    velocity: Annotated[int | None, Field(ge=0, le=127)] = None,
+    pitch: Annotated[int | None, Field(ge=0, le=127, description="MIDI note for 'on'")] = None,
     length: Annotated[int, Field(ge=1, le=256, description="steps to clear/report")] = 16,
 ) -> str:
     """Step sequencer of one channel in a pattern. Order: clear, off, on. Returns the steps that
@@ -225,9 +219,7 @@ async def fl_notes(
     replace: Annotated[bool, Field(description="clear the existing notes first")] = False,
     channel: Annotated[int, Field(ge=-1, description="channel to edit, -1 = current")] = -1,
     pattern: Annotated[int, Field(ge=0, description="pattern to edit, 0 = current")] = 0,
-    read: Annotated[
-        bool, Field(description="return notes exported by the last script run")
-    ] = False,
+    read: Annotated[bool, Field(description="return the last script export")] = False,
 ) -> str:
     """Piano roll notes. FL's API cannot write notes directly: this queues them and opens the
     piano roll; the user must then run Tools > Scripting > FL MCP there and press Accept. Call
@@ -292,10 +284,9 @@ async def fl_param(
     start: Annotated[int, Field(ge=0, description="first item to list")] = 0,
     limit: Annotated[int, Field(ge=1, le=120)] = 40,
 ) -> str:
-    """Any plugin on a channel or mixer slot, stock or third party. Lists parameters
-    [i,name,val,text]; view reads info or preset names. Sets one parameter (value 0-1, or real,
-    solved against the plugin's own text so '-18 dB' really shows -18 dB) or many (settings),
-    or loads a preset."""
+    """Any plugin on a channel or mixer slot, stock or third party. Lists parameters; view reads
+    info or preset names. Sets one parameter (value 0-1, or real, solved against the plugin's own
+    text so '-18 dB' really shows -18 dB) or many (settings), or loads a preset."""
     if target == "mixer" and slot < 0:
         raise ToolError("mixer needs slot 0-9")
     req: dict[str, Any] = {"o": "param", "t": target, "i": index, "s": slot}
@@ -326,15 +317,15 @@ async def fl_library(
         str | None, Field(description="kick snare clap hat ohat perc bass fx chords pad lead")
     ] = None,
     genre: Genre | None = None,
-    query: Annotated[str | None, Field(description="words to match in names and folders")] = None,
+    query: Annotated[str | None, Field(description="words in names and folders")] = None,
     path: Annotated[str | None, Field(description="info: a sample file")] = None,
     limit: Annotated[int, Field(ge=1, le=50)] = 10,
 ) -> str:
     """Sounds and plugins on this computer. scan indexes FL's sample packs, the folders in
-    FL_MCP_SAMPLES and the plugin database (once, and again after adding sounds). find ranks
-    samples for a role by name and by measured sound (length, decay, brightness, low end). kit
-    picks one sample per drum role from a single pack for a genre; give fl_produce sounds=auto to
-    build a project with it. plugins lists what is installed. info measures one file."""
+    FL_MCP_SAMPLES and the plugin database (again after adding sounds). find ranks samples for a
+    role by name and measured sound (length, decay, brightness, low end). kit picks one sample per
+    drum role from one pack for a genre (fl_produce sounds=auto uses it). plugins lists what is
+    installed. info measures one file."""
     if action == "scan":
         return _out(await _thread(library.scan, 45.0))
     if action == "plugins":
@@ -365,6 +356,51 @@ async def fl_library(
     return _out({"cols": cols, "rows": rows})
 
 
+async def fl_audio(
+    action: Literal["analyze", "render", "compare", "status"] = "analyze",
+    path: Annotated[str | None, Field(description="audio file; default latest export")] = None,
+    project: Annotated[str | None, Field(description="render: .flp; default just saved")] = None,
+    reference: Annotated[str | None, Field(description="compare: reference track")] = None,
+    fmt: Literal["wav", "mp3", "ogg", "flac"] = "wav",
+    genre: Genre | None = None,
+    target: Annotated[
+        float | None, Field(ge=-30, le=0, description="LUFS goal; default the genre's or -14")
+    ] = None,
+    ceiling: Annotated[float, Field(ge=-6, le=0, description="true peak limit, dBTP")] = -1.0,
+) -> str:
+    """Hear the mix. analyze: LUFS (integrated, short-term, momentary), loudness range, true peak,
+    crest, clipping, DC, stereo width, mono loss, 7-band spectrum and plain advice against the
+    genre's or target loudness. render: FL's command-line export of a saved .flp (Windows), then
+    analyze. compare: against a reference track. Needs the audio extra."""
+    if action == "status":
+        return _out({"analysis": audio.available(), **await _thread(render.status)})
+    goal = target if target is not None else (GENRES[genre].lufs if genre else None)
+    if action == "compare":
+        if not reference:
+            raise ToolError("compare needs reference: the track to compare with")
+        mine = path or await _thread(render.newest_audio)
+        if not mine:
+            raise ToolError("compare needs path: no audio was exported recently")
+        return _out(await _thread(audio.compare, mine, reference))
+    made: dict[str, Any] | None = None
+    if action == "render":
+        flp = project or await _thread(render.newest_project)
+        if not flp:
+            raise ToolError(
+                "no project to render: save it in FL (Ctrl+S) and call again, or pass project"
+            )
+        made = await _thread(render.render, flp, fmt)
+        path = made["audio"]
+    path = path or await _thread(render.newest_audio)
+    if not path:
+        raise ToolError("no audio file: pass path, or export one from FL (File > Export) first")
+    out = await _thread(audio.report, path, goal, ceiling)
+    out["target_lufs"] = goal if goal is not None else audio.STREAMING_LUFS
+    if made:
+        out["render"] = made
+    return _out(out)
+
+
 _WINDOWS = Literal["mixer", "channels", "playlist", "roll", "browser"]
 _BROWSE = Literal[
     "caption", "next", "prev", "left_tab", "right_tab", "expand", "collapse", "select", "preview",
@@ -376,7 +412,7 @@ async def fl_ui(
     action: Literal["window", "key", "browser", "form"],
     window: _WINDOWS | None = None,
     mode: Literal["state", "show", "hide", "focus"] = "state",
-    keys: Annotated[str | None, Field(description="comma list, e.g. 'down,enter,f8'")] = None,
+    keys: Annotated[str | None, Field(description="comma list: 'down,enter,f8'")] = None,
     browse: _BROWSE = "caption",
     query: Annotated[str | None, Field(description="goto: part of an item name")] = None,
     count: Annotated[int, Field(ge=1, le=400, description="scan/goto: steps")] = 60,
@@ -385,8 +421,8 @@ async def fl_ui(
     """Drive FL's own interface from inside FL, no mouse. window: show/hide/focus the mixer,
     channels, playlist, roll or browser. key: press up,down,left,right,enter,escape,yes,no,cut,
     copy,paste,insert,delete,next,previous,tab,menu,itemmenu,f1-f12 in the focused window (can
-    change or delete things). browser: next/prev/expand/collapse/scan/goto query, then select
-    loads the focused plugin or sample, preview plays it. form: the focused plugin window."""
+    change or delete things). browser: next/prev/expand/collapse/scan/goto, then select loads the
+    focused plugin or sample, preview plays it. form: the focused plugin window."""
     if action == "form":
         return _out(await _fl({"o": "ui", "a": "form"}))
     if action == "window":
@@ -464,38 +500,34 @@ def _find_pattern(plan: Any, ref: str) -> int:
 async def fl_produce(
     action: Annotated[
         Literal["make", "plan", "apply", "queue", "midi", "flp", "inspect", "show", "genres"],
-        Field(description="make = plan + deliver; apply = deliver a stored plan"),
+        Field(description="make = plan + deliver; apply = deliver a plan"),
     ] = "make",
     genre: Genre | None = None,
     key: Annotated[str | None, Field(description="'A minor', 'F# dorian'; default random")] = None,
-    bpm: Annotated[int | None, Field(ge=40, le=220, description="default: the genre's")] = None,
+    bpm: Annotated[int | None, Field(ge=40, le=220)] = None,
     length: Annotated[
         Literal["sketch", "short", "full"], Field(description="about 20, 60 or 90 bars")
     ] = "short",
     mood: Literal["dark", "bright", "chill", "aggressive", "epic"] | None = None,
-    energy: Annotated[float, Field(ge=0, le=1, description="density and fills")] = 0.75,
-    seed: Annotated[int | None, Field(ge=0, description="same seed, same song")] = None,
+    energy: Annotated[float, Field(ge=0, le=1)] = 0.75,
+    seed: Annotated[int | None, Field(ge=0)] = None,
     roles: Annotated[str | None, Field(description="only these, e.g. 'kick,bass,lead'")] = None,
-    plan: Annotated[str | None, Field(description="plan id; default the latest")] = None,
-    channels: Annotated[
-        str | None, Field(description="role to channel index, e.g. 'kick=0,bass=3'")
-    ] = None,
-    pattern: Annotated[str | None, Field(description="queue/show: pattern name or index")] = None,
-    role: Annotated[str | None, Field(description="queue: role to send to the piano roll")] = None,
-    template: Annotated[
-        str | None, Field(description="path of a .flp project to build on; never modified")
-    ] = None,
+    plan: Annotated[str | None, Field(description="plan id; default latest")] = None,
+    channels: Annotated[str | None, Field(description="'kick=0,bass=3'")] = None,
+    pattern: Annotated[str | None, Field(description="queue/show: name or index")] = None,
+    role: Annotated[str | None, Field(description="queue: part to send to the piano roll")] = None,
+    template: Annotated[str | None, Field(description=".flp to build on; never modified")] = None,
     replace_playlist: Annotated[bool, Field(description="flp: drop the template's clips")] = False,
     sounds: Annotated[
         str | None,
-        Field(description="flp: 'auto' = a drum kit from fl_library, or 'kick=path; snare=path'"),
+        Field(description="flp: 'auto' (a kit) or 'kick=path; snare=path'"),
     ] = None,
 ) -> str:
     """Fast production. make: builds a genre-aware plan (sections, drums, bass, chords, melody,
     mix targets) and delivers it: drums go into Channel Rack channels matched by name (kick,
     hat, bass...) as named patterns with tempo, markers, EQ and pan, and a MIDI file holds every
-    part. With template (a .flp), make and flp write a full project (all notes, the playlist;
-    sounds adds sample channels). queue: one part to the piano roll. inspect: read a template."""
+    part. With template (.flp), make and flp write a full project (notes, playlist; sounds adds
+    sample channels). queue: one part to the piano roll. inspect: read a template."""
     if action == "genres":
         return _out({k: [g.name, *g.bpm, g.default_scale] for k, g in GENRES.items()})
     if action == "inspect":
@@ -597,20 +629,20 @@ async def fl_mix(
     seconds: Annotated[float, Field(ge=1, le=30, description="how long to play and measure")] = 6.0,
     bar: Annotated[float | None, Field(ge=1, description="start playing from this bar")] = None,
     plan: Annotated[
-        str | None, Field(description="balance/chain: plan for role targets; default latest")
+        str | None, Field(description="role targets from this plan; default latest")
     ] = None,
     targets: Annotated[
-        str | None, Field(description="balance: explicit 'track=peak_dB' list, e.g. '1=-8,2=-9'")
+        str | None, Field(description="balance: 'track=peak_dB', e.g. '1=-8,2=-9'")
     ] = None,
     track: Annotated[int | None, Field(ge=0, description="chain: one mixer track")] = None,
-    role: Annotated[str | None, Field(description="chain: role such as kick, bass, master")] = None,
+    role: Annotated[str | None, Field(description="chain: kick, bass, master...")] = None,
     apply: Annotated[bool, Field(description="chain: set the role's starting values")] = False,
 ) -> str:
     """Measure and fix the mix with the mixer's peak meters while the project plays (stops again
     if it was stopped). meter: peak dBFS per track. balance: faders to role targets (kick -8,
-    bass -9, hats -20; master under -3). doctor: problems worst first (clipping, headroom,
-    routing, pan, missing plugins). chain: plugins on a track vs what its role wants; apply sets
-    compressor, limiter, reverb and delay values by meaning on plugins already there."""
+    bass -9, hats -20). doctor: problems worst first (clipping, headroom, routing, pan, missing
+    plugins). chain: plugins on a track vs what its role wants; apply sets compressor, limiter,
+    reverb and delay values by meaning on plugins already there."""
     if action == "doctor":
         return _out(await _thread(chain.doctor, bridge.call, seconds, bar, plan))
     if action == "chain":
@@ -739,6 +771,7 @@ mcp = MCPServer(
         _tool(fl_call, readOnlyHint=False, destructiveHint=True, idempotentHint=False),
         _tool(fl_library, **_EDIT),
         _tool(fl_ui, readOnlyHint=False, destructiveHint=True, idempotentHint=False),
+        _tool(fl_audio, **_READ),
         _tool(fl_api, **_READ),
     ],
 )
