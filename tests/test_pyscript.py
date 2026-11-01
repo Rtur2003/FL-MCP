@@ -1,0 +1,128 @@
+import json
+import sys
+import types
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+PYSCRIPT = Path(__file__).parents[1] / "src" / "fl_mcp" / "fl" / "FL MCP.pyscript"
+
+
+class Note:
+    def __init__(self):
+        self.number = self.time = self.length = 0
+        self.velocity = 0.0
+
+
+class Score:
+    PPQ = 96
+
+    def __init__(self):
+        self.notes = []
+        self.cleared = 0
+
+    @property
+    def noteCount(self):
+        return len(self.notes)
+
+    def addNote(self, note):
+        copy = Note()
+        copy.__dict__.update(note.__dict__)
+        self.notes.append(copy)
+
+    def getNote(self, index):
+        return self.notes[index]
+
+    def clearNotes(self, all=False):
+        assert all is True
+        self.notes.clear()
+        self.cleared += 1
+
+
+@pytest.fixture
+def roll(monkeypatch, tmp_path):
+    messages = []
+    flp = types.ModuleType("flpianoroll")
+    flp.score, flp.Note = Score(), Note
+    flp.ScriptDialog = lambda title, text: ("dialog", title, text)
+    flp.Utils = SimpleNamespace(ShowMessage=messages.append)
+    monkeypatch.setitem(sys.modules, "flpianoroll", flp)
+
+    def load(folder=tmp_path):
+        source = PYSCRIPT.read_text(encoding="utf-8").replace('"@DIR@"', json.dumps(str(folder)))
+        module = types.ModuleType("roll")
+        exec(compile(source, "FL MCP.pyscript", "exec"), module.__dict__)
+        return module
+
+    def queue(notes, replace=False, serial=7):
+        (tmp_path / "inbox.json").write_text(
+            json.dumps({"serial": serial, "replace": replace, "notes": notes}), encoding="utf-8"
+        )
+
+    return SimpleNamespace(
+        load=load,
+        queue=queue,
+        score=flp.score,
+        messages=messages,
+        dir=tmp_path,
+        state=lambda: json.loads((tmp_path / "state.json").read_text()),
+    )
+
+
+def test_dialog_is_plain(roll):
+    assert roll.load().createDialog() == (
+        "dialog",
+        "FL MCP",
+        "Adds the notes queued by the FL MCP server and exports the piano roll.",
+    )
+
+
+def test_notes_are_converted_to_ticks(roll):
+    roll.queue([[60, 0, 1, 100], [64, 1.5, 0.5, 127], [67, 2, 0.001, 1]])
+    roll.load().apply(None)
+    got = [(n.number, n.time, n.length, round(n.velocity, 3)) for n in roll.score.notes]
+    assert got == [(60, 0, 96, 0.787), (64, 144, 48, 1.0), (67, 192, 1, 0.008)]
+
+
+def test_apply_is_idempotent_and_replace_clears(roll):
+    roll.queue([[60, 0, 1, 100], [62, 1, 1, 100]])
+    module = roll.load()
+    module.apply(None)
+    module.apply(None)
+    assert roll.score.noteCount == 2
+    roll.queue([[72, 0, 1, 100]], replace=True)
+    module.apply(None)
+    assert [n.number for n in roll.score.notes] == [72] and roll.score.cleared == 1
+
+
+def test_state_export_reports_serial_and_beats(roll):
+    roll.queue([[60, 0.25, 0.5, 64]], serial=1234)
+    roll.load().apply(None)
+    state = roll.state()
+    assert state["serial"] == 1234 and state["count"] == 1 and state["ppq"] == 96
+    assert state["notes"] == [[60, 0.25, 0.5, 64]] and state["ts"] > 0
+    assert not (roll.dir / "state.json.tmp").exists()
+
+
+def test_export_without_queue(roll):
+    note = Note()
+    note.number, note.time, note.length, note.velocity = 48, 96, 96, 0.5
+    roll.score.addNote(note)
+    roll.load().apply(None)
+    state = roll.state()
+    assert state["serial"] is None and state["notes"] == [[48, 1.0, 1.0, 64]]
+    assert roll.score.noteCount == 1
+
+
+def test_errors_are_shown_not_raised(roll):
+    (roll.dir / "inbox.json").write_text("{broken", encoding="utf-8")
+    roll.load().apply(None)
+    assert roll.messages and roll.messages[0].startswith("FL MCP: JSONDecodeError")
+
+
+def test_default_folder_when_not_templated(roll, monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    module = roll.load("@DIR@")
+    assert module.DIR == str(tmp_path / ".fl-mcp")
