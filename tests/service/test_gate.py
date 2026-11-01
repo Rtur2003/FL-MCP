@@ -256,3 +256,9 @@ def test_a_missing_key_is_asked_for_without_echo(gate, issue, monkeypatch, capsy
     with pytest.raises(SystemExit) as done:
         cli.main(["login"])
     assert done.value.code == 0
+
+
+def test_an_unfilled_extension_placeholder_is_not_mistaken_for_a_key(gate, monkeypatch):
+    monkeypatch.setenv("FL_MCP_LICENSE", "${user_config.license_key}")
+    out = gate.status()
+    assert out["signed_in"] is False and "fl-mcp login" in out["note"]

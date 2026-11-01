@@ -1,11 +1,10 @@
 """License key format shared by the client and the license service.
 
 FLMCP-XXXXX-XXXXX-XXXXX-XXXXX: 19 random Crockford base32 characters (95 bits) plus one check
-character, so a mistyped key is caught on the user's machine before any request is made.
+character. Any single mistyped character is caught on the user's machine before a request is made.
 """
 
 import hashlib
-import hmac
 import secrets
 
 ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
@@ -14,7 +13,8 @@ _FIX = str.maketrans({"O": "0", "I": "1", "L": "1"})
 
 
 def _check(body: str) -> str:
-    return ALPHABET[hashlib.sha256(body.encode()).digest()[0] % 32]
+    """Odd position weights make every single wrong character change the sum."""
+    return ALPHABET[sum((2 * i + 1) * ALPHABET.index(ch) for i, ch in enumerate(body)) % 32]
 
 
 def _format(chars: str) -> str:
@@ -34,7 +34,7 @@ def normalize(text: str) -> str | None:
     s = s.translate(_FIX)
     if len(s) != 20 or any(ch not in ALPHABET for ch in s):
         return None
-    return s if hmac.compare_digest(_check(s[:19]), s[19]) else None
+    return s if _check(s[:19]) == s[19] else None
 
 
 def hash_key(text: str) -> str | None:

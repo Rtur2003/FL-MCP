@@ -18,3 +18,5 @@ jobs:
       - run: .venv/bin/ruff check .
       - run: .venv/bin/ruff format --check .
       - run: .venv/bin/pytest
+      - run: .venv/bin/python packaging/build_mcpb.py --out dist
+        if: matrix.python != '3.10'

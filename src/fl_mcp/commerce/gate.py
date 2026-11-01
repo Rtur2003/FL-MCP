@@ -195,7 +195,8 @@ class Gate:
         if st.get("token"):
             return st["token"]
         env = os.environ.get("FL_MCP_LICENSE", "").strip()
-        if env:  # the desktop extension passes the key it asked for at install time
+        if env and not env.startswith("${"):  # unfilled placeholders are not keys
+            # the desktop extension passes the key it asked for at install time
             self.login(env)
             return self._load()["token"]
         raise LicenseError(

@@ -23,16 +23,24 @@ def test_look_alike_characters_are_read_the_crockford_way():
     assert keys.hash_key(swapped) == keys.hash_key(key)
 
 
-def test_a_single_wrong_character_is_caught():
-    key = keys.new_key()
-    body = keys.normalize(key)
-    caught = 0
-    trials = 0
+def test_every_single_wrong_character_is_caught():
+    body = keys.normalize(keys.new_key())
     for i in range(20):
-        wrong = "0" if body[i] != "0" else "1"
-        trials += 1
-        caught += keys.normalize(body[:i] + wrong + body[i + 1 :]) is None
-    assert caught >= trials - 2, "a check character catches about 31 of 32 typos"
+        for wrong in keys.ALPHABET:
+            if wrong != body[i]:
+                assert keys.normalize(body[:i] + wrong + body[i + 1 :]) is None, (i, wrong)
+
+
+def test_swapping_neighbours_is_almost_always_caught():
+    caught = total = 0
+    for _ in range(40):
+        body = keys.normalize(keys.new_key())
+        for i in range(19):
+            if body[i] != body[i + 1]:
+                swapped = body[:i] + body[i + 1] + body[i] + body[i + 2 :]
+                total += 1
+                caught += keys.normalize(swapped) is None
+    assert caught / total > 0.9
 
 
 def test_garbage_is_not_a_key():
