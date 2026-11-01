@@ -1,8 +1,11 @@
+import os
 from types import SimpleNamespace
 
 import pytest
 
-from tests.fakefl import FakeFL, LoopbackBridge, load_script
+os.environ.setdefault("FL_MCP_DESKTOP", "0")
+
+from tests.fakefl import FakeFL, LoopbackBridge, load_script  # noqa: E402
 
 
 @pytest.fixture

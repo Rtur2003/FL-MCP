@@ -488,3 +488,32 @@ def test_sounds_can_share_the_master_and_a_missing_sampler_is_reported(tmp_path)
     src.write_bytes(template())
     with pytest.raises(FlpError, match="needs one Sampler channel"):
         build(src, plan, tmp_path / "y.flp", sounds={"kick": "/s/k.wav"})
+
+
+def test_fl2025_event_172_80_byte_playlist_and_16bit_routing(tmp_path):
+    """FL Studio 2025 writes a 3-byte event 172, 80-byte clips, and 2-byte route 104."""
+    raw = template(version="25.2.5.5319", clips=2, sampler=True)
+    p = Flp.parse(raw)
+    # Insert FL 25 header event 172 (3 bytes), 80-byte clips, and 2-byte route 104
+    p.events.insert(1, Event(172, b"\x01\x01\x00"))
+    for k, e in enumerate(p.events):
+        if e.id == 22:
+            p.events[k] = Event(104, struct.pack("<H", 3))
+        elif e.id == 233 and e.data:
+            p.events[k] = Event(
+                233, item(0, 1, 384, 1, bytes(48)) + item(384, 1, 384, 2, bytes(48))
+            )
+    fl25_bytes = p.dumps()
+    parsed = Flp.parse(fl25_bytes)
+    assert parsed.dumps() == fl25_bytes
+    assert parsed.inserts_in_use() == {3}
+    assert len(parsed.playlist_items()) == 2
+    src = tmp_path / "fl25.flp"
+    src.write_bytes(fl25_bytes)
+    plan = compose("house", seed=3, length="sketch")
+    out = tmp_path / "out25.flp"
+    report = build(src, plan, out, sounds={"kick": "/s/kick.wav", "clap": "/s/clap.wav"})
+    assert report["created"]["kick"]["insert"] == 4 and report["created"]["clap"]["insert"] == 5
+    built = Flp.parse(out.read_bytes())
+    assert len(built.playlist_items()) == 2 + len(plan.clips)
+    assert built.inserts_in_use() == {3, 4, 5}

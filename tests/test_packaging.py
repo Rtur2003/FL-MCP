@@ -3,6 +3,7 @@
 import hashlib
 import importlib.util
 import json
+import os
 import queue
 import subprocess
 import sys
@@ -125,6 +126,7 @@ def test_the_bundled_server_starts_and_lists_its_tools(bundle, tmp_path):
         stderr=subprocess.PIPE,
         text=True,
         cwd=root,
+        env={**os.environ, "FL_MCP_DESKTOP": "0"},
     )
     lines: queue.Queue[str] = queue.Queue()
     threading.Thread(target=lambda: [lines.put(x) for x in proc.stdout], daemon=True).start()

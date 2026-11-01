@@ -16,10 +16,40 @@ from fl_mcp.music.plan import Plan
 PPQS = (24, 48, 72, 96, 120, 144, 168, 192, 384, 768, 960)
 TEMPO, VERSION = 156, 199
 NEW_CHAN, CHAN_TYPE, CHAN_NAME, PLUGIN_NAME, SAMPLE_PATH = 64, 21, 203, 201, 196
-CHAN_ROUTE, CHAN_COLOR, CHAN_LEVELS = 22, 128, 219  # insert number, RGB, pan and volume
+CHAN_ROUTE, CHAN_ROUTE_16, CHAN_COLOR, CHAN_LEVELS = 22, 104, 128, 219  # insert, RGB, pan/vol
 NEW_PAT, PAT_NAME, PAT_COLOR, NOTES = 65, 193, 150, 224
 NEW_ARR, PLAYLIST = 99, 233
-PATTERN_EVENTS = {26, 150, 157, 158, 160, 161, 162, 164, 193, 223, 224, 226}
+PATTERN_EVENTS = {
+    25,
+    26,
+    33,
+    34,
+    45,
+    46,
+    52,
+    72,
+    91,
+    101,
+    148,
+    150,
+    157,
+    158,
+    160,
+    161,
+    162,
+    164,
+    168,
+    171,
+    193,
+    205,
+    223,
+    224,
+    226,
+    227,
+    230,
+    252,
+    253,
+}
 NOTE = struct.Struct("<IHHIHH8B")  # position, flags, channel iid, length, key, group, 8 bytes
 PL_BASE = 20480
 CHANNEL_KINDS = {0: "sampler", 1: "hybrid", 2: "plugin", 3: "layer", 4: "audio", 5: "automation"}
@@ -46,7 +76,7 @@ class Event:
             or 64 <= self.id < 128
             and n != 2
             or 128 <= self.id < 192
-            and n != 4
+            and n != (3 if self.id == 172 else 4)
         ):
             raise FlpError(f"event {self.id} has {n} data bytes")
         if self.id < 192:
@@ -103,7 +133,9 @@ class Flp:
         while pos < len(raw):
             start, eid = pos, raw[pos]
             pos += 1
-            if eid < 192:
+            if eid == 172:
+                n = 3
+            elif eid < 192:
                 n = 1 if eid < 64 else 2 if eid < 128 else 4
             else:
                 n = shift = 0
@@ -189,7 +221,11 @@ class Flp:
     def inserts_in_use(self) -> set[int]:
         used = set()
         for s, e in self._channel_spans().values():
-            used |= {x.data[0] for x in self.events[s:e] if x.id == CHAN_ROUTE}
+            for x in self.events[s:e]:
+                if x.id == CHAN_ROUTE:
+                    used.add(x.data[0])
+                elif x.id == CHAN_ROUTE_16:
+                    used.add(struct.unpack("<H", x.data)[0])
         return used
 
     def add_sampler(
@@ -221,11 +257,19 @@ class Flp:
                 if e.id == eid:
                     block[k] = Event(eid, data)
                     return
+            if eid == SAMPLE_PATH:
+                tail = next((k for k, e in enumerate(block) if e.id == 170), None)
+                if tail is not None:
+                    block.insert(tail, Event(eid, data))
+                    return
             block.append(Event(eid, data))
 
         put(CHAN_NAME, _utf16(name))
         put(SAMPLE_PATH, _utf16(sample))
-        put(CHAN_ROUTE, bytes([insert]))
+        if any(e.id == CHAN_ROUTE_16 for e in block):
+            put(CHAN_ROUTE_16, struct.pack("<H", insert))
+        else:
+            put(CHAN_ROUTE, bytes([insert]))
         if color is not None:
             put(CHAN_COLOR, bytes([*color, 0]))
         levels = next((e for e in block if e.id == CHAN_LEVELS), None)
@@ -277,9 +321,24 @@ class Flp:
         return out
 
     def _record_size(self, data: bytes) -> int:
-        """Playlist records are 32 bytes up to FL 20 and 60 from FL 21; sizes that fit both
-        (multiples of 480) are decided by the project version."""
-        for size in (60, 32) if self._version_major() >= 21 else (32, 60):
+        """Playlist records are 32 bytes up to FL 20, 60 in FL 21-24, and 80 from FL 25;
+        verify PL_BASE at +4 when non-empty, falling back to version-ordered divisibility."""
+        vm = self._version_major()
+        order = (
+            (80, 60, 32)
+            if (vm == 25 or self.version.startswith("24.2.99"))
+            else (60, 80, 32)
+            if vm >= 21
+            else (32, 60, 80)
+        )
+        if data:
+            for size in order:
+                if len(data) % size == 0 and all(
+                    struct.unpack_from("<H", data, k + 4)[0] == PL_BASE
+                    for k in range(0, len(data), size)
+                ):
+                    return size
+        for size in order:
             if len(data) % size == 0:
                 return size
         raise FlpError("unrecognised playlist layout; this project version is not supported")
@@ -303,6 +362,7 @@ class Flp:
 
     def summary(self) -> dict:
         pats = self.patterns()
+        has_playlist = any(e.id == PLAYLIST for e in self.events)
         return {
             "version": self.version,
             "ppq": self.ppq,
@@ -311,7 +371,7 @@ class Flp:
             "patterns": len(pats),
             "named_pattern_with_notes": self._seed_pattern() is not None,
             "sampler_channel": any(c.kind == "sampler" for c in self.channels()),
-            "playlist_items": len(self.playlist_items()),
+            "playlist_items": len(self.playlist_items()) if has_playlist else 0,
         }
 
     # ---- patching
@@ -378,7 +438,7 @@ class Flp:
         ev = self._playlist_event(arrangement)
         size = self._record_size(ev.data)
         old = [ev.data[k : k + size] for k in range(0, len(ev.data), size)]
-        if not old and size == 60:
+        if not old and size in (60, 80):
             raise FlpError("the template playlist needs one clip to build on")
         seed = (
             old[0]
