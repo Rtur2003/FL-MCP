@@ -1,0 +1,43 @@
+{
+  "name": "fl-studio",
+  "displayName": "FL Studio",
+  "version": "0.1.0",
+  "description": "Control FL Studio from Claude: produce tracks fast, mix and master with measurements, drive any plugin in real units, and do what the scripting API cannot.",
+  "author": {
+    "name": "Hasan Arthur Altuntaş",
+    "url": "https://github.com/Rtur2003"
+  },
+  "homepage": "https://github.com/Rtur2003/FL-MCP",
+  "repository": "https://github.com/Rtur2003/FL-MCP",
+  "license": "MIT",
+  "keywords": [
+    "fl studio",
+    "music",
+    "daw",
+    "mixing",
+    "mastering",
+    "midi"
+  ],
+  "userConfig": {
+    "license_key": {
+      "type": "string",
+      "title": "Licence key",
+      "description": "Only for the credit-based tools; leave empty otherwise.",
+      "sensitive": true,
+      "required": false,
+      "default": ""
+    },
+    "desktop": {
+      "type": "boolean",
+      "title": "Desktop control",
+      "description": "Let the model see FL Studio's screen and press its keys (only while an FL window is in front). Off by default.",
+      "default": false
+    },
+    "port": {
+      "type": "string",
+      "title": "MIDI port name",
+      "description": "The virtual MIDI port FL Studio listens on.",
+      "default": "FL MCP"
+    }
+  }
+}

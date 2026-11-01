@@ -1,0 +1,23 @@
+{
+  "name": "fl-mcp",
+  "owner": {
+    "name": "Hasan Arthur Altuntaş",
+    "url": "https://github.com/Rtur2003"
+  },
+  "description": "FL Studio plugin for Claude Code",
+  "plugins": [
+    {
+      "name": "fl-studio",
+      "source": "./plugin",
+      "description": "Control FL Studio from Claude: produce tracks fast, mix and master with measurements, drive any plugin in real units, and do what the scripting API cannot.",
+      "version": "0.1.0",
+      "category": "music",
+      "tags": [
+        "fl-studio",
+        "music",
+        "mixing",
+        "midi"
+      ]
+    }
+  ]
+}

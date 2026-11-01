@@ -20,7 +20,18 @@ from mcp.server.mcpserver.tools import Tool
 from mcp.types import ToolAnnotations
 from pydantic import Field
 
-from fl_mcp import __version__, audio, chain, desk, library, mixing, produce, render, units
+from fl_mcp import (
+    __version__,
+    audio,
+    chain,
+    desk,
+    guides,
+    library,
+    mixing,
+    produce,
+    render,
+    units,
+)
 from fl_mcp.bridge import Bridge, FLError
 from fl_mcp.commerce import Gate, LicenseError, Spend
 from fl_mcp.music import GENRES, compose
@@ -884,6 +895,85 @@ mcp = MCPServer(
     + (DESK_NOTE if desk.enabled() else ""),
     tools=_tools(desk.enabled()),
 )
+
+
+def _reader(topic: str) -> Any:
+    def read() -> str:
+        return guides.body(topic)
+
+    return read
+
+
+for _key, _topic in guides.TOPICS.items():
+    mcp.resource(
+        guides.uri(_key),
+        name=f"{_key}_guide",
+        title=_topic.title,
+        description=f"{_topic.description} Read when {_topic.when}",
+        mime_type="text/markdown",
+    )(_reader(_key))
+
+
+def _task(request: str, *topics: str) -> str:
+    return " ".join(request.split()) + "\n\n" + "\n\n".join(guides.body(t) for t in topics)
+
+
+@mcp.prompt(title="Make a track", description="Build a complete, mixed track in FL Studio")
+def make_beat(genre: str = "", mood: str = "", length: str = "short") -> str:
+    what = " ".join(x for x in (length, mood, genre, "track") if x)
+    pick = "" if genre else " Pick the genre that fits the request, or ask if it is unclear."
+    return _task(
+        f"Make a {what} in the open FL Studio project with the FL Studio tools.{pick} Plan it "
+        "with fl_produce, deliver it, mix it with fl_mix, then measure it with fl_audio and fix "
+        "what the advice says. Finish by telling the user what was made, what was measured and "
+        "what is left for them.",
+        "produce",
+        "mix",
+    )
+
+
+@mcp.prompt(title="Check the mix", description="Measure the open project and fix what is wrong")
+def mix_check(genre: str = "") -> str:
+    goal = f" Aim for the {genre} loudness target." if genre else ""
+    return _task(
+        "Check and improve the mix of the open FL Studio project: fl_mix doctor first, then "
+        f"balance, chains, and a measured render with fl_audio.{goal} Change one thing at a "
+        "time and report the before and after numbers.",
+        "mix",
+        "plugins",
+    )
+
+
+@mcp.prompt(title="Master", description="Bring the mix to a release-ready loudness and peak")
+def master(genre: str = "", target_lufs: str = "") -> str:
+    goal = f" Target {target_lufs} LUFS." if target_lufs else ""
+    style = f" The genre is {genre}." if genre else ""
+    return _task(
+        "Master the open FL Studio project: measure with fl_audio, adjust only the master chain "
+        f"(EQ, glue, limiter input gain and a -1.0 dB ceiling) and measure again.{style}{goal} "
+        "Do not touch the balance unless fl_mix doctor finds a real fault; say so if it does.",
+        "mix",
+    )
+
+
+@mcp.prompt(title="Fix the connection", description="Diagnose why FL Studio does not answer")
+def fix_connection() -> str:
+    return _task(
+        "FL Studio is not answering or a feature fails. Call fl_status with probe and log, "
+        "work through the table, and tell the user the exact step to take.",
+        "setup",
+    )
+
+
+@mcp.prompt(title="Load a plugin", description="Add a plugin or sample to a channel or mixer slot")
+def load_plugin(name: str, target: str = "") -> str:
+    where = f" onto {target}" if target else ""
+    return _task(
+        f"Load '{name}'{where} in the open FL Studio project, checking after each step that it "
+        "landed where intended, then set it up for its role.",
+        "automation",
+        "plugins",
+    )
 
 
 def serve() -> None:

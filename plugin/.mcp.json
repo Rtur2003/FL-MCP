@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "fl-studio": {
+      "command": "uvx",
+      "args": [
+        "--from",
+        "fl-mcp[audio] @ git+https://github.com/Rtur2003/FL-MCP",
+        "fl-mcp"
+      ],
+      "env": {
+        "FL_MCP_LICENSE": "${user_config.license_key}",
+        "FL_MCP_DESKTOP": "${user_config.desktop}",
+        "FL_MCP_PORT": "${user_config.port}"
+      }
+    }
+  }
+}

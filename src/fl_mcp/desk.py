@@ -88,9 +88,9 @@ def flag_file() -> Path:
 
 
 def enabled() -> bool:
-    env = os.environ.get("FL_MCP_DESKTOP")
-    if env is not None:
-        return env.strip().lower() in TRUE
+    env = os.environ.get("FL_MCP_DESKTOP", "").strip()
+    if env:  # a client that passes an empty value means "not set"
+        return env.lower() in TRUE
     return flag_file().is_file()
 
 
