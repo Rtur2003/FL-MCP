@@ -102,3 +102,18 @@ def test_the_report_reads_as_text_and_is_saved_as_json(fl, home):
     path = selftest.save(report)
     assert json.loads(path.read_text())["summary"] == report["summary"]
     assert path.name == "selftest.json"
+
+
+def test_default_mixer_and_param_failure_do_not_cascade(fl, home):
+    def default_mixer_and_broken_params(req):
+        if req["o"] == "list" and req.get("k") == "mixer" and req.get("a") == 1:
+            out = fl.call(req)
+            return {**out, "rows": out["rows"][:1]}
+        if req["o"] == "param" and req.get("a") == "params":
+            raise FLError("param error")
+        return fl.call(req)
+
+    checks = by_name(selftest.run(default_mixer_and_broken_params))
+    assert checks["mixer write"]["status"] == "ok"
+    assert checks["plugin params"]["status"] == "fail"
+    assert checks["plugin real units"]["status"] == "skip"

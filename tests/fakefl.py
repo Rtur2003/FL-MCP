@@ -41,6 +41,12 @@ MODULES = [
 ]
 
 
+# fl-studio-api-stubs mistakenly copied pickupMode onto getParamValueString;
+# real FL Studio (verified on FL 2025 API 40) takes at most 4 arguments:
+# (paramIndex, index, slotIndex=-1, useGlobalIndex=False).
+plugins.getParamValueString.__signature__ = inspect.signature(plugins.getParamValue)
+
+
 def _checked(stub, impl, label):
     sig = inspect.signature(stub)
 
@@ -362,6 +368,9 @@ class FakeFL:
     def ui_getFocusedNodeFileType(self):
         return self.browser[self.browser_at][1]
 
+    def ui_isInPopupMenu(self):
+        return False
+
     def general_getChangedFlag(self):
         return self.changed
 
@@ -383,7 +392,7 @@ class FakeFL:
     # ---- mixer
 
     def mixer_getCurrentTempo(self, asInt):
-        return self.bpm
+        return self.bpm if asInt else round(self.bpm * 1000)
 
     def mixer_trackCount(self):
         return len(self.tracks)
@@ -675,7 +684,7 @@ class FakeFL:
             return ""
         return f"{x:.2f}"
 
-    def plugins_getParamValueString(self, paramIndex, index, slotIndex, pickupMode, useGlobalIndex):
+    def plugins_getParamValueString(self, paramIndex, index, slotIndex, useGlobalIndex):
         entry = self._plug(index, slotIndex, useGlobalIndex)[1][paramIndex]
         return self.param_text(entry[2] if len(entry) > 2 else "", entry[1])
 

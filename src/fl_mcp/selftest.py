@@ -109,6 +109,11 @@ class Run:
         rows = self.ctx["mixer"]["rows"]
         row = next((r for r in rows if r[0] >= 1), None)
         if row is None:
+            all_rows = self.call({"o": "list", "k": "mixer", "s": 1, "n": 1, "a": 1}).get(
+                "rows", []
+            )
+            row = all_rows[0] if all_rows else None
+        if row is None:
             raise Skip("no used mixer track besides the master")
         index, before = row[0], row[2]
         probe = 0.5 if abs(before - 0.5) > 0.05 else 0.6
@@ -157,7 +162,7 @@ class Run:
 
     def plugin_units(self) -> str:
         where, index, slot = self.ctx.get("plugin", (None, None, None))
-        if where is None:
+        if where is None or "params" not in self.ctx:
             raise Skip("needs a plugin")
         for i, name, val, text, *_ in self.ctx["params"]["rows"]:
             parsed = units.parse_value(text)

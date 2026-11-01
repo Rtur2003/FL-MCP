@@ -113,7 +113,11 @@ def test_the_agent_has_a_description_and_names_real_tools():
 def test_claude_accepts_the_plugin_and_the_marketplace(tmp_path):
     base = __import__("os").environ
     env = {
-        **{k: v for k, v in base.items() if k.upper() in ("SYSTEMROOT", "TEMP", "TMP", "APPDATA", "LOCALAPPDATA", "USERPROFILE")},
+        **{
+            k: v
+            for k, v in base.items()
+            if k.upper() in ("SYSTEMROOT", "TEMP", "TMP", "APPDATA", "LOCALAPPDATA", "USERPROFILE")
+        },
         "CLAUDE_CONFIG_DIR": str(tmp_path),
         "PATH": base["PATH"],
         "HOME": str(tmp_path),

@@ -455,9 +455,18 @@ def _op_set(r):
 # ---------------------------------------------------------------- transport / status
 
 
+def _tempo():
+    v = _try(mixer.getCurrentTempo, 1)
+    if v is None:
+        v = _try(mixer.getCurrentTempo)
+    if v is None:
+        return None
+    return _r(v / 1000.0 if v > 1000 else v)
+
+
 def _brief():
     return {
-        "bpm": _try(lambda: _r(mixer.getCurrentTempo())),
+        "bpm": _tempo(),
         "play": bool(_try(transport.isPlaying)),
         "rec": bool(_try(transport.isRecording)),
         "mode": "song" if _try(transport.getLoopMode) == 1 else "pattern",
@@ -686,7 +695,7 @@ def _find_param(i, slot, glob, ref):
 
 
 def _shown(i, slot, glob, p):
-    return plugins.getParamValueString(p, i, slot, midi.PIM_None, glob)
+    return plugins.getParamValueString(p, i, slot, glob)
 
 
 def _param_row(i, slot, glob, p):
@@ -1079,24 +1088,43 @@ def _win_state(name):
     return {"visible": bool(ui.getVisible(w)), "focused": bool(ui.getFocused(w))}
 
 
+_SKIP_EXPAND = (
+    "currentproject",
+    "recentfiles",
+    "pluginpresets",
+    "channelpresets",
+    "mixerpresets",
+    "scores",
+    "backup",
+    "channelenvelopes",
+    "clipboardfiles",
+)
+
+
 def _browser_item(name=None):
-    return [name or ui.getFocusedNodeCaption(), ui.getFocusedNodeFileType()]
+    cap = name or ui.getFocusedNodeCaption()
+    if not cap:
+        _try(ui.navigateBrowserTabs, 0)
+        cap = ui.getFocusedNodeCaption()
+    return [cap, ui.getFocusedNodeFileType()]
 
 
 def _browser_walk(count, expand, want, here=False):
     """Step down the browser tree reading each item; stop at a match or at the end of the list.
     With here, the item that has the focus now is checked before the first step."""
     rows, same, last = [], 0, None
-    if here and want and want in _key(_browser_item()[0]):
-        return [_browser_item()], 0, True
+    cur = _browser_item()
+    if here and want and want in _key(cur[0]):
+        return [cur], 0, True
     for step in range(count):
-        row = _browser_item(ui.navigateBrowser(41, bool(expand)))
-        same = same + 1 if row[0] == last else 0
+        sh = bool(expand) and cur[1] == -100 and _key(cur[0]) not in _SKIP_EXPAND
+        cur = _browser_item(ui.navigateBrowser(41, sh))
+        same = same + 1 if cur[0] == last else 0
         if same >= 2:
             break
-        last = row[0]
-        rows.append(row)
-        if want and want in _key(row[0]):
+        last = cur[0]
+        rows.append(cur)
+        if want and want in _key(cur[0]):
             return rows, step + 1, True
     return rows, len(rows), False
 
@@ -1115,12 +1143,18 @@ def _op_browser(r):
         ui.toggleBrowserNode(int(r.get("v", -1)))
         return {"item": _browser_item()}
     if b == "select":
+        if not ui.getFocused(midi.widBrowser):
+            ui.setFocused(midi.widBrowser)
         ui.selectBrowserMenuItem()
+        if _try(ui.isInPopupMenu):
+            ui.down(1)
+            ui.enter()
         return {"item": _browser_item()}
     if b == "preview":
         ui.previewBrowserMenuItem()
         return {"item": _browser_item()}
     if b == "top":
+        _browser_item()
         last, same = None, 0
         for _ in range(_idx(r.get("n") or 400, 1, 600, "count")):
             name = _browser_item(ui.navigateBrowser(40, False))[0]
@@ -1152,12 +1186,15 @@ def _op_ui(r):
             raise ValueError("window must be one of " + ", ".join(sorted(_WIN)))
         v = r.get("v") or "?"
         if v == "show":
-            ui.showWindow(_WIN[name])
+            if not ui.getVisible(_WIN[name]):
+                ui.showWindow(_WIN[name])
         elif v == "hide":
             ui.hideWindow(_WIN[name])
         elif v == "focus":
-            ui.showWindow(_WIN[name])
-            ui.setFocused(_WIN[name])
+            if not ui.getVisible(_WIN[name]):
+                ui.showWindow(_WIN[name])
+            if not ui.getFocused(_WIN[name]):
+                ui.setFocused(_WIN[name])
         elif v != "?":
             raise ValueError("v must be show, hide, focus or ?")
         return _win_state(name)
