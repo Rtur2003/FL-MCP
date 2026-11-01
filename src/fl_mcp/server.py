@@ -1,11 +1,13 @@
 """MCP server for FL Studio. Tool schemas are kept flat and small so every model can use them."""
 
+import contextlib
 import functools
 import inspect
 import json
 import os
 import secrets
 import time
+from collections.abc import AsyncIterator
 from importlib import resources
 from typing import Annotated, Any, Literal
 
@@ -18,6 +20,7 @@ from pydantic import Field
 
 from fl_mcp import __version__, mixing, produce
 from fl_mcp.bridge import Bridge, FLError
+from fl_mcp.commerce import Gate, LicenseError, Spend
 from fl_mcp.music import GENRES, compose
 from fl_mcp.paths import data_dir
 
@@ -33,8 +36,13 @@ INSTRUCTIONS = (
     "roll through fl_notes (the user runs Tools > Scripting > FL MCP once). Inspect with "
     "fl_status/fl_list, change with fl_set; use fl_api + fl_call only for anything else."
 )
+CREDITS_NOTE = (
+    " fl_produce (new plans, .flp projects) and fl_mix balance use licence credits; fl_status "
+    "shows the balance and prices. If credits run out, tell the user instead of retrying."
+)
 
 bridge = Bridge()
+gate = Gate()
 Beats = Annotated[float, Field(ge=0)]
 Index = Annotated[int, Field(ge=0)]
 
@@ -50,10 +58,23 @@ def _out(obj: Any) -> str:
     return json.dumps(obj, separators=(",", ":"), ensure_ascii=False)
 
 
+@contextlib.asynccontextmanager
+async def _spend(*ops: str) -> AsyncIterator[Spend]:
+    """Reserve credits for ops; bill.ok(op) marks each one delivered. No-op when not metered."""
+    try:
+        async with gate.spend(*ops) as bill:
+            yield bill
+    except LicenseError as exc:
+        raise ToolError(str(exc)) from None
+
+
 async def fl_status() -> str:
     """Project snapshot: FL version, title, tempo, play/record state, loop mode, position,
-    current pattern/channel/mixer track and counts."""
-    return _out(await _fl({"o": "status"}))
+    current pattern/channel/mixer track and counts (plus plan and credits when licensed)."""
+    status = await _fl({"o": "status"})
+    if gate.metered:
+        status["account"] = await anyio.to_thread.run_sync(gate.status)
+    return _out(status)
 
 
 async def fl_list(
@@ -352,78 +373,89 @@ async def fl_produce(
         return _out(await _thread(produce.inspect_flp, template))
     if action in ("make", "plan") and not genre:
         raise ToolError("genre is required; see action=genres")
-    if genre:
-        picked = [r.strip() for r in roles.split(",") if r.strip()] if roles else None
-        built = await _thread(
-            compose,
-            genre,
-            key=key,
-            bpm=bpm,
-            length=length,
-            mood=mood,
-            energy=energy,
-            seed=seed,
-            roles=picked,
-        )
-        await _thread(produce.save_plan, built)
-    else:
-        built = await _thread(produce.load_plan, plan or "")
-    override = await _thread(produce.parse_map, channels) if channels else None
-    out: dict[str, Any] = {"plan": built.summary()}
-    if action == "show":
-        if pattern:
-            pat = built.patterns[_find_pattern(built, pattern)]
-            out = {
-                "pattern": pat.name,
-                "bars": pat.bars,
-                "parts": {
-                    r: [[round(e.t, 2), round(e.d, 2), e.p, e.v] for e in x.events[:24]]
-                    for r, x in pat.parts.items()
-                    if role in (None, r)
-                },
-            }
-        return _out(out)
-    if action == "queue":
-        if not (pattern and role):
-            raise ToolError("queue needs pattern and role")
-        idx = _find_pattern(built, pattern)
-        part = built.patterns[idx].parts.get(role)
-        if part is None:
-            raise ToolError(f"pattern '{built.patterns[idx].name}' has no {role}")
-        state = await _thread(produce.live_state, built.id)
-        if role not in state["mapping"]:
-            raise ToolError(f"no channel for {role}; pass channels='{role}=<index>' when applying")
-        rows = [_note([e.p, e.t, e.d, e.v]) for e in part.events]
-        roll = await _fl({"o": "roll", "c": state["mapping"][role], "p": state["base"] + 1 + idx})
-        _write_json(
-            data_dir() / "inbox.json",
-            {"serial": secrets.randbelow(2**31), "replace": True, "notes": rows},
-        )
-        return _out(
-            {
-                "queued": len(rows),
-                "channel": roll["ch"],
-                "pattern": roll["pat"],
-                "next": "In FL's piano roll run Tools > Scripting > FL MCP, then press Accept.",
-            }
-        )
-    if action in ("make", "apply"):
-        try:
-            out["live"] = await _thread(produce.apply_live, bridge.call, built, override)
-        except ToolError as exc:
-            if action == "apply":
-                raise
-            out["live"] = f"not applied: {exc}"
     if action == "flp" and not template:
         raise ToolError("flp needs template: the path of a .flp project to build on")
-    if template and action in ("make", "flp"):
-        out["flp"] = await _thread(produce.export_flp, built, template, override, replace_playlist)
-    if action in ("make", "midi"):
-        out["midi"] = str(await _thread(produce.export_midi, built))
-        out["midi_note"] = (
-            "Drag it into FL Studio: every track becomes a channel, sections are markers."
-        )
-    return _out(out)
+    writes_flp = bool(template) and action in ("make", "flp")
+    ops = [*(["produce.compose"] if genre else []), *(["produce.flp"] if writes_flp else [])]
+    async with _spend(*ops) as bill:
+        if genre:
+            picked = [r.strip() for r in roles.split(",") if r.strip()] if roles else None
+            built = await _thread(
+                compose,
+                genre,
+                key=key,
+                bpm=bpm,
+                length=length,
+                mood=mood,
+                energy=energy,
+                seed=seed,
+                roles=picked,
+            )
+            await _thread(produce.save_plan, built)
+            bill.ok("produce.compose")
+        else:
+            built = await _thread(produce.load_plan, plan or "")
+        override = await _thread(produce.parse_map, channels) if channels else None
+        out: dict[str, Any] = {"plan": built.summary()}
+        if action == "show":
+            if pattern:
+                pat = built.patterns[_find_pattern(built, pattern)]
+                out = {
+                    "pattern": pat.name,
+                    "bars": pat.bars,
+                    "parts": {
+                        r: [[round(e.t, 2), round(e.d, 2), e.p, e.v] for e in x.events[:24]]
+                        for r, x in pat.parts.items()
+                        if role in (None, r)
+                    },
+                }
+            return _out(out)
+        if action == "queue":
+            if not (pattern and role):
+                raise ToolError("queue needs pattern and role")
+            idx = _find_pattern(built, pattern)
+            part = built.patterns[idx].parts.get(role)
+            if part is None:
+                raise ToolError(f"pattern '{built.patterns[idx].name}' has no {role}")
+            state = await _thread(produce.live_state, built.id)
+            if role not in state["mapping"]:
+                raise ToolError(
+                    f"no channel for {role}; pass channels='{role}=<index>' when applying"
+                )
+            rows = [_note([e.p, e.t, e.d, e.v]) for e in part.events]
+            roll = await _fl(
+                {"o": "roll", "c": state["mapping"][role], "p": state["base"] + 1 + idx}
+            )
+            _write_json(
+                data_dir() / "inbox.json",
+                {"serial": secrets.randbelow(2**31), "replace": True, "notes": rows},
+            )
+            return _out(
+                {
+                    "queued": len(rows),
+                    "channel": roll["ch"],
+                    "pattern": roll["pat"],
+                    "next": "In FL's piano roll run Tools > Scripting > FL MCP, then press Accept.",
+                }
+            )
+        if action in ("make", "apply"):
+            try:
+                out["live"] = await _thread(produce.apply_live, bridge.call, built, override)
+            except ToolError as exc:
+                if action == "apply":
+                    raise
+                out["live"] = f"not applied: {exc}"
+        if writes_flp:
+            out["flp"] = await _thread(
+                produce.export_flp, built, template, override, replace_playlist
+            )
+            bill.ok("produce.flp")
+        if action in ("make", "midi"):
+            out["midi"] = str(await _thread(produce.export_midi, built))
+            out["midi_note"] = (
+                "Drag it into FL Studio: every track becomes a channel, sections are markers."
+            )
+        return _out(out)
 
 
 async def fl_mix(
@@ -474,7 +506,9 @@ async def fl_mix(
             raise ToolError(
                 "no channel is routed to its own mixer track; route channels to inserts first"
             )
-    report = await _thread(mixing.balance, bridge.call, goals, seconds, bar)
+    async with _spend("mix.balance") as bill:
+        report = await _thread(mixing.balance, bridge.call, goals, seconds, bar)
+        bill.ok("mix.balance")
     report["names"] = {t: names.get(t, "") for t in report["peaks_db"]}
     return _out(report)
 
@@ -547,7 +581,7 @@ _ACT = dict(readOnlyHint=False, destructiveHint=False, idempotentHint=False)
 mcp = MCPServer(
     "fl_mcp",
     version=__version__,
-    instructions=INSTRUCTIONS,
+    instructions=INSTRUCTIONS + (CREDITS_NOTE if gate.metered else ""),
     tools=[
         _tool(fl_status, **_READ),
         _tool(fl_produce, readOnlyHint=False, destructiveHint=False, idempotentHint=False),

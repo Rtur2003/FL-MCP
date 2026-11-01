@@ -7,3 +7,7 @@ build/
 .pytest_cache/
 .ruff_cache/
 .env
+*.db
+*.db-wal
+*.db-shm
+.claude/
