@@ -21,7 +21,7 @@ import plugins
 import transport
 import ui
 
-VERSION = 4
+VERSION = 5
 PROTO = 1
 
 _IN, _OUT = 14, 15
@@ -1073,33 +1073,10 @@ _KEYS = {
     "itemmenu": lambda: transport.globalTransport(midi.FPT_ItemMenu, 1),
 }
 
-_VK = {"escape": 0x1B, "enter": 0x0D, "up": 0x26, "down": 0x28, "left": 0x25, "right": 0x27}
-
-
-def _win_key(vk):
-    if getattr(ui, "__file__", None) is not None:
-        return False
-    try:
-        import ctypes
-
-        u32 = getattr(ctypes, "windll", None)
-        if u32 is not None:
-            u32.user32.keybd_event(vk, 0, 0, 0)
-            u32.user32.keybd_event(vk, 0, 2, 0)
-            return True
-    except Exception:
-        pass
-    return False
-
-
 def _press(name):
     name = str(name).lower()
     if name in _KEYS:
-        try:
-            _KEYS[name]()
-        except RuntimeError:
-            if name not in _VK or not _win_key(_VK[name]):
-                raise
+        _KEYS[name]()
     elif name.startswith("f") and name[1:].isdigit() and 1 <= int(name[1:]) <= 12:
         transport.globalTransport(midi.FPT_F1 + int(name[1:]) - 1, 1)
     else:
