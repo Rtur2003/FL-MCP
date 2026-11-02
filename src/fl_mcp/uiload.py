@@ -70,6 +70,20 @@ def _settle(call: Call, before: list[list[Any]], wait: bool) -> list[dict[str, A
     return []
 
 
+def _select_tab(call: Call, want: str) -> None:
+    for _ in range(8):
+        call({"o": "ui", "a": "browser", "b": "tab", "d": "left"})
+    cur = str(call({"o": "ui", "a": "browser", "b": "tab"}).get("tab", "")).lower()
+    if want in cur:
+        return
+    for _ in range(8):
+        nxt = str(
+            call({"o": "ui", "a": "browser", "b": "tab", "d": "right"}).get("tab", "")
+        ).lower()
+        if want in nxt:
+            return
+
+
 def load(
     call: Call,
     name: str,
@@ -100,11 +114,9 @@ def load(
     stops: list[str] = []
     try:
         for tab in ("plugins", "all"):
-            for chunk in range(CHUNKS):  # to the top of the tree, however long it is
-                req: dict[str, Any] = {"o": "ui", "a": "browser", "b": "top", "n": steps}
-                if chunk == 0:
-                    req["tab"] = tab
-                if call(req).get("done"):
+            _select_tab(call, tab)
+            for _chunk in range(CHUNKS):  # to the top of the tree, however long it is
+                if call({"o": "ui", "a": "browser", "b": "top", "n": steps}).get("done"):
                     break
             for _ in range(ATTEMPTS):
                 hit = _find(call, name, steps)
@@ -113,7 +125,6 @@ def load(
                 item = str(hit["item"][0])
                 stops.append(item)
                 call({"o": "ui", "a": "browser", "b": "select", "new": track is None})
-                time.sleep(0.15)  # the menu is drawn between two of FL's script calls
                 confirmed = confirm()
                 fresh = _settle(call, before, confirmed)
                 if fresh:

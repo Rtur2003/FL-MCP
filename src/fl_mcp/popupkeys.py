@@ -47,25 +47,42 @@ def window() -> int:
     return int(u32.FindWindowW(CLASS, None)) if u32 is not None else 0
 
 
+def wait_window(timeout: float = 0.6) -> int:
+    """Wait for the context menu window to appear; 0 if it does not appear within timeout."""
+    end = time.monotonic() + timeout
+    while time.monotonic() < end:
+        w = window()
+        if w:
+            return w
+        time.sleep(0.04)
+    return 0
+
+
 def _rect(hwnd: int) -> tuple[int, int, int, int] | None:
     u32 = _user32()
-    if u32 is None or not hwnd:
+    if u32 is None or not hwnd or not hasattr(u32, "GetWindowRect"):
         return None
     r = _RECT()
-    if u32.GetWindowRect(hwnd, ctypes.byref(r)):
-        return r.left, r.top, r.right, r.bottom
+    try:
+        if u32.GetWindowRect(hwnd, ctypes.byref(r)):
+            return r.left, r.top, r.right, r.bottom
+    except Exception:
+        pass
     return None
 
 
 def _click(x: int, y: int) -> None:
     u32 = _user32()
-    if u32 is None:
+    if u32 is None or not hasattr(u32, "SetCursorPos") or not hasattr(u32, "mouse_event"):
         return
-    u32.SetCursorPos(x, y)
-    time.sleep(0.02)
-    u32.mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
-    time.sleep(0.02)
-    u32.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+    try:
+        u32.SetCursorPos(x, y)
+        time.sleep(0.02)
+        u32.mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+        time.sleep(0.02)
+        u32.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+    except Exception:
+        pass
 
 
 def _closed(timeout: float) -> bool:
@@ -80,7 +97,7 @@ def _closed(timeout: float) -> bool:
 def confirm() -> bool:
     """Press Return or click Item 1 in the open menu; True once the menu has closed."""
     u32 = _user32()
-    hwnd = window()
+    hwnd = wait_window()
     if u32 is None or not hwnd:
         return False
     u32.PostMessageW(hwnd, WM_KEYDOWN, VK_RETURN, 0)
