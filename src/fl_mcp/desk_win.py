@@ -154,6 +154,15 @@ class WindowsBackend(Backend):
 
     @staticmethod
     def _dpi_aware(user32: Any) -> None:
+        try:
+            ws = user32.OpenWindowStationW("winsta0", False, 0x037F)
+            if ws:
+                user32.SetProcessWindowStation(ws)
+            dt = user32.OpenDesktopW("default", 0, False, 0x01FF)
+            if dt:
+                user32.SetThreadDesktop(dt)
+        except Exception:
+            pass
         # physical pixels everywhere, so screenshots and click coordinates are the same space
         for attempt in (
             lambda: user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4)),

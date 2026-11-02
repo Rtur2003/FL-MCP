@@ -9,7 +9,7 @@ from collections import Counter
 from collections.abc import Callable
 from typing import Any
 
-from fl_mcp import popupkeys
+from fl_mcp import desk, popupkeys
 
 Call = Callable[[dict[str, Any]], Any]
 ATTEMPTS = 6  # several browser items can share a name (the plugin, its preset folder...)
@@ -87,6 +87,11 @@ def load(
     confirm = confirm or popupkeys.confirm
     dismiss = dismiss or popupkeys.dismiss
     dismiss()  # a menu left open would block every other call
+    if desk.enabled():
+        try:
+            desk.get().focus_fl()
+        except Exception:
+            pass
     if track is not None:
         call({"o": "ui", "a": "win", "w": "mixer", "v": "focus"})
         call({"o": "set", "k": "mixer", "i": track, "p": {"select": True}})
@@ -107,11 +112,9 @@ def load(
                     break
                 item = str(hit["item"][0])
                 stops.append(item)
-                sel = call({"o": "ui", "a": "browser", "b": "select", "new": track is None})
-                confirmed = False
-                if isinstance(sel, dict) and sel.get("popup"):
-                    time.sleep(0.15)  # the menu is drawn between two of FL's script calls
-                    confirmed = confirm()
+                call({"o": "ui", "a": "browser", "b": "select", "new": track is None})
+                time.sleep(0.15)  # the menu is drawn between two of FL's script calls
+                confirmed = confirm()
                 fresh = _settle(call, before, confirmed)
                 if fresh:
                     return {"loaded": fresh, "via": item}
