@@ -9,6 +9,8 @@ from collections import Counter
 from collections.abc import Callable
 from typing import Any
 
+from fl_mcp import popupkeys
+
 Call = Callable[[dict[str, Any]], Any]
 ATTEMPTS = 6  # several browser items can share a name (the plugin, its preset folder...)
 CHUNKS = 10  # the browser is walked in pieces of `steps` items, this many at most
@@ -57,49 +59,66 @@ def _find(call: Call, name: str, steps: int) -> dict[str, Any]:
     return hit
 
 
-def load(call: Call, name: str, track: int | None = None, steps: int = 80) -> dict[str, Any]:
-    """Load the first browser item named like `name`; an effect goes to mixer `track`."""
+def _settle(call: Call, before: list[list[Any]]) -> list[dict[str, Any]]:
+    """What the project gained: FL finishes a load a moment after the menu closes."""
+    for _ in range(8):
+        fresh = _new(before, inventory(call))
+        if fresh:
+            return fresh
+        time.sleep(0.2)
+    return []
+
+
+def load(
+    call: Call,
+    name: str,
+    track: int | None = None,
+    steps: int = 80,
+    confirm: Callable[[], bool] | None = None,
+    dismiss: Callable[[], bool] | None = None,
+) -> dict[str, Any]:
+    """Load the first browser item named like `name`; an effect goes to mixer `track`.
+
+    FL opens a context menu for the focused item. confirm presses its first entry (an effect goes
+    to the selected mixer track, an instrument to a new channel) and dismiss closes the menu."""
     if not name.strip():
         raise ValueError("load needs query: the plugin or sample name")
+    confirm = confirm or popupkeys.confirm
+    dismiss = dismiss or popupkeys.dismiss
+    dismiss()  # a menu left open would block every other call
     if track is not None:
         call({"o": "ui", "a": "win", "w": "mixer", "v": "focus"})
         call({"o": "set", "k": "mixer", "i": track, "p": {"select": True}})
     before = inventory(call)
     call({"o": "ui", "a": "win", "w": "browser", "v": "show"})
     stops: list[str] = []
-    for tab in ("plugins", "all"):
-        for chunk in range(CHUNKS):  # to the top of the tree, however long it is
-            req: dict[str, Any] = {"o": "ui", "a": "browser", "b": "top", "n": steps}
-            if chunk == 0:
-                req["tab"] = tab
-            if call(req).get("done"):
+    try:
+        for tab in ("plugins", "all"):
+            for chunk in range(CHUNKS):  # to the top of the tree, however long it is
+                req: dict[str, Any] = {"o": "ui", "a": "browser", "b": "top", "n": steps}
+                if chunk == 0:
+                    req["tab"] = tab
+                if call(req).get("done"):
+                    break
+            for _ in range(ATTEMPTS):
+                hit = _find(call, name, steps)
+                if not hit.get("found"):
+                    break
+                item = str(hit["item"][0])
+                stops.append(item)
+                sel = call({"o": "ui", "a": "browser", "b": "select", "new": track is None})
+                if isinstance(sel, dict) and sel.get("popup"):
+                    time.sleep(0.15)  # the menu is drawn between two of FL's script calls
+                    confirm()
+                fresh = _settle(call, before)
+                if fresh:
+                    return {"loaded": fresh, "via": item}
+                dismiss()
+                call({"o": "ui", "a": "browser", "b": "nav", "d": "next", "sh": True})
+            if stops:
                 break
-        for _ in range(ATTEMPTS):
-            hit = _find(call, name, steps)
-            if not hit.get("found"):
-                break
-            item = str(hit["item"][0])
-            stops.append(item)
-            sel = call({"o": "ui", "a": "browser", "b": "select", "new": track is None})
-            fresh = _new(before, inventory(call))
-            if not fresh and isinstance(sel, dict) and sel.get("popup"):
-                time.sleep(0.08)
-                call(
-                    {
-                        "o": "ui",
-                        "a": "browser",
-                        "b": "select",
-                        "confirm": True,
-                        "new": track is None,
-                    }
-                )
-                time.sleep(0.12)
-                fresh = _new(before, inventory(call))
-            if fresh:
-                return {"loaded": fresh, "via": item}
-            call({"o": "ui", "a": "browser", "b": "nav", "d": "next", "sh": True})
-        if stops:
-            break
+    finally:
+        dismiss()
     if not stops:
         raise ValueError(
             f"'{name}' is not in FL's browser (searched up to {CHUNKS * steps} items from the "

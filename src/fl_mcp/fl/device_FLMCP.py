@@ -1073,6 +1073,7 @@ _KEYS = {
     "itemmenu": lambda: transport.globalTransport(midi.FPT_ItemMenu, 1),
 }
 
+
 def _press(name):
     name = str(name).lower()
     if name in _KEYS:
