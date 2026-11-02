@@ -29,6 +29,7 @@ from fl_mcp import (
     library,
     mastering,
     mixing,
+    popupkeys,
     produce,
     render,
     uiload,
@@ -506,7 +507,13 @@ async def fl_ui(
     }[browse]
     if browse == "goto" and not query:
         raise ToolError("goto needs query")
-    return _out(await _fl({"o": "ui", "a": "browser", **step}))
+    out = await _fl({"o": "ui", "a": "browser", **step})
+    if browse == "select" and isinstance(out, dict) and out.get("popup"):
+        await anyio.sleep(0.15)  # the menu is drawn between two of FL's script calls
+        out["confirmed"] = await _thread(popupkeys.confirm)
+        if not out["confirmed"]:
+            await _thread(popupkeys.dismiss)
+    return _out(out)
 
 
 async def fl_desk(
