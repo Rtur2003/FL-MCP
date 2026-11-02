@@ -9,7 +9,7 @@ from collections import Counter
 from collections.abc import Callable
 from typing import Any
 
-from fl_mcp import popupkeys
+from fl_mcp import desk, popupkeys
 
 Call = Callable[[dict[str, Any]], Any]
 ATTEMPTS = 6  # several browser items can share a name (the plugin, its preset folder...)
@@ -70,6 +70,20 @@ def _settle(call: Call, before: list[list[Any]], wait: bool) -> list[dict[str, A
     return []
 
 
+def _select_tab(call: Call, want: str) -> None:
+    for _ in range(8):
+        call({"o": "ui", "a": "browser", "b": "tab", "d": "left"})
+    cur = str(call({"o": "ui", "a": "browser", "b": "tab"}).get("tab", "")).lower()
+    if want in cur:
+        return
+    for _ in range(8):
+        nxt = str(
+            call({"o": "ui", "a": "browser", "b": "tab", "d": "right"}).get("tab", "")
+        ).lower()
+        if want in nxt:
+            return
+
+
 def load(
     call: Call,
     name: str,
@@ -87,6 +101,11 @@ def load(
     confirm = confirm or popupkeys.confirm
     dismiss = dismiss or popupkeys.dismiss
     dismiss()  # a menu left open would block every other call
+    if desk.enabled():
+        try:
+            desk.get().focus_fl()
+        except Exception:
+            pass
     if track is not None:
         call({"o": "ui", "a": "win", "w": "mixer", "v": "focus"})
         call({"o": "set", "k": "mixer", "i": track, "p": {"select": True}})
@@ -95,11 +114,9 @@ def load(
     stops: list[str] = []
     try:
         for tab in ("plugins", "all"):
-            for chunk in range(CHUNKS):  # to the top of the tree, however long it is
-                req: dict[str, Any] = {"o": "ui", "a": "browser", "b": "top", "n": steps}
-                if chunk == 0:
-                    req["tab"] = tab
-                if call(req).get("done"):
+            _select_tab(call, tab)
+            for _chunk in range(CHUNKS):  # to the top of the tree, however long it is
+                if call({"o": "ui", "a": "browser", "b": "top", "n": steps}).get("done"):
                     break
             for _ in range(ATTEMPTS):
                 hit = _find(call, name, steps)
@@ -107,11 +124,8 @@ def load(
                     break
                 item = str(hit["item"][0])
                 stops.append(item)
-                sel = call({"o": "ui", "a": "browser", "b": "select", "new": track is None})
-                confirmed = False
-                if isinstance(sel, dict) and sel.get("popup"):
-                    time.sleep(0.15)  # the menu is drawn between two of FL's script calls
-                    confirmed = confirm()
+                call({"o": "ui", "a": "browser", "b": "select", "new": track is None})
+                confirmed = confirm()
                 fresh = _settle(call, before, confirmed)
                 if fresh:
                     return {"loaded": fresh, "via": item}

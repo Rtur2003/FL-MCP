@@ -1161,7 +1161,7 @@ def _op_browser(r):
         if _try(ui.isBrowserAutoHide):
             _try(ui.setBrowserAutoHide, False)
         ui.selectBrowserMenuItem()
-        return {"item": _browser_item(), "popup": bool(_try(ui.isInPopupMenu))}
+        return {"item": _browser_item(), "popup": True}
     if b == "preview":
         ui.previewBrowserMenuItem()
         return {"item": _browser_item()}
@@ -1170,8 +1170,13 @@ def _op_browser(r):
         want_tab = _key(r.get("tab"))
         if want_tab:
             for _ in range(8):
-                t = _key(_try(ui.navigateBrowserTabs, midi.FPT_Right))
-                if not t or t == "tab" or want_tab in t:
+                _try(ui.navigateBrowserTabs, midi.FPT_Left)
+            for _ in range(8):
+                t = _key(_try(ui.navigateBrowserTabs, 0))
+                if not t or want_tab in t:
+                    break
+                nxt = _key(_try(ui.navigateBrowserTabs, midi.FPT_Right))
+                if want_tab in nxt:
                     break
         _browser_item()
         last, same = None, 0
