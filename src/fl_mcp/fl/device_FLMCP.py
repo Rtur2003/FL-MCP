@@ -1174,29 +1174,16 @@ def _op_browser(r):
         ui.toggleBrowserNode(int(r.get("v", -1)))
         return {"item": _browser_item()}
     if b == "select":
-        if r.get("confirm"):
-            if _try(ui.isInPopupMenu):
-                if not (_try(ui.getHintMsg) or "").strip():
-                    ui.down(1)
-                ui.enter()
-                _win_key(0x0D)
-            return {"item": _browser_item(), "popup": bool(_try(ui.isInPopupMenu))}
+        # A plugin's context menu opens and stays open: its first entry (Send to selected
+        # channel / Open in new channel) is confirmed from outside FL, because the menu takes
+        # no keys through the scripting API. Other entries (favourite, delete file) are never
+        # reached: no key but the first-entry confirm is ever sent to it.
         if not ui.getVisible(midi.widBrowser):
             ui.showWindow(midi.widBrowser)
         if _try(ui.isBrowserAutoHide):
             _try(ui.setBrowserAutoHide, False)
-        if (
-            r.get("new") is False
-            and ui.getVisible(midi.widMixer)
-            and not ui.getFocused(midi.widMixer)
-        ):
-            ui.setFocused(midi.widMixer)
         ui.selectBrowserMenuItem()
-        pop = bool(_try(ui.isInPopupMenu))
-        if pop:
-            ui.down(1)
-            ui.enter()
-        return {"item": _browser_item(), "popup": pop}
+        return {"item": _browser_item(), "popup": bool(_try(ui.isInPopupMenu))}
     if b == "preview":
         ui.previewBrowserMenuItem()
         return {"item": _browser_item()}
