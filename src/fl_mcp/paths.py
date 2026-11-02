@@ -10,11 +10,9 @@ def data_dir() -> Path:
 
 def fl_user_dir() -> Path:
     """FL Studio user data folder (contains Settings/)."""
-    if "FL_USER_DIR" in os.environ:
-        return Path(os.environ["FL_USER_DIR"]).expanduser().resolve()
-    home = Path(os.environ.get("HOME") or os.environ.get("USERPROFILE") or Path.home())
+    home = Path.home()
     docs = home / "Documents"
-    if sys.platform == "win32" and not docs.is_dir() and "HOME" not in os.environ:
+    if sys.platform == "win32" and not docs.is_dir():
         try:
             import ctypes
 
