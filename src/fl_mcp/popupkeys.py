@@ -54,3 +54,4 @@ def dismiss() -> bool:
         _send(VK_ESCAPE)
         return _closed(1.0)
     return True
+

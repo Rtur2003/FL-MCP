@@ -59,13 +59,14 @@ def _find(call: Call, name: str, steps: int) -> dict[str, Any]:
     return hit
 
 
-def _settle(call: Call, before: list[list[Any]]) -> list[dict[str, Any]]:
-    """What the project gained: FL finishes a load a moment after the menu closes."""
-    for _ in range(8):
+def _settle(call: Call, before: list[list[Any]], wait: bool) -> list[dict[str, Any]]:
+    """What the project gained. After a confirmed menu FL finishes the load a moment later."""
+    for _ in range(8 if wait else 1):
         fresh = _new(before, inventory(call))
         if fresh:
             return fresh
-        time.sleep(0.2)
+        if wait:
+            time.sleep(0.2)
     return []
 
 
@@ -107,10 +108,11 @@ def load(
                 item = str(hit["item"][0])
                 stops.append(item)
                 sel = call({"o": "ui", "a": "browser", "b": "select", "new": track is None})
+                confirmed = False
                 if isinstance(sel, dict) and sel.get("popup"):
                     time.sleep(0.15)  # the menu is drawn between two of FL's script calls
-                    confirm()
-                fresh = _settle(call, before)
+                    confirmed = confirm()
+                fresh = _settle(call, before, confirmed)
                 if fresh:
                     return {"loaded": fresh, "via": item}
                 dismiss()
