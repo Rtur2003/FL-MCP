@@ -114,3 +114,60 @@ def test_deep_is_off_unless_asked_for(fl, monkeypatch, tmp_path):
     assert "browser load + undo" not in [c["check"] for c in report["checks"]]
     assert json.dumps(report)  # serialisable
     assert FLError  # imported for the dead-link tests elsewhere
+
+
+def test_the_menu_fl_opens_is_confirmed_from_outside_and_never_navigated(fl):
+    fl.fake.popup_mode = True
+    sent = []
+
+    def confirm():
+        sent.append("confirm")
+        return fl.fake.confirm_menu()
+
+    got = uiload.load(
+        fl.call, "Fruity Limiter", track=3, confirm=confirm, dismiss=fl.fake.dismiss_menu
+    )
+    assert got["loaded"] == [{"plugin": "Fruity Limiter", "at": "mixer", "index": 3, "slot": 0}]
+    assert sent == ["confirm"] and not fl.fake.in_popup
+    assert "down" not in fl.fake.keys and "enter" not in fl.fake.keys
+
+
+def test_a_menu_that_loads_nothing_is_closed_and_reported(fl):
+    fl.fake.popup_mode = True
+    closed = []
+
+    def dismiss():
+        closed.append(1)
+        return fl.fake.dismiss_menu()
+
+    with pytest.raises(ValueError, match="nothing was added"):
+        uiload.load(fl.call, "Fruity Limiter", track=3, confirm=lambda: False, dismiss=dismiss)
+    assert not fl.fake.in_popup and closed
+
+
+def test_menu_keys_go_to_the_menu_window_and_only_return_or_escape(monkeypatch):
+    from fl_mcp import popupkeys
+
+    posted = []
+
+    class User32:
+        def FindWindowW(self, cls, title):  # noqa: N802
+            assert cls == popupkeys.CLASS
+            return 0 if len(posted) >= 2 else 77
+
+        def PostMessageW(self, hwnd, msg, wparam, lparam):  # noqa: N802
+            posted.append((hwnd, msg, wparam))
+
+    monkeypatch.setattr(popupkeys, "_user32", lambda: User32())
+    monkeypatch.setattr(popupkeys, "window", lambda: 0 if len(posted) >= 2 else 77)
+    assert popupkeys.confirm() is True
+    assert posted == [(77, popupkeys.WM_KEYDOWN, 0x0D), (77, popupkeys.WM_KEYUP, 0x0D)]
+    assert {w for _, _, w in posted} == {popupkeys.VK_RETURN}  # no arrow key, ever
+
+
+def test_without_a_menu_window_nothing_is_sent(monkeypatch):
+    from fl_mcp import popupkeys
+
+    monkeypatch.setattr(popupkeys, "window", lambda: 0)
+    assert popupkeys.confirm() is False
+    assert popupkeys.dismiss() is True

@@ -280,6 +280,7 @@ def test_browser_walk_skips_heavy_folders_and_handles_popup_menu(fl):
     assert found["found"] is True and found["item"][0] == "Fruity Limiter"
     nav_shifts = [sh for op, _, sh in fl.fake.browser_log if op == "nav"]
     assert nav_shifts[:2] == [False, False]  # skipped expanding Current project and Plugin presets
-    fl.fake.in_popup = True
-    fl.call({"o": "ui", "a": "browser", "b": "select"})
-    assert "down" in fl.fake.keys and "enter" in fl.fake.keys
+    fl.fake.popup_mode = True
+    out = fl.call({"o": "ui", "a": "browser", "b": "select"})
+    assert out["popup"] is True and fl.fake.in_popup
+    assert "down" not in fl.fake.keys and "enter" not in fl.fake.keys  # never moves in the menu
