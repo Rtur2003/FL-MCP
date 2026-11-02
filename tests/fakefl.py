@@ -115,7 +115,7 @@ class FakeFL:
             ["Snare 01.wav", 1],
         ]
         self.browser_at, self.browser_log, self.loads = 0, [], []
-        self.in_popup = False
+        self.in_popup, self.popup_mode, self.pending = False, False, 0
         self.presets = {("c", 2, -1): ["Init", "Dystopian lead", "Soft pad", "Sub bass"]}
         self.preset_at = {("c", 2, -1): 0}
 
@@ -349,7 +349,26 @@ class FakeFL:
         self.browser_log.append(("select", name))
         if kind != 5:
             return
-        above = [n for n, k in self.browser[: self.browser_at] if k == -100]
+        if self.popup_mode:  # the real thing: a menu opens and waits for its first entry
+            self.in_popup, self.pending = True, self.browser_at
+            return
+        self._load_item(self.browser_at)
+
+    def confirm_menu(self):
+        """What pressing Return in the open menu does: its first entry loads the item."""
+        if not self.in_popup:
+            return False
+        self.in_popup = False
+        self._load_item(self.pending)
+        return True
+
+    def dismiss_menu(self):
+        self.in_popup = False
+        return True
+
+    def _load_item(self, at):
+        name = self.browser[at][0]
+        above = [n for n, k in self.browser[:at] if k == -100]
         if above[-1:] == ["Effects"]:  # an effect goes to the first free slot of the selected track
             slots = self.tracks[self.cur_track]["slots"]
             free = next((i for i in range(10) if i not in slots), None)
