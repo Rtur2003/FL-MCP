@@ -63,6 +63,11 @@ class Run:
         where = got["loaded"][0]
         self.call({"o": "tr", "a": "undo"})
         if len(uiload.inventory(self.call)) > before:
+            try:
+                self.call({"o": "call", "c": [["general.undoUp"]]})
+            except Exception:
+                pass
+        if len(uiload.inventory(self.call)) > before:
             raise RuntimeError(
                 f"{where['plugin']} was loaded (mixer {track}, slot {where['slot']}) but undo "
                 "did not remove it: delete it by hand"
@@ -206,7 +211,7 @@ class Run:
             raise Skip("FL Studio's user data folder was not found")
         if not script.is_file():
             raise RuntimeError(f"{script.name} is not installed: run `fl-mcp install`")
-        state = paths.data_dir() / "state.json"
+        state = paths.notes_dir() / "state.json"
         if not state.is_file():
             return "installed; never run: in the piano roll use Tools > Scripting > FL MCP once"
         age = (time.time() - state.stat().st_mtime) / 3600
