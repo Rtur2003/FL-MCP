@@ -8,6 +8,7 @@
         "soft clipper",
         "clipper",
         "maximizer",
+        "emphasizer",
         "pro-l",
         "ozone",
         "purelimit",
@@ -222,7 +223,8 @@
       "words": [
         "ceiling",
         "ceil",
-        "out ceiling"
+        "out ceiling",
+        "output gain"
       ],
       "unit": "db"
     },

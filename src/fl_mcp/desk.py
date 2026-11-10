@@ -373,7 +373,11 @@ class Desk:
         start, size, stable = self.clock(), -1, 0
         while self.clock() - start < timeout:
             self.sleep(1.0)
-            if path.is_file():
+            rendering = any(
+                self.is_fl(w) and w.title.startswith("Rendering to")
+                for w in self.backend.windows()
+            )
+            if not rendering and path.is_file():
                 now = path.stat().st_size
                 stable = stable + 1 if now == size and now > 0 else 0
                 size = now

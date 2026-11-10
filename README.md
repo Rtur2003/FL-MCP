@@ -58,7 +58,7 @@ The plugin starts the server and adds five skills (**setup**, **produce**, **mix
 ## Tools
 
 | Tool | What it does |
-|---|---|
+| --- | --- |
 | `fl_produce` | **Fast production.** Builds a genre-aware song plan and delivers it: drums into the Channel Rack, a MIDI file, or a finished `.flp` with samples (see below) |
 | `fl_mix` | `doctor` finds problems worst first; `meter` and `balance` use FL's peak meters while the project plays (kick -8 dB, bass -9 dB, hats -20 dB...); `chain` checks each track's plugins against its role and sets compressor, limiter, reverb and delay values by meaning |
 | `fl_audio` | **Hear the mix.** LUFS (integrated, short-term, momentary), loudness range, true peak, crest factor, clipping, DC, stereo width and mono loss, a 7-band spectrum and plain advice; renders the project first (the open one through `fl_desk`, or a saved `.flp` through FL's command line with FL closed), compares with a reference; `master` moves the master limiter's gain until the loudness hits the genre's target, measuring after each step |
@@ -82,7 +82,7 @@ Try: *"Make a 128 BPM techno track in F# minor, then mix and master it."*
 `fl_produce` composes with a seeded engine (the same seed gives the same song) in 12 genres: house, techno, trance, drum and bass, dubstep, trap, oriental trap (hicaz), boom bap, lo-fi, pop, synthwave, reggaeton. A plan has sections (intro, build, drop, break...), patterns for kick, snare, clap, hats, percussion, bass, chords, pad, arp, lead and fx, a playlist, markers, and mix targets per role (peak level, pan, EQ, send levels, sound hints). Fills, drop-outs, rolls and varying humanization keep it from sounding like a loop.
 
 | Action | Result |
-|---|---|
+| --- | --- |
 | `make` | plan + deliver: drums go into Channel Rack channels (matched by name: kick, hat, bass, lead...) as named patterns, with tempo, markers, EQ and pan; plus a `.mid` with every part, written to `~/.fl-mcp/out/` |
 | `plan`, `show`, `genres` | build and read plans without touching FL |
 | `apply`, `midi` | deliver or export a stored plan again |
@@ -119,7 +119,7 @@ This repository builds an **unmetered** server: nothing needs a licence. A comme
 ## Configuration
 
 | Variable | Default | Meaning |
-|---|---|---|
+| --- | --- | --- |
 | `FL_MCP_PORT` | `FL MCP` | MIDI port name (substring match; `IAC` is tried on macOS) |
 | `FL_MCP_TIMEOUT` | `2.5` | seconds to wait per attempt (two attempts) |
 | `FL_MCP_DIR` | `~/.fl-mcp` | folder for plans, output, the library index and the piano roll exchange (set it before `fl-mcp install`) |
