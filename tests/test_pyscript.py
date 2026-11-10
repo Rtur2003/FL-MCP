@@ -70,12 +70,12 @@ def roll(monkeypatch, tmp_path):
     )
 
 
-def test_dialog_is_plain(roll):
-    assert roll.load().createDialog() == (
-        "dialog",
-        "FL MCP",
-        "Adds the notes queued by the FL MCP server and exports the piano roll.",
-    )
+def test_script_runs_without_a_modal_dialog(roll):
+    module = roll.load()
+    assert not hasattr(module, "createDialog")
+    roll.queue([[60, 0, 1, 100]])
+    module.apply()
+    assert roll.score.noteCount == 1
 
 
 def test_notes_are_converted_to_ticks(roll):

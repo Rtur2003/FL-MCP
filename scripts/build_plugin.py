@@ -214,7 +214,7 @@ def main() -> None:
     for path, text in files.items():
         target = ROOT / path
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(text, encoding="utf-8")
+        target.write_text(text, encoding="utf-8", newline="\n")
         print(path)
 
 

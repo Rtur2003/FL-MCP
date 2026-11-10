@@ -55,6 +55,12 @@ What this changed: the first version passed the project as a bare argument. `ren
 - Streaming services turn music to roughly -14 LUFS; genre targets in `music/genres.py` are starting points for what that genre usually releases at, not rules.
 - Role levels, EQ and compression starting points in `data/plugins.json` and the mix guide are the settings experienced mixers reach for first; the ear decides after that.
 
-## 5. What could not be verified here
+## 5. Live verification on FL Studio 2025 (Windows 11)
 
-No copy of FL Studio ran during development. The controller script is tested against the official API stubs (an AST contract test) and a faithful fake; generated `.flp` files were checked against a real file written by FL Studio 20.8.4 and against PyFLP as an independent parser. Not yet seen on a real machine, and what `fl-mcp selftest` is for: the FL browser navigation quirks, plugins that do not report parameter text, preset names, cloned sampler channels being accepted by FL, the batch renderer on a given FL version, the export dialogs' timing, and the Windows and macOS desktop backends. The licence service was tested against its own ledger and webhooks, not against a live payment provider.
+Verified live against **FL Studio 2025 (`Producer Edition v25.2.5 [build 5319]`, API 40)** on Windows 11 (`fl-mcp selftest --deep`: 17/17 checks passing). Key real-world behaviours uncovered and handled during live testing:
+
+- **Browser popup menus block `OnMidiMsg`:** `ui.selectBrowserMenuItem()` opens a native Win32 `TQuickPopupMenuWindow` modal loop that blocks FL's MIDI script dispatcher until dismissed. `popupkeys.py` detects `FindWindowW("TQuickPopupMenuWindow", None)` from the server process and posts `VK_RETURN` (or `VK_ESCAPE`) directly to that window without arrow keys.
+- **Piano roll script sandbox:** FL Studio 2025 sandboxes `flpianoroll` scripts to `Documents/Image-Line/FL Studio/Settings/Piano roll scripts` and blocks `os.makedirs` and `os.replace`. Storing `inbox.json` and `state.json` in `Settings/Piano roll scripts` and omitting `createDialog()` lets `FL MCP.pyscript` execute immediately with zero modal dialog when triggered via `Tools > Scripting > FL MCP` or `Ctrl+Alt+Y` (`fl_desk macro=script`).
+- **Detached Piano Roll focus:** When the Piano Roll is detached (`Piano roll - ...`), `fl_desk macro=script` focuses the `"Piano roll"` window directly before sending `Ctrl+Alt+Y`.
+- **Direct2D/OpenGL window capture on Windows 11:** `desk_win.py` captures FL Studio's hardware-accelerated windows with `PrintWindow(..., PW_RENDERFULLCONTENT)` before compositing with `BitBlt`.
+- **API 40 `plugins.getParamValueString` signature:** Takes at most 4 arguments `(paramIndex, index, slotIndex, useGlobalIndex)` in real FL Studio 2025 (no `pickupMode` argument).

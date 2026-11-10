@@ -38,7 +38,7 @@ from fl_mcp import (
 from fl_mcp.bridge import Bridge, FLError
 from fl_mcp.commerce import Gate, LicenseError, Spend
 from fl_mcp.music import GENRES, compose
-from fl_mcp.paths import data_dir
+from fl_mcp.paths import data_dir, notes_dir
 
 INSTRUCTIONS = (
     "Controls the FL Studio running on this computer through the FL MCP controller script "
@@ -244,7 +244,7 @@ async def fl_notes(
     """Piano roll notes. FL's API cannot write notes directly: this queues them and opens the
     piano roll; the user must then run Tools > Scripting > FL MCP there and press Accept. Call
     with read=true afterwards to confirm ('applied') and to read the piano roll back."""
-    folder = data_dir()
+    folder = notes_dir()
     if read:
         try:
             state = _read_json(folder / "state.json")
@@ -575,7 +575,7 @@ async def fl_desk(
         elif action == "key":
             info["keys"] = d.press(keys or "")
         elif macro == "script":
-            info.update(d.script(folder))
+            info.update(d.script(notes_dir()))
         elif macro == "export":
             target = Path(path) if path else folder / "exports" / f"mix-{int(time.time())}.wav"
             info.update(d.export(target, target.suffix.lstrip(".").lower() or "wav"))
@@ -740,7 +740,7 @@ async def fl_produce(
                 {"o": "roll", "c": state["mapping"][role], "p": state["base"] + 1 + idx}
             )
             _write_json(
-                data_dir() / "inbox.json",
+                notes_dir() / "inbox.json",
                 {"serial": secrets.randbelow(2**31), "replace": True, "notes": rows},
             )
             return _out(

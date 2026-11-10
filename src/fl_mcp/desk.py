@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from fl_mcp.paths import data_dir
+from fl_mcp.paths import data_dir, notes_dir
 
 
 class DeskError(ValueError):
@@ -322,9 +322,21 @@ class Desk:
 
     def script(self, folder: Path | None = None, timeout: float = 5.0) -> dict[str, Any]:
         """Run the piano roll script again (FL's 'run last script' shortcut) and see if it took."""
-        folder = folder or data_dir()
+        folder = folder or notes_dir()
         queued = (_json(folder / "inbox.json") or {}).get("serial")
         before = (_json(folder / "state.json") or {}).get("ts", 0)
+        roll = next(
+            (
+                w
+                for w in self.backend.windows()
+                if self.is_fl(w) and w.title.startswith("Piano roll")
+            ),
+            None,
+        )
+        if roll is not None:
+            self._failsafe()
+            self.backend.focus(roll)
+            self.sleep(0.05)
         self._keys("mod+alt+y")
         start = self.clock()
         while self.clock() - start < timeout:
@@ -337,7 +349,7 @@ class Desk:
         return {
             "applied": False,
             "note": "the script did not run. In FL's piano roll open Tools > Scripting > "
-            "FL MCP once and press Accept (FL then repeats it with this shortcut), or check "
+            "FL MCP once (FL then repeats it with this shortcut), or check "
             "the screenshot for a dialog that is waiting",
         }
 

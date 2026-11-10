@@ -106,9 +106,19 @@ def load(
             desk.get().focus_fl()
         except Exception:
             pass
+    old_fx: tuple[int, int] | None = None
     if track is not None:
         call({"o": "ui", "a": "win", "w": "mixer", "v": "focus"})
         call({"o": "set", "k": "mixer", "i": track, "p": {"select": True}})
+        try:
+            (sel,) = call({"o": "call", "c": [["channels.selectedChannel", True, 0, True]]})
+            if isinstance(sel, int) and sel >= 0:
+                (fx,) = call({"o": "call", "c": [["channels.getTargetFxTrack", sel, True]]})
+                if isinstance(fx, int) and fx != track:
+                    old_fx = (sel, fx)
+                    call({"o": "set", "k": "channel", "i": sel, "p": {"fx": track}})
+        except Exception:
+            old_fx = None
     before = inventory(call)
     call({"o": "ui", "a": "win", "w": "browser", "v": "show"})
     stops: list[str] = []
@@ -135,6 +145,11 @@ def load(
                 break
     finally:
         dismiss()
+        if old_fx is not None:
+            try:
+                call({"o": "set", "k": "channel", "i": old_fx[0], "p": {"fx": old_fx[1]}})
+            except Exception:
+                pass
     if not stops:
         raise ValueError(
             f"'{name}' is not in FL's browser (searched up to {CHUNKS * steps} items from the "

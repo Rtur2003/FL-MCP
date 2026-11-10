@@ -4,17 +4,27 @@ from pathlib import Path
 
 
 def data_dir() -> Path:
-    """Folder where the server and the piano roll script exchange notes."""
+    """Folder for plans, exports, the library index and desktop state."""
     return Path(os.environ.get("FL_MCP_DIR") or Path.home() / ".fl-mcp").expanduser().resolve()
+
+
+def notes_dir(fl_dir: str | Path | None = None) -> Path:
+    """Folder where the server and the piano roll script exchange inbox.json and state.json.
+
+    FL Studio 2025 sandboxes piano roll scripts to 'Settings/Piano roll scripts', so when
+    FL_MCP_DIR is not explicitly set we store the exchange files there if that folder exists."""
+    if os.environ.get("FL_MCP_DIR"):
+        return data_dir()
+    root = Path(fl_dir).expanduser() if fl_dir else fl_user_dir()
+    scripts = root / "Settings" / "Piano roll scripts"
+    return scripts.resolve() if scripts.is_dir() else data_dir()
 
 
 def fl_user_dir() -> Path:
     """FL Studio user data folder (contains Settings/)."""
-    if "FL_USER_DIR" in os.environ:
-        return Path(os.environ["FL_USER_DIR"]).expanduser().resolve()
-    home = Path(os.environ.get("HOME") or os.environ.get("USERPROFILE") or Path.home())
+    home = Path(os.environ["HOME"]) if "HOME" in os.environ else Path.home()
     docs = home / "Documents"
-    if sys.platform == "win32" and not docs.is_dir() and "HOME" not in os.environ:
+    if sys.platform == "win32" and not docs.is_dir():
         try:
             import ctypes
 
