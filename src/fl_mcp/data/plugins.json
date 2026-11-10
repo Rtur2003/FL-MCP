@@ -9,7 +9,9 @@
         "clipper",
         "maximizer",
         "pro-l",
-        "ozone"
+        "ozone",
+        "purelimit",
+        "pure-limit"
       ]
     ],
     [
@@ -26,7 +28,9 @@
         "kickstart",
         "volumeshaper",
         "transient",
-        "gate"
+        "gate",
+        "firepresser",
+        "combustor"
       ]
     ],
     [
@@ -39,7 +43,8 @@
         "eq ",
         "pro-q",
         "soothe",
-        "frequency splitter"
+        "frequency splitter",
+        "bass boost"
       ]
     ],
     [
@@ -51,14 +56,16 @@
         "convolver",
         "valhalla",
         "pro-r",
-        "verb"
+        "verb",
+        "mirror"
       ]
     ],
     [
       "delay",
       [
         "delay",
-        "echo"
+        "echo",
+        "transporter"
       ]
     ],
     [
@@ -72,7 +79,10 @@
         "saturat",
         "blood",
         "decapitator",
-        "soundgoodizer"
+        "soundgoodizer",
+        "hardcore",
+        "low lifter",
+        "heat 2"
       ]
     ],
     [
@@ -83,7 +93,13 @@
         "phaser",
         "hyper chorus",
         "vibrato",
-        "tremolo"
+        "tremolo",
+        "flangus",
+        "panomatic",
+        "frequency shifter",
+        "gross beat",
+        "effector",
+        "super vhs"
       ]
     ],
     [
@@ -93,7 +109,8 @@
         "stereo shaper",
         "balance",
         "imager",
-        "widener"
+        "widener",
+        "spreader"
       ]
     ],
     [
@@ -101,13 +118,15 @@
       [
         "filter",
         "love philter",
-        "wah"
+        "wah",
+        "fast lp"
       ]
     ],
     [
       "pitch",
       [
         "pitcher",
+        "pitch shifter",
         "newtone",
         "newtime",
         "vocoder",
@@ -589,6 +608,97 @@
         "lead"
       ],
       "note": "Multisample player."
+    },
+    "bassdrum": {
+      "role": [
+        "kick"
+      ],
+      "note": "Dedicated kick synthesizer with sub and click layers."
+    },
+    "boobass": {
+      "role": [
+        "bass"
+      ],
+      "note": "Monophonic electric bass guitar generator."
+    },
+    "harmless": {
+      "role": [
+        "lead",
+        "bass",
+        "pad"
+      ],
+      "note": "Additive synth with subtractive-style controls."
+    },
+    "sawer": {
+      "role": [
+        "lead",
+        "bass"
+      ],
+      "note": "Vintage Soviet-inspired analog lead and bass synth."
+    },
+    "poizone": {
+      "role": [
+        "lead",
+        "pad",
+        "arp"
+      ],
+      "note": "Streamlined subtractive polysynth."
+    },
+    "morphine": {
+      "role": [
+        "pad",
+        "chords",
+        "lead"
+      ],
+      "note": "Four-voice resynthesis and additive pad/keys synth."
+    },
+    "ogun": {
+      "role": [
+        "perc",
+        "fx",
+        "pad"
+      ],
+      "note": "Metallic and shimmer additive synthesizer."
+    },
+    "gms": {
+      "role": [
+        "bass",
+        "lead",
+        "pad"
+      ],
+      "note": "Groove Machine Synth: multi-timbral synth with built-in effects."
+    },
+    "minisynth": {
+      "role": [
+        "lead",
+        "bass",
+        "pad"
+      ],
+      "note": "Lightweight single-page synthesizer."
+    },
+    "fl slayer": {
+      "role": [
+        "lead",
+        "chords"
+      ],
+      "note": "Electric guitar simulator with amp and cabinet modeling."
+    },
+    "slicex": {
+      "role": [
+        "drums",
+        "perc"
+      ],
+      "note": "Beat slicer and loop rearrangement sampler."
+    },
+    "drumaxx": {
+      "role": [
+        "drums",
+        "kick",
+        "snare",
+        "hat",
+        "perc"
+      ],
+      "note": "Physical-modeling drum machine."
     }
   }
 }

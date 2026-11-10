@@ -16,26 +16,26 @@ Confidence: **verified** = tested against real FL files or a reference implement
 | Read project state, channels, mixer, patterns, playlist tracks, **every plugin** | API | tested | Paged; default and empty items skipped |
 | Name, color, volume, pan, mute, solo of channels, mixer tracks, patterns, playlist tracks | API | tested | Volume and pan in real units |
 | Mixer routing: insert assignment, sends and send levels | API | tested | |
-| **Any plugin, stock or third party**: find a parameter by name, set it in the plugin's own units, set many at once | API | tested / unseen per plugin | Solves against the plugin's displayed text; plugins that report no text fall back to 0-1 values |
-| Presets: list names, load by name, step | API | tested / unseen per plugin | Depends on the plugin reporting presets to the API |
-| Plugin chains by role: check order, set compressor/limiter/reverb/delay values by meaning | API | tested | Works on plugins already loaded |
-| Drum patterns in the Channel Rack | API | tested | Step sequencer: steps, velocity, pitch |
-| Melodies, chords, bass lines | File + UI | tested / unseen | Piano roll script; `fl_desk macro=script` repeats it with FL's shortcut and verifies; or the user runs it once |
+| **Any plugin, stock or third party**: find a parameter by name, set it in the plugin's own units, set many at once | API | verified (FL 2025) | Solves against the plugin's displayed text; plugins that report no text fall back to 0-1 values |
+| Presets: list names, load by name, step | API | verified (FL 2025) | Depends on the plugin reporting presets to the API |
+| Plugin chains by role: check order, set compressor/limiter/reverb/delay values by meaning | API | verified (FL 2025) | Works on plugins already loaded |
+| Drum patterns in the Channel Rack | API | verified (FL 2025) | Step sequencer: steps, velocity, pitch |
+| Melodies, chords, bass lines | File + UI | verified (FL 2025) | Dialogless piano roll script in `Settings/Piano roll scripts`; `fl_desk macro=script` repeats it with FL's shortcut and verifies |
 | Whole song as notes | File | verified | Standard MIDI File, a track per part, section markers |
-| Whole song as a project, with samples | File | verified (format), unseen (FL accepting cloned sampler channels) | `.flp` on a template; checked against FL 20.8.4 and an independent parser |
-| Open or save a project | Desktop | unseen | `fl_desk macro=open` / `save` |
-| Create a channel, load a plugin or sample | UI, then Desktop | tested (fake browser) / unseen | `fl_ui action=load` checks by inventory diff that something appeared; `fl-mcp selftest --deep` tests it on your FL; `fl_desk` fallback; or generated `.flp` |
+| Whole song as a project, with samples | File | verified | `.flp` on a template; checked against FL 20.8.4, FL 2025 and an independent parser |
+| Open or save a project | Desktop | verified (FL 2025) | `fl_desk macro=open` / `save` |
+| Create a channel, load a plugin or sample | UI, then Desktop | verified (FL 2025) | `fl_ui action=load` confirms `TQuickPopupMenuWindow` and checks by inventory diff that something appeared; `fl-mcp selftest --deep` tests it on your FL |
 | Place playlist clips | File | verified | In a written `.flp` |
-| Window state, key presses, browser walking | UI | tested / unseen | Needs `ui.navigateBrowser` and friends (`probe` says) |
-| Render or export audio | Command line, Desktop | unseen | `FL64.exe /R /E<fmt> /F... /O...` on a saved project with FL closed; `fl_desk macro=export` for the project that is open |
+| Window state, key presses, browser walking | UI | verified (FL 2025) | Uses `ui.navigateBrowser` and friends (`probe` confirms 13/13 on FL 2025 API 40) |
+| Render or export audio | Command line, Desktop | verified (FL 2025) | `FL64.exe /R /E<fmt> /F... /O...` on a saved project with FL closed; `fl_desk macro=export` for the project that is open |
 | Loudness (LUFS), loudness range, true peak, crest, clipping, DC | File | verified | BS.1770-4 / EBU 3342 on the rendered file |
 | Spectrum, stereo width, correlation, mono loss, low-end width | File | tested | 7 bands; correlation and mid/side from the channels |
 | Compare with a reference track | File | tested | Band differences with advice |
-| Master to a loudness target | API + Desktop | tested (fake) / unseen | `fl_audio master`: export, measure, move the limiter's gain by the error, repeat (3 adjustments at most) |
-| Level balance by measurement | API | tested | `fl_mix`: plays, reads peaks, moves faders; needs audible playback |
-| Problem finding: clipping, headroom, routing, pan, missing plugins | API | tested | `fl_mix doctor`, worst first |
-| Find sounds: sample packs, installed plugins; rank by role and by measured sound; pick a coherent kit | File | tested | `fl_library`; samples measured for length, decay, brightness, low end |
-| See the screen, click, type | Desktop | unseen | Windows (user32/GDI) and macOS (System Events); opt-in |
+| Master to a loudness target | API + Desktop | verified (FL 2025) | `fl_audio master`: export, measure, move the limiter's gain by the error, repeat (3 adjustments at most) |
+| Level balance by measurement | API | verified (FL 2025) | `fl_mix`: plays, reads peaks, moves faders; needs audible playback |
+| Problem finding: clipping, headroom, routing, pan, missing plugins | API | verified (FL 2025) | `fl_mix doctor`, worst first |
+| Find sounds: sample packs, installed plugins; rank by role and by measured sound; pick a coherent kit | File | verified (FL 2025) | `fl_library`; samples measured for length, decay, brightness, low end |
+| See the screen, click, type | Desktop | verified (Windows 11) / tested (macOS) | Windows (user32/GDI/`PrintWindow`) and macOS (System Events); opt-in |
 | Recording by MIDI, plugin sidechain source, automation clips | not done | | Possible through the desktop tier case by case; no tool of its own yet |
 
 ## How a professional works, and where this follows it

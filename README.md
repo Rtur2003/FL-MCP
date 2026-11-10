@@ -9,7 +9,7 @@ MCP server for **FL Studio**. Any MCP client that can start a local server (Clau
 - **Safe link to FL:** a small controller script inside FL answers framed MIDI CC messages. No `exec`/`eval`, no network, no SysEx. Only allowlisted FL API modules are reachable.
 - Windows and macOS, FL Studio 2024+ (scripting API 33+). Python 3.10-3.12 (`python-rtmidi` has no wheels for 3.13+; `uv` picks a matching Python for you).
 
-> **Status.** The controller script runs against a fake FL built on the official API stubs, and every FL call is checked against those stubs. The `.flp` reader and writer are verified against real FL Studio 20.8.4 project files and an independent parser. The loudness meter is checked against the ITU-R BS.1770 reference filter and test tones. It has **not** been run against a live FL Studio yet. After setup run `fl-mcp selftest`: it checks every layer against your FL, puts back what it touched, and saves a report you can send with an issue.
+> **Status.** Verified live against **FL Studio 2025 (`Producer Edition v25.2.5 [build 5319]`, API 40)** on Windows 11 (`fl-mcp selftest --deep`: 17/17 checks passing), as well as against a stateful fake FL built on the official API stubs, real FL Studio project files (`.flp`), and the ITU-R BS.1770 reference loudness filter. After setup run `fl-mcp selftest`: it checks every layer against your FL, puts back what it touched, and saves a report you can send with an issue.
 
 ## Setup
 

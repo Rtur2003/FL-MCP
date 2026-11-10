@@ -355,8 +355,9 @@ async def test_audio_render_exports_with_fl_then_analyzes(mixdown, monkeypatch, 
 
     monkeypatch.setattr(server, "bridge", Bridge("__offline__"))
     monkeypatch.setattr(server.render, "render", fake_render)
+    monkeypatch.setenv("FL_MCP_DESKTOP", "0")
     out = await run("fl_audio", {"action": "render", "project": str(flp), "fmt": "flac"})
-    assert calls == [(str(flp), "flac")]
+    assert calls == [(str(project), fmt) for project, fmt in [(flp, "flac")]]
     assert out["render"]["seconds"] == 12.0 and out["lufs_i"] == pytest.approx(-23.0, abs=0.2)
     monkeypatch.setenv("FL_MCP_PROJECTS", str(tmp_path / "empty"))
     monkeypatch.setenv("HOME", str(tmp_path / "home"))

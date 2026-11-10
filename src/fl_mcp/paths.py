@@ -22,7 +22,7 @@ def notes_dir(fl_dir: str | Path | None = None) -> Path:
 
 def fl_user_dir() -> Path:
     """FL Studio user data folder (contains Settings/)."""
-    home = Path.home()
+    home = Path(os.environ["HOME"]) if "HOME" in os.environ else Path.home()
     docs = home / "Documents"
     if sys.platform == "win32" and not docs.is_dir():
         try:
