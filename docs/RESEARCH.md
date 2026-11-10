@@ -55,6 +55,7 @@ What this changed: the first version passed the project as a bare argument. `ren
 - Streaming services turn music to roughly -14 LUFS; genre targets in `music/genres.py` are starting points for what that genre usually releases at, not rules.
 - Role levels, EQ and compression starting points in `data/plugins.json` and the mix guide are the settings experienced mixers reach for first; the ear decides after that.
 
+
 ## 5. Live verification on FL Studio 2025 (Windows 11)
 
 Verified live against **FL Studio 2025 (`Producer Edition v25.2.5 [build 5319]`, API 40)** on Windows 11 (`fl-mcp selftest --deep`: 17/17 checks passing). Key real-world behaviours uncovered and handled during live testing:

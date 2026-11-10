@@ -11,7 +11,7 @@ Routes, from most to least certain. The server tries them in this order and says
 Confidence: **verified** = tested against real FL files or a reference implementation; **tested** = tested against the fake FL built on the official stubs; **unseen** = depends on live FL behaviour no test here can show (the first `fl-mcp selftest` on a real machine settles it).
 
 | Area | Route | Confidence | Notes |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | Transport: play, stop, record, loop, metronome, tempo, position; save, undo | API | tested | `undo` is one step; a produced song is one undo step |
 | Read project state, channels, mixer, patterns, playlist tracks, **every plugin** | API | tested | Paged; default and empty items skipped |
 | Name, color, volume, pan, mute, solo of channels, mixer tracks, patterns, playlist tracks | API | tested | Volume and pan in real units |
@@ -41,7 +41,7 @@ Confidence: **verified** = tested against real FL files or a reference implement
 ## How a professional works, and where this follows it
 
 | Practice | What the server does |
-|---|---|
+| --- | --- |
 | Choose tempo and key to the genre | Each genre has tempo ranges and default scales (house 120-128, techno 125-140, trap 130-160, boom bap 84-96, lo-fi 68-84...). Minor, major and the hicaz scale (oriental trap) are supported. |
 | Arrange in sections | Intro, build, drop, break, outro with intensity curves and role lists per section. |
 | Drums as one-shots, from one kit | Drum parts are one-shots with short gates; hat, clap and percussion get their own groove (swing, ghost notes, rolls). `fl_library kit` picks all drum samples from one pack. |
