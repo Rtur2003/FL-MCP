@@ -10,7 +10,6 @@
         "maximizer",
         "emphasizer",
         "pro-l",
-        "ozone",
         "purelimit",
         "pure-limit"
       ]
@@ -29,7 +28,6 @@
         "kickstart",
         "volumeshaper",
         "transient",
-        "gate",
         "firepresser",
         "combustor"
       ]
@@ -44,7 +42,6 @@
         "eq ",
         "pro-q",
         "soothe",
-        "frequency splitter",
         "bass boost"
       ]
     ],
@@ -57,7 +54,6 @@
         "convolver",
         "valhalla",
         "pro-r",
-        "verb",
         "mirror"
       ]
     ],
@@ -65,7 +61,6 @@
       "delay",
       [
         "delay",
-        "echo",
         "transporter"
       ]
     ],
@@ -80,7 +75,6 @@
         "saturat",
         "blood",
         "decapitator",
-        "soundgoodizer",
         "hardcore",
         "low lifter",
         "heat 2"
@@ -94,7 +88,6 @@
         "phaser",
         "hyper chorus",
         "vibrato",
-        "tremolo",
         "flangus",
         "panomatic",
         "frequency shifter",
@@ -110,7 +103,6 @@
         "stereo shaper",
         "balance",
         "imager",
-        "widener",
         "spreader"
       ]
     ],
@@ -119,7 +111,6 @@
       [
         "filter",
         "love philter",
-        "wah",
         "fast lp"
       ]
     ],
