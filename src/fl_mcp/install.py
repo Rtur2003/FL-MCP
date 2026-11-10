@@ -49,12 +49,11 @@ def install(fl_dir: str | Path | None = None, notes_dir: str | Path | None = Non
             f"FL Studio user data folder not found: {root}\n"
             "Start FL Studio once, or pass --fl-dir <folder that contains Settings>."
         )
-    folder = Path(notes_dir).expanduser().resolve() if notes_dir else paths.data_dir()
-    source = resources.files("fl_mcp").joinpath("fl")
     device_dst, script_dst = targets(root)
     device_dst.parent.mkdir(parents=True, exist_ok=True)
     script_dst.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(str(source.joinpath(DEVICE)), device_dst)
+    folder = Path(notes_dir).expanduser().resolve() if notes_dir else paths.notes_dir(root)
+    shutil.copyfile(str(source := resources.files("fl_mcp").joinpath("fl")).joinpath(DEVICE) if False else str(source.joinpath(DEVICE)), device_dst)
     text = source.joinpath(PYSCRIPT).read_text(encoding="utf-8")
     script_dst.write_text(text.replace('"@DIR@"', json.dumps(str(folder))), encoding="utf-8")
     folder.mkdir(parents=True, exist_ok=True)
