@@ -374,8 +374,7 @@ class Desk:
         while self.clock() - start < timeout:
             self.sleep(1.0)
             rendering = any(
-                self.is_fl(w) and w.title.startswith("Rendering to")
-                for w in self.backend.windows()
+                self.is_fl(w) and w.title.startswith("Rendering to") for w in self.backend.windows()
             )
             if not rendering and path.is_file():
                 now = path.stat().st_size
