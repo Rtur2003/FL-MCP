@@ -9,6 +9,7 @@ not win. FL's plugin database folder tells which plugins are installed."""
 import json
 import os
 import random
+import threading
 import time
 import wave
 from array import array
@@ -379,7 +380,8 @@ def summary(index: dict[str, Any]) -> dict[str, Any]:
 
 def _features_cache() -> dict[str, Any]:
     try:
-        return json.loads((paths.data_dir() / "library_features.json").read_text(encoding="utf-8"))
+        raw = json.loads((paths.data_dir() / "library_features.json").read_text(encoding="utf-8"))
+        return raw if isinstance(raw, dict) else {}
     except (OSError, ValueError):
         return {}
 
@@ -392,7 +394,7 @@ def features(path: str, cache: dict[str, Any]) -> dict[str, Any] | None:
         return None
     key = f"{st.st_size}:{int(st.st_mtime)}"
     hit = cache.get(path)
-    if hit and hit.get("k") == key:
+    if isinstance(hit, dict) and hit.get("k") == key:
         return hit.get("f")
     f = analyze(p)
     cache[path] = {"k": key, "f": f}
@@ -402,7 +404,12 @@ def features(path: str, cache: dict[str, Any]) -> dict[str, Any] | None:
 def _save_cache(cache: dict[str, Any]) -> None:
     target = paths.data_dir() / "library_features.json"
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps(cache, separators=(",", ":")), encoding="utf-8")
+    tmp = target.with_name(f"{target.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    try:
+        tmp.write_text(json.dumps(cache, separators=(",", ":")), encoding="utf-8")
+        os.replace(tmp, target)
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 def find(

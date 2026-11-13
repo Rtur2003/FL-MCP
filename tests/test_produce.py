@@ -246,3 +246,19 @@ def test_balance_leaves_a_good_mix_alone(studio):
     f.peak_fn = lambda i: {1: 0.4, 0: 0.5}.get(i, 0.0) * f.tracks[i]["vol"] / 0.8
     report = mixing.balance(studio.call, {1: -8.0}, seconds=0.01, sleep=lambda _: None)
     assert report["moved_db"] == {} and report["clipping"] == []
+
+
+def test_discover_templates_stops_at_limit_across_dirs(tmp_path, monkeypatch):
+    from tests import flpgen
+
+    d1, d2 = tmp_path / "t1", tmp_path / "t2"
+    d1.mkdir()
+    d2.mkdir()
+    data = flpgen.template(sampler=True)
+    for name in ("A1.flp", "A2.flp"):
+        (d1 / name).write_bytes(data)
+    for name in ("B1.flp", "B2.flp"):
+        (d2 / name).write_bytes(data)
+    monkeypatch.setattr(produce, "_template_dirs", lambda: [d1, d2])
+    found = produce.discover_templates(limit=3)
+    assert len(found) == 3

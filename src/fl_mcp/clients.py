@@ -1,8 +1,10 @@
 """How to register this server with each MCP client: the exact file and text, ready to paste."""
 
 import json
+import os
 import shlex
 import shutil
+import subprocess
 import sys
 
 NAME = "fl-studio"
@@ -45,7 +47,10 @@ def snippet(client: str, source: str = "pypi", audio: bool = True) -> tuple[str,
     cmd, args = command(source, audio)
     where = CLIENTS[client][1]
     if client == "claude-code":
-        return where, "claude mcp add " + NAME + " -- " + shlex.join([cmd, *args])
+        cmdline = (
+            subprocess.list2cmdline([cmd, *args]) if os.name == "nt" else shlex.join([cmd, *args])
+        )
+        return where, "claude mcp add " + NAME + " -- " + cmdline
     if client == "codex":
         text = f"[mcp_servers.{NAME}]\ncommand = {json.dumps(cmd)}\nargs = {json.dumps(args)}\n"
         return where, text

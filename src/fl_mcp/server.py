@@ -7,6 +7,7 @@ import json
 import os
 import re
 import secrets
+import threading
 import time
 from collections.abc import AsyncIterator
 from importlib import resources
@@ -148,6 +149,21 @@ async def fl_transport(
     return _out(await _fl({"o": "tr", "a": action, "v": value}))
 
 
+def _mixer_pending(res: dict[str, Any], props: dict[str, Any]) -> bool:
+    for prop, key, tol in (
+        ("volume", "vol", 0.02),
+        ("pan", "pan", 0.02),
+        ("mute", "mute", 0),
+        ("solo", "solo", 0),
+    ):
+        if prop in props:
+            want = int(bool(props[prop])) if tol == 0 else float(props[prop])
+            got = res.get(key)
+            if not isinstance(got, int | float) or abs(got - want) > tol:
+                return True
+    return False
+
+
 async def fl_set(
     kind: Literal["channel", "mixer", "pattern", "playlist"],
     index: Annotated[Index, Field(description="channel/mixer 0-based; pattern/track 1-based")],
@@ -181,7 +197,18 @@ async def fl_set(
     props = {k: v for k, v in given.items() if v is not None}
     if not props:
         raise ToolError("nothing to change: pass at least one property")
-    return _out(await _fl({"o": "set", "k": kind, "i": index, "p": props}))
+    res = await _fl({"o": "set", "k": kind, "i": index, "p": props})
+    if kind == "mixer" and isinstance(res, dict) and _mixer_pending(res, props):
+        # FL Studio 2025 commits active/routed mixer edits on the next UI/mixer tick (~15-50 ms).
+        for _ in range(4):
+            await anyio.sleep(0.05)
+            page = await _fl({"o": "list", "k": "mixer", "s": index, "n": 1, "a": 1})
+            rows = page.get("rows") or []
+            if rows and page.get("cols"):
+                res = dict(zip(page["cols"], rows[0], strict=False))
+                if not _mixer_pending(res, props):
+                    break
+    return _out(res)
 
 
 async def fl_steps(
@@ -243,9 +270,12 @@ def _note(row: list[float]) -> list[float]:
 
 def _write_json(path: Any, obj: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps(obj, separators=(",", ":")), encoding="utf-8")
-    os.replace(tmp, path)
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    try:
+        tmp.write_text(json.dumps(obj, separators=(",", ":")), encoding="utf-8")
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 def _read_json(path: Any) -> Any:
@@ -283,7 +313,11 @@ async def fl_notes(
             ) from None
         if state is None:
             raise ToolError("No export yet: ask the user to run Tools > Scripting > FL MCP.")
-        queued = _read_json(folder / "inbox.json") or {}
+        try:
+            raw_queued = _read_json(folder / "inbox.json")
+        except ValueError:
+            raw_queued = None
+        queued = raw_queued if isinstance(raw_queued, dict) else {}
         shown = state["notes"][:300]
         return _out(
             {

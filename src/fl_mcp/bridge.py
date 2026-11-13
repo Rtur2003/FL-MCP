@@ -104,6 +104,7 @@ class Bridge:
         self._fid = random.randint(1, 127)
         self._in: Any = None
         self._out: Any = None
+        self._cooldown_until: float = 0.0
         atexit.register(self.close)
 
     # -- MIDI I/O (replaced by an in-memory loopback in tests)
@@ -160,6 +161,7 @@ class Bridge:
             except Exception:
                 pass
         self._in = self._out = None
+        self._cooldown_until = 0.0
 
     def _on_msg(self, msg: Any) -> None:
         if msg.type == "control_change" and msg.channel == RES_CH:
@@ -246,6 +248,12 @@ class Bridge:
             attempts += 1
             while not self._frames.empty():
                 self._frames.get_nowait()
+            # FL Studio emits large replies (e.g. list patterns/plugins) as ~2k CC frames back
+            # to back; pausing briefly prevents the next TX burst from colliding on loopback.
+            gap = self._cooldown_until - time.monotonic()
+            if gap > 0:
+                time.sleep(gap)
+            self._cooldown_until = 0.0
             pairs = encode(fid, payload)
             tx_frames += len(pairs)
             self._send(pairs)
@@ -260,7 +268,9 @@ class Bridge:
                 if data is None:
                     break
                 rx_bytes = len(data)
-                rx_frames = (rx_bytes + 2) // 3 + 2
+                rx_frames += rx_bytes + 3
+                if rx_bytes >= 350:
+                    self._cooldown_until = time.monotonic() + min(0.06, rx_bytes / 30000.0)
                 res = json.loads(data)
                 if res.get("ok"):
                     result = res.get("r")

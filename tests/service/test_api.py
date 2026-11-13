@@ -379,3 +379,19 @@ def webhooks_limit():
     from flmcp_service.app import MAX_WEBHOOK
 
     return MAX_WEBHOOK
+
+
+def test_webhook_settings_and_bad_content_length(svc, monkeypatch):
+    from flmcp_service.app import Settings
+
+    monkeypatch.setenv("FLMCP_WEBHOOK_SECRETS", "invalid_no_eq, generic = sec1 , =empty,")
+    settings = Settings.from_env()
+    assert settings.webhook_secrets == {"generic": "sec1"}
+
+    for bad_len in ("not-a-number", "-1"):
+        r = svc.http.post(
+            "/v1/webhooks/generic",
+            content=b"{}",
+            headers={"Content-Length": bad_len, "X-FLMCP-Signature": "t=1,v1=00"},
+        )
+        assert r.status_code == 400 and r.json()["code"] == "bad_request"

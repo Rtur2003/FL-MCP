@@ -291,6 +291,26 @@ async def test_notes_read_back(wired):
     state["serial"] = serial + 1
     (wired.dir / "state.json").write_text(json.dumps(state))
     assert (await run("fl_notes", {"read": True}))["applied"] is False
+    (wired.dir / "inbox.json").write_text("[1, 2, 3]")
+    assert (await run("fl_notes", {"read": True}))["applied"] is False
+    (wired.dir / "inbox.json").write_text("{bad json")
+    assert (await run("fl_notes", {"read": True}))["applied"] is False
+
+
+async def test_set_settles_deferred_mixer_readback(wired, monkeypatch):
+    orig = wired.call
+    stale = {"done": False}
+
+    def deferred_call(req):
+        out = orig(req)
+        if req.get("o") == "set" and req.get("k") == "mixer" and not stale["done"]:
+            stale["done"] = True
+            return {**out, "vol": 0.8}
+        return out
+
+    monkeypatch.setattr(wired, "call", deferred_call)
+    row = await run("fl_set", {"kind": "mixer", "index": 1, "volume": 0.55})
+    assert row["vol"] == pytest.approx(0.55, abs=0.01)
 
 
 async def test_fl_errors_reach_the_model_with_guidance(wired):

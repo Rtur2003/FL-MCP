@@ -88,9 +88,12 @@ def _append(event: dict[str, Any]) -> None:
             if path.stat().st_size > MAX_FILE_BYTES:
                 lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
                 trimmed = "\n".join(lines[-KEEP_LINES:]) + "\n"
-                tmp = path.with_suffix(".tmp")
-                tmp.write_text(trimmed, encoding="utf-8")
-                os.replace(tmp, path)
+                tmp = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+                try:
+                    tmp.write_text(trimmed, encoding="utf-8")
+                    os.replace(tmp, path)
+                finally:
+                    tmp.unlink(missing_ok=True)
         except OSError:
             pass
 
@@ -186,12 +189,15 @@ def update_snapshot(**sections: Any) -> None:
                 cur = {}
             cur.update(sections)
             cur["updated"] = round(time.time(), 3)
-            tmp = path.with_suffix(".tmp")
-            tmp.write_text(
-                json.dumps(cur, ensure_ascii=False, separators=(",", ":")),
-                encoding="utf-8",
-            )
-            os.replace(tmp, path)
+            tmp = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+            try:
+                tmp.write_text(
+                    json.dumps(cur, ensure_ascii=False, separators=(",", ":")),
+                    encoding="utf-8",
+                )
+                os.replace(tmp, path)
+            finally:
+                tmp.unlink(missing_ok=True)
         except OSError:
             pass
 
@@ -215,41 +221,42 @@ def read_snapshot() -> dict[str, Any]:
             )
             if files:
                 p = json.loads(files[0].read_text(encoding="utf-8"))
-                latest_plan = {
-                    "id": p.get("id"),
-                    "genre": p.get("genre"),
-                    "key": p.get("key"),
-                    "bpm": p.get("bpm"),
-                    "bars": p.get("bars"),
-                    "roles": p.get("roles", []),
-                    "patterns": [
-                        {
-                            "name": pat.get("name"),
-                            "bars": pat.get("bars"),
-                            "parts": list((pat.get("parts") or {}).keys()),
-                        }
-                        for pat in (p.get("patterns") or [])[:12]
-                    ],
-                    "sections": p.get("sections", []),
-                    "mix": p.get("mix", {}),
-                }
+                if isinstance(p, dict):
+                    latest_plan = {
+                        "id": p.get("id"),
+                        "genre": p.get("genre"),
+                        "key": p.get("key"),
+                        "bpm": p.get("bpm"),
+                        "bars": p.get("bars"),
+                        "roles": p.get("roles", []),
+                        "patterns": [
+                            {
+                                "name": pat.get("name"),
+                                "bars": pat.get("bars"),
+                                "parts": list((pat.get("parts") or {}).keys()),
+                            }
+                            for pat in (p.get("patterns") or [])[:12]
+                        ],
+                        "sections": p.get("sections", []),
+                        "mix": p.get("mix", {}),
+                    }
     except (OSError, ValueError):
         pass
     out = dict(snap)
-    if inbox is not None:
+    if isinstance(inbox, dict):
         out["piano_inbox"] = {
             "serial": inbox.get("serial"),
             "replace": inbox.get("replace"),
             "count": len(inbox.get("notes") or []),
             "notes": (inbox.get("notes") or [])[:500],
         }
-    if state is not None:
+    if isinstance(state, dict):
         out["piano_state"] = {
             "serial": state.get("serial"),
             "ts": state.get("ts"),
             "count": state.get("count", len(state.get("notes") or [])),
             "applied": bool(
-                inbox
+                isinstance(inbox, dict)
                 and inbox.get("serial") is not None
                 and inbox.get("serial") == state.get("serial")
             ),

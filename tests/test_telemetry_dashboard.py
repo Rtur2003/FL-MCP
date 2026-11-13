@@ -265,3 +265,21 @@ def test_cli_traffic_and_templates(tmp_path, monkeypatch, capsys):
         cli.main(["traffic", "--clear"])
     assert e3.value.code == 0
     assert "cleared 2 traffic events" in capsys.readouterr().out
+
+
+def test_read_snapshot_ignores_non_dict_piano_and_plan_files(tmp_path, monkeypatch):
+    monkeypatch.setenv("FL_MCP_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
+    nd = tmp_path / "home" / ".fl-mcp"
+    nd.mkdir(parents=True)
+    (nd / "inbox.json").write_text("[1, 2]", encoding="utf-8")
+    (nd / "state.json").write_text('"bad"', encoding="utf-8")
+    plans = tmp_path / "data" / "plans"
+    plans.mkdir(parents=True)
+    (plans / "p.json").write_text("[]", encoding="utf-8")
+
+    snap = telemetry.read_snapshot()
+    assert "piano_inbox" not in snap
+    assert "piano_state" not in snap
+    assert "latest_plan" not in snap

@@ -297,6 +297,8 @@ def discover_templates(limit: int = 40) -> list[dict[str, Any]]:
     found: list[dict[str, Any]] = []
     seen: set[Path] = set()
     for root in _template_dirs():
+        if len(found) >= limit:
+            break
         for path in sorted(root.rglob("*.flp")):
             resolved = path.resolve()
             if resolved in seen:

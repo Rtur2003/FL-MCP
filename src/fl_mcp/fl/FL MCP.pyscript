@@ -54,5 +54,7 @@ def _run():
                       int(round(n.velocity * 127))])
     state = {"ts": time.time(), "ppq": ppq, "count": score.noteCount,
              "serial": queue.get("serial") if queue else None, "notes": notes}
-    with open(STATE, "w", encoding="utf-8") as f:
+    tmp = STATE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(state, f, separators=(",", ":"))
+    os.replace(tmp, STATE)

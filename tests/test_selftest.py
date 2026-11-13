@@ -117,3 +117,39 @@ def test_default_mixer_and_param_failure_do_not_cascade(fl, home):
     assert checks["mixer write"]["status"] == "ok"
     assert checks["plugin params"]["status"] == "fail"
     assert checks["plugin real units"]["status"] == "skip"
+
+
+def test_deferred_mixer_write_settles_on_reread(fl, home, monkeypatch):
+    monkeypatch.setattr(selftest.time, "sleep", lambda _: None)
+    returned_stale = False
+
+    def deferred(req):
+        nonlocal returned_stale
+        out = fl.call(req)
+        if req["o"] == "set" and req.get("k") == "mixer" and not returned_stale:
+            returned_stale = True
+            return {**out, "vol": 0.8}
+        return out
+
+    checks = by_name(selftest.run(deferred))
+    assert checks["mixer write"]["status"] == "ok"
+
+
+def test_stuck_mixer_write_reports_automation_and_restores(fl, home, monkeypatch):
+    monkeypatch.setattr(selftest.time, "sleep", lambda _: None)
+    seen = []
+
+    def stuck(req):
+        out = fl.call(req)
+        if req["o"] == "set" and req.get("k") == "mixer":
+            seen.append(req["p"])
+            return {**out, "vol": 0.9}
+        if req["o"] == "list" and req.get("k") == "mixer" and req.get("a") == 1 and out.get("rows"):
+            rows = [[r[0], r[1], 0.9, *r[3:]] for r in out["rows"]]
+            return {**out, "rows": rows}
+        return out
+
+    checks = by_name(selftest.run(stuck))
+    assert checks["mixer write"]["status"] == "fail"
+    assert "automation" in checks["mixer write"]["detail"]
+    assert len(seen) == 2
