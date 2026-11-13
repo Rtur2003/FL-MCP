@@ -44,7 +44,17 @@ fl-mcp setup
 claude mcp add fl-studio -- uvx --from "fl-mcp[audio]" fl-mcp
 ```
 
-Claude Desktop can instead install the `.mcpb` extension (`python packaging/build_mcpb.py` builds it); you still do steps 2 and 3.
+Claude Desktop can instead install the `.mcpb` extension (`python packaging/build_mcpb.py` builds it); full release bundles (wheel, sdist, `.mcpb`, Claude Code plugin zip, standalone FL scripts bundle, `SHA256SUMS.txt`) are built via `python packaging/build_release.py` or automatically when a `v*` tag is pushed.
+
+### Live monitor & traffic inspector
+
+```bash
+fl-mcp dashboard          # opens http://127.0.0.1:8765 in your browser
+fl-mcp traffic --follow   # stream live MIDI TX/RX frames and MCP calls in terminal
+fl-mcp templates          # list auto-discovered .flp project templates
+```
+
+The browser dashboard visualizes real-time incoming/outgoing MIDI CC frames and MCP tool calls (`~/.fl-mcp/traffic.jsonl`), latency sparklines, Channel Rack & Mixer peak meters, a Piano Roll canvas (`inbox.json` vs `state.json`), 7-band audio spectrum/LUFS metrics, and discovered templates — even while Claude Desktop or Cursor drives FL Studio in the background.
 
 ### Claude Code plugin
 
@@ -66,11 +76,11 @@ The plugin starts the server and adds five skills (**setup**, **produce**, **mix
 | `fl_list` | channels, mixer tracks, patterns, playlist tracks or every plugin in the project |
 | `fl_library` | indexes your sample packs and plugins; ranks samples for a role by name and by measured sound; picks a coherent drum kit for a genre |
 | `fl_ui` | drives FL's own interface from inside FL, no mouse: show and focus windows, press keys, walk the browser; `load` finds a plugin or sample by name, loads it onto a mixer track or as a new channel, and checks that it appeared |
-| `fl_status` | FL version, project, tempo, state; `probe` lists the API features this FL build has, `log` the script's last errors |
+| `fl_status` | FL version, project, tempo, state; `probe` lists API features, `log` lists script errors + MIDI TX/RX traffic telemetry |
 | `fl_transport` | play, pause, stop, record, loop mode, metronome, tempo, position (bar), save, undo |
 | `fl_set` | name, color, volume, pan, mute, solo, routing (`fx`, `send`/`level`), select on a channel, mixer track, pattern or playlist track |
-| `fl_steps` | step sequencer of a channel: set/clear steps, velocity, pitch; reads back |
-| `fl_notes` | queue piano roll notes and read the piano roll back |
+| `fl_steps` | step sequencer of a channel: `on`/`off`/`clear` lists, or compact velocity `grid` (`z.x.|o...`) with `swing`; returns active steps + visual strip |
+| `fl_notes` | queue piano roll notes (`apply=true` runs the script immediately when desktop control is on) and read the piano roll back |
 | `fl_call` | raw FL scripting API, batched (`modules`: transport mixer channels patterns playlist plugins ui general arrangement) |
 | `fl_api` | API reference for `fl_call`: signatures and `midi` constants; works without FL |
 | `fl_desk` | *opt-in* (`fl-mcp desktop on`). See and drive FL's screen: screenshots, keys, clicks, and macros that run the piano roll script, export audio, open and save projects |
@@ -90,7 +100,7 @@ Try: *"Make a 128 BPM techno track in F# minor, then mix and master it."*
 | `inspect` | read a template `.flp`: channels, roles it can fill, patterns, playlist |
 | `flp` | write a full project: your template plus every pattern with all notes and the playlist; `sounds=auto` also adds sample channels from one pack that `fl_library` chose |
 
-**Templates.** A finished project is built on a template `.flp` you made (any saved project with one named pattern holding a note and one playlist clip). It is never modified; the result is a new file. Channel names are matched to roles (`Kick`, `808 Bass`, `Lead Synth`...); `channels="kick=0,bass=3"` overrides the match. Open the result with `fl_desk macro=open` (desktop control on) or by hand.
+**Templates.** Pass `template="auto"` (or a template name like `"4x4"`) to build on auto-discovered FL Studio templates, `inspect` with `template="list"` to list them, or pass any `.flp` path you saved (at least one named pattern with a note and one playlist clip). The template is never modified; the result is a new file. Channel names match roles automatically (`Kick`, `808 Bass`, `Lead Synth`...); `channels="kick=0,bass=3"` overrides. Open the result with `fl_desk macro=open` (desktop control on) or by hand.
 
 ### Piano roll notes
 
@@ -106,7 +116,7 @@ fl-mcp desktop on      # then restart your AI client; `off` undoes it, `test` ta
 
 ## Guides, prompts and resources
 
-`fl://guide/setup`, `produce`, `mix`, `plugins` and `automation` are MCP resources (markdown, with tables filled from the real genre and plugin data). The prompts `make_beat`, `mix_check`, `master`, `fix_connection` and `load_plugin` carry the task plus the relevant guide, so clients that surface prompts as slash commands get one-shot workflows. The Claude Code plugin's skills are generated from the same files (`python scripts/build_plugin.py`; a test fails if they drift).
+`fl://guide/setup`, `produce`, `mix`, `plugins` and `automation` are MCP resources (markdown, with tables filled from the real genre and plugin data), alongside `fl://live/traffic` and `fl://live/studio` for live telemetry and cached studio state. The prompts `make_beat`, `mix_check`, `master`, `fix_connection` and `load_plugin` carry the task plus the relevant guide, so clients that surface prompts as slash commands get one-shot workflows. The Claude Code plugin's skills are generated from the same files (`python scripts/build_plugin.py`; a test fails if they drift).
 
 ## Limits
 
@@ -129,6 +139,8 @@ This repository builds an **unmetered** server: nothing needs a licence. A comme
 | `FL_MCP_DESKTOP` | unset | `1` turns `fl_desk` on, `0` off (overrides `fl-mcp desktop`) |
 | `FL_MCP_FL_PROCESS` | unset | extra process name(s) that count as FL Studio for `fl_desk` |
 | `FL_MCP_DEBUG` | unset | log to stderr |
+| `FL_MCP_TRAFFIC` | `1` | record MIDI TX/RX and MCP traffic to `~/.fl-mcp/traffic.jsonl` (`0` disables) |
+| `FL_MCP_TEMPLATES` | unset | extra `.flp` template folders for `template="auto"` (path-separated) |
 | `FL_MCP_SERVICE` | unset | licence service address (https); unset means unmetered |
 | `FL_MCP_LICENSE` | unset | licence key to sign in with automatically (set by the desktop extension and the plugin) |
 
@@ -147,6 +159,7 @@ uv venv --python 3.12 && uv pip install -e ".[dev]"
 .venv/bin/pytest && .venv/bin/ruff check . && .venv/bin/ruff format --check .
 .venv/bin/python scripts/gen_api_index.py    # refresh src/fl_mcp/api.json from the API stubs
 .venv/bin/python scripts/build_plugin.py     # regenerate plugin/ after editing a guide
+.venv/bin/python packaging/build_release.py  # build wheel, sdist, .mcpb, plugin & scripts bundles into dist/
 claude plugin validate plugin --strict       # when the claude CLI is installed
 ```
 

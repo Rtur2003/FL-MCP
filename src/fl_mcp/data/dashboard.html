@@ -1,0 +1,612 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>FL-MCP Studio & Traffic Monitor</title>
+<style>
+  :root {
+    --bg: #0b0e14;
+    --panel: #131822;
+    --panel-2: #19202d;
+    --border: #263144;
+    --text: #e7edf7;
+    --muted: #8b9bb4;
+    --accent: #ff7a2f;
+    --cyan: #38bdf8;
+    --green: #22c55e;
+    --amber: #f59e0b;
+    --red: #ef4444;
+    --purple: #a78bfa;
+    --mono: ui-monospace, "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+    --sans: "Inter", system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: radial-gradient(1200px 600px at 15% -10%, rgba(255,122,47,.11), transparent),
+                radial-gradient(900px 500px at 90% 0%, rgba(56,189,248,.08), transparent),
+                var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 13px;
+    line-height: 1.45;
+  }
+  header {
+    position: sticky; top: 0; z-index: 20;
+    display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px;
+    padding: 10px 18px;
+    background: rgba(11, 14, 20, .88);
+    backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--border);
+  }
+  .brand { display: flex; align-items: center; gap: 10px; }
+  .logo {
+    width: 28px; height: 28px; border-radius: 7px;
+    background: linear-gradient(135deg, var(--accent), #ff4e50);
+    display: grid; place-items: center; font-weight: 800; color: #0b0e14; font-size: 13px;
+  }
+  .title { font-weight: 700; font-size: 15px; letter-spacing: -.2px; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 3px 9px; border-radius: 999px; font-size: 11px; font-weight: 600;
+    background: var(--panel-2); border: 1px solid var(--border); color: var(--muted);
+  }
+  .pill.ok { color: var(--green); border-color: rgba(34,197,94,.35); background: rgba(34,197,94,.08); }
+  .pill.warn { color: var(--amber); border-color: rgba(245,158,11,.35); background: rgba(245,158,11,.08); }
+  .pill.err { color: var(--red); border-color: rgba(239,68,68,.35); background: rgba(239,68,68,.08); }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+  .controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  button, select, input[type="search"] {
+    background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 7px; padding: 6px 10px; font-size: 12px; font-family: inherit;
+  }
+  button { cursor: pointer; font-weight: 600; transition: .15s border-color, .15s background; }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: rgba(255,122,47,.16); border-color: rgba(255,122,47,.5); color: #ffb387; }
+  button.active { background: rgba(56,189,248,.16); border-color: var(--cyan); color: #bae6fd; }
+  main { max-width: 1520px; margin: 0 auto; padding: 14px 18px 40px; display: grid; gap: 14px; }
+  .kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(185px, 1fr)); gap: 10px; }
+  .card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px;
+  }
+  .kpi-label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .5px; }
+  .kpi-val { font-size: 21px; font-weight: 700; margin-top: 3px; font-family: var(--mono); }
+  .kpi-sub { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  .tabs { display: flex; gap: 6px; flex-wrap: wrap; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+  .tab {
+    background: transparent; border: 1px solid transparent; color: var(--muted); padding: 6px 12px;
+    border-radius: 7px; font-weight: 600;
+  }
+  .tab.active { background: var(--panel-2); border-color: var(--border); color: var(--text); }
+  .panel-hidden { display: none !important; }
+  .split { display: grid; grid-template-columns: 1.6fr 1fr; gap: 14px; align-items: start; }
+  @media (max-width: 1100px) { .split { grid-template-columns: 1fr; } }
+  .toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 10px; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th {
+    text-align: left; color: var(--muted); font-weight: 600; padding: 7px 8px;
+    border-bottom: 1px solid var(--border); font-size: 11px; text-transform: uppercase;
+  }
+  td { padding: 6px 8px; border-bottom: 1px solid rgba(38,49,68,.55); vertical-align: top; }
+  tr.click-row { cursor: pointer; }
+  tr.click-row:hover { background: rgba(255,255,255,.03); }
+  .mono { font-family: var(--mono); }
+  .badge {
+    display: inline-block; padding: 1px 6px; border-radius: 4px; font-size: 10px; font-weight: 700;
+    text-transform: uppercase; font-family: var(--mono);
+  }
+  .b-midi { background: rgba(56,189,248,.16); color: var(--cyan); }
+  .b-mcp { background: rgba(167,139,250,.18); color: var(--purple); }
+  .b-ok { background: rgba(34,197,94,.16); color: var(--green); }
+  .b-err { background: rgba(239,68,68,.18); color: var(--red); }
+  .b-retry { background: rgba(245,158,11,.18); color: var(--amber); margin-left: 4px; }
+  .scroll-box { max-height: 490px; overflow: auto; }
+  .detail-box {
+    background: #0d1118; border: 1px solid var(--border); border-radius: 8px; padding: 10px;
+    font-family: var(--mono); font-size: 11px; white-space: pre-wrap; word-break: break-word;
+    max-height: 220px; overflow: auto;
+  }
+  .bar-row { display: grid; grid-template-columns: 110px 1fr 48px; align-items: center; gap: 8px; margin: 5px 0; font-size: 11px; }
+  .bar-track { height: 7px; background: #0d1118; border-radius: 99px; overflow: hidden; }
+  .bar-fill { height: 100%; background: linear-gradient(90deg, var(--cyan), var(--accent)); border-radius: 99px; }
+  .mixer-grid { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 6px; }
+  .strip {
+    min-width: 98px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 9px;
+    padding: 9px; display: flex; flex-direction: column; gap: 6px;
+  }
+  .strip-head { font-weight: 700; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .meter-wrap { display: flex; align-items: flex-end; gap: 6px; height: 110px; background: #0b0e14; padding: 6px; border-radius: 6px; }
+  .meter-col { flex: 1; height: 100%; display: flex; align-items: flex-end; background: #151b26; border-radius: 3px; overflow: hidden; }
+  .meter-vol { width: 100%; background: linear-gradient(180deg, var(--cyan), #1d4ed8); transition: height .2s; }
+  .meter-pk { width: 100%; background: linear-gradient(180deg, var(--red) 0%, var(--amber) 35%, var(--green) 100%); transition: height .2s; }
+  .fx-chip { font-size: 10px; padding: 2px 5px; border-radius: 4px; background: #0d1118; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .roll-wrap { position: relative; background: #090c11; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  canvas#rollCanvas { display: block; width: 100%; height: 320px; }
+  .tooltip {
+    position: absolute; pointer-events: none; background: rgba(11,14,20,.95);
+    border: 1px solid var(--accent); border-radius: 6px; padding: 5px 8px; font-size: 11px;
+    font-family: var(--mono); display: none;
+  }
+  .swatch { width: 10px; height: 10px; border-radius: 3px; display: inline-block; vertical-align: middle; margin-right: 6px; }
+  .spec-bars { display: grid; grid-template-columns: repeat(7, 1fr); gap: 8px; align-items: end; height: 150px; background: #0b0e14; padding: 12px; border-radius: 8px; }
+  .spec-col { display: flex; flex-direction: column; align-items: center; height: 100%; justify-content: flex-end; gap: 4px; }
+  .spec-fill { width: 100%; max-width: 44px; background: linear-gradient(180deg, var(--accent), var(--cyan)); border-radius: 4px 4px 0 0; min-height: 4px; }
+  .muted { color: var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">
+    <div class="logo">FL</div>
+    <div>
+      <div class="title">FL-MCP Studio &amp; Traffic Monitor <span class="muted mono" id="verTag"></span></div>
+      <div class="muted" style="font-size:11px" id="projLine">Waiting for FL Studio telemetry...</div>
+    </div>
+  </div>
+  <div class="controls">
+    <span class="pill" id="flPill"><span class="dot"></span><span id="flStateText">Idle</span></span>
+    <span class="pill" id="portPill">Port: FL MCP</span>
+    <button class="primary" id="btnPoll" title="Fetch status, channels, mixer, peaks now">Poll FL Live</button>
+    <label class="pill" style="cursor:pointer"><input type="checkbox" id="chkAuto" checked /> Auto Refresh</label>
+    <label class="pill" style="cursor:pointer"><input type="checkbox" id="chkLivePoll" /> Live FL Poll</label>
+  </div>
+</header>
+
+<main>
+  <section class="kpi-grid">
+    <div class="card"><div class="kpi-label">Incoming / Outgoing</div><div class="kpi-val" id="kCalls">0 / 0</div><div class="kpi-sub" id="kCallsSub">MCP tools / MIDI ops</div></div>
+    <div class="card"><div class="kpi-label">MIDI Outbound (TX)</div><div class="kpi-val" id="kTx">0 B</div><div class="kpi-sub" id="kTxSub">0 CC frames</div></div>
+    <div class="card"><div class="kpi-label">MIDI Inbound (RX)</div><div class="kpi-val" id="kRx">0 B</div><div class="kpi-sub" id="kRxSub">0 CC frames</div></div>
+    <div class="card"><div class="kpi-label">Latency (Avg / p95)</div><div class="kpi-val" id="kLat">0 ms</div><div class="kpi-sub" id="kErrSub">0 retries · 0 errors</div></div>
+    <div class="card"><div class="kpi-label">Project / Tempo</div><div class="kpi-val" id="kBpm">-- BPM</div><div class="kpi-sub" id="kCounts">0 ch · 0 pat</div></div>
+  </section>
+
+  <nav class="tabs">
+    <button class="tab active" data-tab="traffic">Gelen / Giden Trafik</button>
+    <button class="tab" data-tab="mixer">Mixer &amp; Meters</button>
+    <button class="tab" data-tab="roll">Channel Rack &amp; Piano Roll</button>
+    <button class="tab" data-tab="audio">Audio &amp; Spectrum</button>
+    <button class="tab" data-tab="setup">Doctor &amp; Templates</button>
+  </nav>
+
+  <!-- TRAFFIC TAB -->
+  <section id="tab-traffic" class="split">
+    <div class="card">
+      <div class="toolbar">
+        <button class="active" data-filter="all">All</button>
+        <button data-filter="midi">MIDI Bridge</button>
+        <button data-filter="mcp">MCP Tools</button>
+        <button data-filter="errors">Errors Only</button>
+        <input type="search" id="searchTraffic" placeholder="Filter op / payload / error..." style="flex:1;min-width:160px" />
+        <button id="btnPause">Pause</button>
+        <button id="btnClear">Clear</button>
+      </div>
+      <div class="scroll-box">
+        <table>
+          <thead><tr><th>Time</th><th>Dir</th><th>Op / Tool</th><th>Bytes / Frames</th><th>ms</th><th>Status</th><th>Summary</th></tr></thead>
+          <tbody id="trafficBody"></tbody>
+        </table>
+      </div>
+    </div>
+    <div style="display:grid;gap:14px">
+      <div class="card">
+        <div style="font-weight:700;margin-bottom:6px">Selected Frame Inspector</div>
+        <div class="detail-box" id="inspector">Click any row in the traffic table to inspect full TX/RX payload details.</div>
+      </div>
+      <div class="card">
+        <div style="font-weight:700;margin-bottom:6px">Traffic Latency Sparkline</div>
+        <svg id="sparkSvg" viewBox="0 0 340 70" style="width:100%;height:70px;background:#0b0e14;border-radius:7px"></svg>
+      </div>
+      <div class="card">
+        <div style="font-weight:700;margin-bottom:6px">Top Operations &amp; MCP Tools</div>
+        <div id="breakdown"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- MIXER TAB -->
+  <section id="tab-mixer" class="card panel-hidden">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+      <div><strong>Mixer Console &amp; Live Peaks</strong> <span class="muted" id="clipBadge"></span></div>
+      <span class="muted">Vol (blue) · Peak dBFS (green/amber/red)</span>
+    </div>
+    <div class="mixer-grid" id="mixerGrid"></div>
+  </section>
+
+  <!-- CHANNELS & PIANO ROLL TAB -->
+  <section id="tab-roll" class="split panel-hidden">
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <strong>Piano Roll Preview (Queued Inbox vs FL State)</strong>
+        <span class="pill" id="rollSyncPill">No notes</span>
+      </div>
+      <div class="roll-wrap">
+        <canvas id="rollCanvas"></canvas>
+        <div class="tooltip" id="rollTip"></div>
+      </div>
+      <div class="muted" style="margin-top:6px;font-size:11px">Amber = queued in inbox.json · Emerald = exported in state.json</div>
+    </div>
+    <div class="card">
+      <div style="font-weight:700;margin-bottom:8px">Channel Rack &amp; Plugins</div>
+      <div class="scroll-box" style="max-height:360px">
+        <table>
+          <thead><tr><th>#</th><th>Channel</th><th>Target</th><th>FX / State</th></tr></thead>
+          <tbody id="chanBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- AUDIO TAB -->
+  <section id="tab-audio" class="split panel-hidden">
+    <div class="card">
+      <div style="font-weight:700;margin-bottom:10px">7-Band Frequency Balance</div>
+      <div class="spec-bars" id="specBars"></div>
+      <div style="margin-top:12px" id="audioMetrics" class="muted">Run <code>fl_audio</code> to populate loudness and spectrum measurements.</div>
+    </div>
+    <div class="card">
+      <div style="font-weight:700;margin-bottom:8px">Mix Advice &amp; Latest Production Plan</div>
+      <div id="adviceBox" class="muted">No advice recorded yet.</div>
+    </div>
+  </section>
+
+  <!-- DOCTOR & TEMPLATES TAB -->
+  <section id="tab-setup" class="split panel-hidden">
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <strong>Auto-Discovered FL Templates (<code>template="auto"</code>)</strong>
+        <button id="btnRefreshTpl">Rescan Templates</button>
+      </div>
+      <div class="scroll-box" style="max-height:380px">
+        <table>
+          <thead><tr><th>Template</th><th>BPM</th><th>Ch</th><th>Status</th><th>Detected Roles</th></tr></thead>
+          <tbody id="tplBody"></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="card">
+      <div style="font-weight:700;margin-bottom:8px">System Diagnostics (Doctor)</div>
+      <div id="docBox"></div>
+    </div>
+  </section>
+</main>
+
+<script>
+const $ = s => document.querySelector(s);
+let filterMode = "all", paused = false, lastData = null, rollBoxes = [];
+const NOTES_NAMES = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"];
+function midiName(p){ return NOTES_NAMES[p % 12] + (Math.floor(p / 12) - 1); }
+function fmtBytes(n){ if(n < 1024) return n + " B"; if(n < 1048576) return (n/1024).toFixed(1) + " KB"; return (n/1048576).toFixed(2) + " MB"; }
+function fmtTime(ts){ return new Date(ts * 1000).toLocaleTimeString([], {hour12:false}); }
+function esc(s){ return String(s ?? "").replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+document.querySelectorAll(".tab").forEach(btn => btn.onclick = () => {
+  document.querySelectorAll(".tab").forEach(b => b.classList.remove("active"));
+  btn.classList.add("active");
+  ["traffic","mixer","roll","audio","setup"].forEach(id => {
+    $("#tab-"+id).classList.toggle("panel-hidden", btn.dataset.tab !== id);
+  });
+  if(btn.dataset.tab === "roll" && lastData) drawRoll(lastData.studio);
+});
+
+document.querySelectorAll("[data-filter]").forEach(btn => btn.onclick = () => {
+  document.querySelectorAll("[data-filter]").forEach(b => b.classList.remove("active"));
+  btn.classList.add("active");
+  filterMode = btn.dataset.filter;
+  if(lastData) renderTraffic(lastData.traffic);
+});
+
+$("#btnPause").onclick = () => { paused = !paused; $("#btnPause").textContent = paused ? "Resume" : "Pause"; };
+$("#btnClear").onclick = async () => { await fetch("/api/traffic/clear", {method:"POST"}); fetchState(); };
+$("#btnPoll").onclick = pollFL;
+$("#btnRefreshTpl").onclick = () => fetchState(true);
+$("#searchTraffic").oninput = () => { if(lastData) renderTraffic(lastData.traffic); };
+
+async function pollFL(){
+  $("#btnPoll").disabled = true;
+  $("#btnPoll").textContent = "Polling...";
+  try {
+    const r = await (await fetch("/api/poll", {method:"POST"})).json();
+    if(!r.ok){ $("#flStateText").textContent = "Port busy / offline"; $("#flPill").className = "pill warn"; }
+  } catch(e){}
+  $("#btnPoll").disabled = false;
+  $("#btnPoll").textContent = "Poll FL Live";
+  fetchState();
+}
+
+async function fetchState(refreshTpl=false){
+  if(paused && !refreshTpl) return;
+  try {
+    const url = "/api/state" + (refreshTpl ? "?refresh_templates=1" : "");
+    const data = await (await fetch(url)).json();
+    lastData = data;
+    renderAll(data);
+  } catch(e){}
+}
+
+function renderAll(d){
+  $("#verTag").textContent = "v" + d.meta.version;
+  $("#portPill").textContent = "Port: " + d.meta.port + (d.doctor.midi_port_found ? " ✓" : " (missing)");
+  $("#portPill").className = "pill " + (d.doctor.midi_port_found ? "ok" : "warn");
+
+  const st = (d.studio || {}).status;
+  if(st){
+    $("#projLine").textContent = `${st.fl || "FL Studio"} (API ${st.api || "?"}) · ${st.title || "Untitled"} · Pat ${st.pat || 1}`;
+    $("#kBpm").textContent = `${st.bpm || "--"} BPM`;
+    $("#kCounts").textContent = `${st.n_ch || 0} ch · ${st.n_pat || 0} pat · ${st.play ? "PLAYING" : "Stopped"}`;
+    $("#flPill").className = "pill " + (st.play ? "ok" : "ok");
+    $("#flStateText").textContent = st.play ? "FL Playing" : "FL Linked";
+  }
+
+  const s = d.traffic.stats;
+  $("#kCalls").textContent = `${s.mcp_calls} / ${s.midi_calls}`;
+  $("#kCallsSub").textContent = `MCP tools / MIDI roundtrips`;
+  $("#kTx").textContent = fmtBytes(s.tx_bytes);
+  $("#kTxSub").textContent = `${s.tx_frames} CC frames sent`;
+  $("#kRx").textContent = fmtBytes(s.rx_bytes);
+  $("#kRxSub").textContent = `${s.rx_frames} CC frames received`;
+  $("#kLat").textContent = `${s.avg_ms} ms`;
+  $("#kErrSub").textContent = `p95 ${s.p95_ms} ms · ${s.retries} retries · ${s.midi_errors + s.mcp_errors} err`;
+
+  renderTraffic(d.traffic);
+  renderSparkline(d.traffic.events);
+  renderBreakdown(s);
+  renderMixer(d.studio);
+  renderChannels(d.studio);
+  drawRoll(d.studio);
+  renderAudio(d.studio);
+  renderTemplates(d.templates);
+  renderDoctor(d.doctor);
+}
+
+function renderTraffic(tr){
+  const q = ($("#searchTraffic").value || "").toLowerCase();
+  const rows = [...tr.events].reverse().filter(e => {
+    if(filterMode === "midi" && e.dir !== "midi") return false;
+    if(filterMode === "mcp" && e.dir !== "mcp") return false;
+    if(filterMode === "errors" && e.ok) return false;
+    if(q && !JSON.stringify(e).toLowerCase().includes(q)) return false;
+    return true;
+  });
+  const html = rows.map((e, i) => {
+    const dirBadge = e.dir === "midi" ? '<span class="badge b-midi">MIDI</span>' : '<span class="badge b-mcp">MCP</span>';
+    const okBadge = e.ok ? '<span class="badge b-ok">OK</span>' : '<span class="badge b-err">ERR</span>';
+    const retry = (e.attempts || 1) > 1 ? `<span class="badge b-retry">x${e.attempts}</span>` : "";
+    const sizes = e.dir === "midi"
+      ? `${e.tx_bytes}→${e.rx_bytes}B (${e.tx_frames}/${e.rx_frames}f)`
+      : `${e.tx_bytes}→${e.rx_bytes}B`;
+    const msg = esc(e.error || e.req || e.res || "");
+    return `<tr class="click-row" data-idx="${i}">
+      <td class="mono muted">${fmtTime(e.ts)}</td>
+      <td>${dirBadge}</td>
+      <td class="mono"><strong>${esc(e.op)}</strong>${e.fid ? ' <span class="muted">#'+e.fid+'</span>' : ''}</td>
+      <td class="mono">${sizes}</td>
+      <td class="mono">${e.ms}</td>
+      <td>${okBadge}${retry}</td>
+      <td class="mono muted">${msg.slice(0, 72)}</td>
+    </tr>`;
+  }).join("");
+  $("#trafficBody").innerHTML = html || '<tr><td colspan="7" class="muted">No traffic events matching filter yet. Run tools from Claude/Cursor or click Poll FL Live.</td></tr>';
+  document.querySelectorAll("#trafficBody tr.click-row").forEach(trEl => {
+    trEl.onclick = () => {
+      const ev = rows[Number(trEl.dataset.idx)];
+      $("#inspector").textContent = JSON.stringify(ev, null, 2);
+    };
+  });
+}
+
+function renderSparkline(events){
+  const pts = events.filter(e => e.dir === "midi").slice(-45);
+  const svg = $("#sparkSvg");
+  if(!pts.length){ svg.innerHTML = '<text x="12" y="38" fill="#8b9bb4" font-size="11">No MIDI latency data yet</text>'; return; }
+  const maxMs = Math.max(20, ...pts.map(p => p.ms));
+  const coords = pts.map((p, i) => {
+    const x = pts.length === 1 ? 170 : 8 + (i / (pts.length - 1)) * 324;
+    const y = 60 - (p.ms / maxMs) * 48;
+    return [x.toFixed(1), y.toFixed(1), p.ok];
+  });
+  const line = coords.map(c => `${c[0]},${c[1]}`).join(" ");
+  const dots = coords.map(c => `<circle cx="${c[0]}" cy="${c[1]}" r="2.6" fill="${c[2] ? '#38bdf8' : '#ef4444'}" />`).join("");
+  svg.innerHTML = `<polyline fill="none" stroke="#ff7a2f" stroke-width="1.8" points="${line}" />${dots}<text x="8" y="14" fill="#8b9bb4" font-size="10">max ${maxMs.toFixed(1)} ms</text>`;
+}
+
+function renderBreakdown(s){
+  const items = [
+    ...Object.entries(s.by_op || {}).slice(0,5).map(([k,v]) => ["midi:" + k, v]),
+    ...Object.entries(s.by_tool || {}).slice(0,5).map(([k,v]) => [k, v]),
+  ];
+  const top = Math.max(1, ...items.map(x => x[1]));
+  $("#breakdown").innerHTML = items.map(([k, v]) => `
+    <div class="bar-row">
+      <span class="mono" style="overflow:hidden;text-overflow:ellipsis">${esc(k)}</span>
+      <div class="bar-track"><div class="bar-fill" style="width:${(v/top*100).toFixed(0)}%"></div></div>
+      <span class="mono muted" style="text-align:right">${v}</span>
+    </div>`).join("") || '<span class="muted">No calls yet.</span>';
+}
+
+function renderMixer(studio){
+  const mx = (studio || {}).mixer, pk = (studio || {}).peaks, plugs = (studio || {}).plugins;
+  if(!mx || !mx.rows || !mx.rows.length){
+    $("#mixerGrid").innerHTML = '<div class="muted">No mixer snapshot cached yet. Click "Poll FL Live" or run <code>fl_list(kind="mixer")</code>.</div>';
+    return;
+  }
+  const pkMap = {};
+  (pk && pk.rows || []).forEach(r => pkMap[r[0]] = r[2]);
+  const fxByTrack = {};
+  (plugs && plugs.rows || []).forEach(r => { if(r[1] === "m" || r[1] === "mixer") (fxByTrack[r[2]] = fxByTrack[r[2]] || []).push(r[4]); });
+  $("#clipBadge").textContent = (pk && pk.clipping && pk.clipping.length) ? ` · CLIPPING: ${pk.clipping.join(", ")}` : "";
+  $("#mixerGrid").innerHTML = mx.rows.map(r => {
+    const [idx, name, vol, pan, mute, solo] = r;
+    const volH = Math.max(2, Math.min(100, Math.round((vol || 0) * 100)));
+    const db = pkMap[idx];
+    const pkH = db === undefined || db <= -90 ? 2 : Math.max(4, Math.min(100, Math.round(((db + 60) / 60) * 100)));
+    const fx = (fxByTrack[idx] || []).slice(0, 4).map(f => `<div class="fx-chip" title="${esc(f)}">${esc(f)}</div>`).join("");
+    return `<div class="strip">
+      <div class="strip-head" title="${esc(name)}">${idx}: ${esc(name || ("Insert "+idx))}</div>
+      <div class="meter-wrap">
+        <div class="meter-col"><div class="meter-vol" style="height:${volH}%"></div></div>
+        <div class="meter-col"><div class="meter-pk" style="height:${pkH}%"></div></div>
+      </div>
+      <div class="mono" style="font-size:11px;display:flex;justify-content:space-between">
+        <span>${Math.round((vol||0)*100)}%</span>
+        <span>${db !== undefined ? db + "dB" : "--"}</span>
+      </div>
+      <div style="font-size:10px;color:var(--muted)">Pan ${Number(pan||0).toFixed(2)} ${mute?'<span class="badge b-err">M</span>':''} ${solo?'<span class="badge b-midi">S</span>':''}</div>
+      ${fx}
+    </div>`;
+  }).join("");
+}
+
+function renderChannels(studio){
+  const ch = (studio || {}).channels;
+  if(!ch || !ch.rows || !ch.rows.length){
+    $("#chanBody").innerHTML = '<tr><td colspan="4" class="muted">No channels cached yet.</td></tr>';
+    return;
+  }
+  $("#chanBody").innerHTML = ch.rows.map(r => {
+    const [idx, name, ctype, vol, pan, mute, solo, fx, plugin] = r;
+    const tag = plugin ? ` (${plugin})` : ctype ? ` · ${ctype}` : "";
+    return `<tr>
+      <td class="mono">${idx}</td>
+      <td><span class="swatch" style="background:#ff7a2f"></span>${esc(name)}<span class="muted" style="font-size:11px">${esc(tag)}</span></td>
+      <td class="mono">-> ${fx}</td>
+      <td class="mono muted">${mute ? "MUTE " : ""}${solo ? "SOLO " : ""}${Math.round((vol||0)*100)}%</td>
+    </tr>`;
+  }).join("");
+}
+
+function drawRoll(studio){
+  const canvas = $("#rollCanvas");
+  const ctx = canvas.getContext("2d");
+  const w = canvas.clientWidth || 720, h = canvas.clientHeight || 320;
+  canvas.width = w; canvas.height = h;
+  ctx.fillStyle = "#090c11"; ctx.fillRect(0, 0, w, h);
+  const inb = (studio || {}).piano_inbox, st = (studio || {}).piano_state;
+  const inNotes = (inb && inb.notes) || [], stNotes = (st && st.notes) || [];
+  const all = [...stNotes, ...inNotes];
+  const pill = $("#rollSyncPill");
+  if(!all.length){
+    pill.className = "pill"; pill.textContent = "No queued or exported notes";
+    ctx.fillStyle = "#8b9bb4"; ctx.font = "12px sans-serif";
+    ctx.fillText("Queue notes via fl_notes or fl_produce action=queue to visualize them here.", 18, 42);
+    rollBoxes = [];
+    return;
+  }
+  if(st && st.applied){ pill.className = "pill ok"; pill.textContent = `Applied (${stNotes.length} notes)`; }
+  else if(inNotes.length){ pill.className = "pill warn"; pill.textContent = `Queued (${inNotes.length} notes)`; }
+  else { pill.className = "pill ok"; pill.textContent = `FL State (${stNotes.length} notes)`; }
+
+  const minP = Math.max(0, Math.min(...all.map(n => n[0])) - 3);
+  const maxP = Math.min(127, Math.max(...all.map(n => n[0])) + 3);
+  const spanP = Math.max(12, maxP - minP + 1);
+  const maxBeat = Math.max(4, Math.ceil(Math.max(...all.map(n => n[1] + n[2])) / 4) * 4);
+  const padL = 42, padB = 18, gw = w - padL - 8, gh = h - padB - 8;
+
+  for(let b = 0; b <= maxBeat; b++){
+    const x = padL + (b / maxBeat) * gw;
+    ctx.strokeStyle = b % 4 === 0 ? "#2b3950" : "#151d2b";
+    ctx.beginPath(); ctx.moveTo(x, 6); ctx.lineTo(x, 6 + gh); ctx.stroke();
+    if(b % 4 === 0){ ctx.fillStyle = "#8b9bb4"; ctx.font = "10px monospace"; ctx.fillText("B"+(b/4+1), x+3, h-4); }
+  }
+  const rowH = gh / spanP;
+  for(let p = minP; p <= maxP; p++){
+    const y = 6 + (maxP - p) * rowH;
+    if(p % 12 === 0){
+      ctx.strokeStyle = "#222e42"; ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(w-8, y); ctx.stroke();
+      ctx.fillStyle = "#8b9bb4"; ctx.font = "10px monospace"; ctx.fillText(midiName(p), 6, y + Math.min(10, rowH));
+    }
+  }
+  rollBoxes = [];
+  function plot(list, color, label){
+    list.forEach(n => {
+      const [p, t, d, v] = n;
+      const x = padL + (t / maxBeat) * gw;
+      const bw = Math.max(3, (d / maxBeat) * gw - 1);
+      const y = 6 + (maxP - p) * rowH + 1;
+      const bh = Math.max(3, rowH - 2);
+      ctx.globalAlpha = 0.45 + 0.55 * ((v || 100) / 127);
+      ctx.fillStyle = color; ctx.fillRect(x, y, bw, bh);
+      ctx.globalAlpha = 1;
+      rollBoxes.push({x, y, w: bw, h: bh, note: n, label});
+    });
+  }
+  plot(stNotes, "#22c55e", "FL State");
+  plot(inNotes, "#f59e0b", "Inbox");
+}
+
+$("#rollCanvas").onmousemove = ev => {
+  const r = $("#rollCanvas").getBoundingClientRect();
+  const mx = ev.clientX - r.left, my = ev.clientY - r.top;
+  const hit = rollBoxes.find(b => mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h);
+  const tip = $("#rollTip");
+  if(!hit){ tip.style.display = "none"; return; }
+  const [p, t, d, v] = hit.note;
+  tip.style.display = "block";
+  tip.style.left = Math.min(r.width - 170, mx + 10) + "px";
+  tip.style.top = Math.max(4, my - 26) + "px";
+  tip.textContent = `${hit.label} · ${midiName(p)} (${p}) · b=${t} d=${d} v=${v}`;
+};
+
+function renderAudio(studio){
+  const au = (studio || {}).audio;
+  if(!au){ $("#specBars").innerHTML = ""; return; }
+  const bands = au.bands_db || au.bands || {};
+  const names = Object.keys(bands);
+  if(names.length){
+    const vals = names.map(k => Number(bands[k] || -60));
+    $("#specBars").innerHTML = names.map((k, i) => {
+      const pct = Math.max(5, Math.min(100, Math.round(((vals[i] + 60) / 60) * 100)));
+      return `<div class="spec-col"><div class="mono" style="font-size:10px">${vals[i].toFixed(1)}</div><div class="spec-fill" style="height:${pct}%"></div><div class="mono muted" style="font-size:10px">${esc(k)}</div></div>`;
+    }).join("");
+  }
+  $("#audioMetrics").innerHTML = `
+    <div class="mono" style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">
+      <div><strong>LUFS-I:</strong> ${au.lufs_i} (goal ${au.target_lufs})</div>
+      <div><strong>True Peak:</strong> ${au.true_peak_db} dBTP</div>
+      <div><strong>Crest:</strong> ${au.crest_db} dB</div>
+      <div><strong>LRA:</strong> ${au.lra ?? "--"} LU</div>
+      <div><strong>Stereo Corr:</strong> ${au.stereo ? `${au.stereo.corr} (side ${au.stereo.side_db} dB)` : "--"}</div>
+      <div><strong>File:</strong> ${esc((au.file || "").split(/[\\/]/).pop())}</div>
+    </div>`;
+  const adv = (au.advice || []).map(a => `<li style="margin:4px 0">${esc(a)}</li>`).join("");
+  const plan = (studio || {}).latest_plan;
+  const planHtml = plan ? `<div style="margin-top:12px"><strong>Latest Plan:</strong> <code>${esc(plan.id)}</code> (${esc(plan.genre)} · ${esc(plan.key)} · ${plan.bpm} BPM · ${plan.bars} bars)</div>` : "";
+  $("#adviceBox").innerHTML = (adv ? `<ul>${adv}</ul>` : '<span class="pill ok">No mix issues flagged</span>') + planHtml;
+}
+
+function renderTemplates(list){
+  $("#tplBody").innerHTML = (list || []).map(t => `
+    <tr>
+      <td><strong>${esc(t.name)}</strong><div class="muted mono" style="font-size:10px">${esc(t.rel)}</div></td>
+      <td class="mono">${t.tempo}</td>
+      <td class="mono">${t.channels}</td>
+      <td>${t.sampler_ready ? '<span class="badge b-ok">Sampler Ready</span>' : t.ready ? '<span class="badge b-midi">Ready</span>' : '<span class="badge b-err">No Seed</span>'}</td>
+      <td class="mono muted">${esc((t.roles || []).join(", "))}</td>
+    </tr>`).join("") || '<tr><td colspan="5" class="muted">No FL templates discovered.</td></tr>';
+}
+
+function renderDoctor(doc){
+  const rows = [
+    ["Virtual MIDI Port", doc.midi_port_found ? "OK (" + doc.port_name + ")" : (doc.midi_error || "Missing"), doc.midi_port_found],
+    ["FL Controller Script", doc.fl_script_installed ? "Installed" : "Missing", doc.fl_script_installed],
+    ["Piano Roll Script", doc.piano_roll_script_installed ? "Installed" : "Missing", doc.piano_roll_script_installed],
+    ["Audio Analysis Extra", doc.audio_analysis ? "Available" : "Not installed", doc.audio_analysis],
+    ["Desktop Control", doc.desktop_enabled ? "Enabled" : "Off", true],
+  ];
+  $("#docBox").innerHTML = rows.map(([k, v, ok]) => `
+    <div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--border)">
+      <span>${esc(k)}</span>
+      <span class="badge ${ok ? 'b-ok' : 'b-retry'}">${esc(v)}</span>
+    </div>`).join("") + `<div class="muted mono" style="margin-top:10px;font-size:11px">data: ${esc(doc.data_dir)}<br/>notes: ${esc(doc.notes_dir)}</div>`;
+}
+
+fetchState();
+setInterval(() => {
+  if(!$("#chkAuto").checked) return;
+  if($("#chkLivePoll").checked) pollFL();
+  else fetchState();
+}, 2000);
+</script>
+</body>
+</html>

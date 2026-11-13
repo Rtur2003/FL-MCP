@@ -265,11 +265,105 @@ def export_midi(plan: Plan, drums: str = "fl") -> Path:
     return path
 
 
+def step_view(on: list[int], length: int, bar_steps: int = 16, grid: str | None = None) -> str:
+    """Visual bar-grouped 16th-step strip, e.g. 'x...x...x...x...|....x.......x...'."""
+    if grid:
+        clean = re.sub(r"[\s|-]+", "", grid).lower()
+        chunks = [clean[i : i + bar_steps] for i in range(0, len(clean), bar_steps)]
+        return "|".join(chunks)
+    active = set(on)
+    chars = ["x" if i in active else "." for i in range(length)]
+    return "|".join("".join(chars[i : i + bar_steps]) for i in range(0, length, bar_steps))
+
+
+def _template_dirs() -> list[Path]:
+    env = os.environ.get("FL_MCP_TEMPLATES", "").strip()
+    dirs: list[Path] = []
+    if env:
+        dirs.extend(Path(p).expanduser() for p in env.split(os.pathsep) if p)
+    else:
+        for candidate in [
+            paths.data_dir() / "templates",
+            paths.fl_user_dir() / "Projects" / "Templates",
+            *[d / "Data" / "Templates" for d in paths.fl_install_dirs()],
+        ]:
+            if candidate not in dirs:
+                dirs.append(candidate)
+    return [d for d in dirs if d.is_dir()]
+
+
+def discover_templates(limit: int = 40) -> list[dict[str, Any]]:
+    """Find valid .flp templates on disk and report which ones are ready for flp.build()."""
+    found: list[dict[str, Any]] = []
+    seen: set[Path] = set()
+    for root in _template_dirs():
+        for path in sorted(root.rglob("*.flp")):
+            resolved = path.resolve()
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            try:
+                summary = flp.Flp.parse(path.read_bytes()).summary()
+            except (OSError, flp.FlpError):
+                continue
+            ready = bool(summary["named_pattern_with_notes"] and summary["playlist_items"] > 0)
+            sampler_ready = bool(ready and summary["sampler_channel"])
+            roles = detect_roles([c[1] for c in summary["channels"]])[0]
+            found.append(
+                {
+                    "name": path.stem,
+                    "rel": str(path.relative_to(root)),
+                    "path": str(path),
+                    "ready": ready,
+                    "sampler_ready": sampler_ready,
+                    "tempo": summary["tempo"],
+                    "channels": len(summary["channels"]),
+                    "patterns": summary["patterns"],
+                    "playlist_items": summary["playlist_items"],
+                    "roles": sorted(roles),
+                }
+            )
+            if len(found) >= limit:
+                break
+    found.sort(
+        key=lambda t: (
+            not t["sampler_ready"],
+            not t["ready"],
+            0 if "4x4" in t["name"].lower() else 1,
+            t["channels"],
+            t["name"].lower(),
+        )
+    )
+    return found
+
+
 def _template(path: str) -> Path:
-    f = Path(path).expanduser()
-    if f.suffix.lower() != ".flp" or not f.is_file():
-        raise ValueError("template must be the path of an existing .flp project")
-    return f
+    raw = path.strip()
+    low = raw.lower()
+    if low == "auto":
+        candidates = discover_templates()
+        best = next((t for t in candidates if t["sampler_ready"]), None) or next(
+            (t for t in candidates if t["ready"]), None
+        )
+        if not best:
+            raise ValueError(
+                "no ready FL Studio template found for template='auto'; pass an existing .flp "
+                "with at least one named pattern containing a note and a playlist clip, or put "
+                "one in ~/.fl-mcp/templates"
+            )
+        return Path(best["path"])
+    f = Path(raw).expanduser()
+    if f.suffix.lower() == ".flp" or "/" in raw or "\\" in raw:
+        if f.suffix.lower() != ".flp" or not f.is_file():
+            raise ValueError("template must be the path of an existing .flp project")
+        return f
+    candidates = discover_templates()
+    matches = [t for t in candidates if low in t["name"].lower() or low in t["rel"].lower()]
+    ready_match = next((t for t in matches if t["ready"]), None)
+    picked = ready_match or (matches[0] if matches else None)
+    if picked:
+        return Path(picked["path"])
+    raise ValueError("template must be the path of an existing .flp project (or 'auto')")
 
 
 def parse_sounds(
@@ -309,14 +403,24 @@ def export_flp(
 ) -> dict[str, Any]:
     """Write template + plan (patterns, notes, playlist) as a new project; the template is kept."""
     out = paths.data_dir() / "out" / f"{plan.id}.flp"
-    picked = parse_sounds(plan, template, override, sounds) if sounds else None
-    return flp.build(
-        _template(template), plan, out, override, "replace" if replace else "append", picked
-    )
+    tpl_path = _template(template)
+    picked = parse_sounds(plan, str(tpl_path), override, sounds) if sounds else None
+    report = flp.build(tpl_path, plan, out, override, "replace" if replace else "append", picked)
+    report["template"] = str(tpl_path)
+    return report
 
 
 def inspect_flp(template: str) -> dict[str, Any]:
-    project = flp.Flp.parse(_template(template).read_bytes())
+    if template.strip().lower() in ("list", "templates"):
+        items = discover_templates()
+        return {
+            "count": len(items),
+            "ready_count": sum(1 for t in items if t["ready"]),
+            "templates": items,
+        }
+    path = _template(template)
+    project = flp.Flp.parse(path.read_bytes())
     summary = project.summary()
+    summary["template"] = str(path)
     summary["roles"], summary["unmatched"] = detect_roles([c[1] for c in summary["channels"]])
     return summary

@@ -172,30 +172,83 @@ class Bridge:
 
     # -- requests
 
+    @staticmethod
+    def _log_midi(**kwargs: Any) -> None:
+        from fl_mcp import telemetry
+
+        telemetry.record_midi(**kwargs)
+
     def call(self, req: dict[str, Any], timeout: float | None = None) -> Any:
         payload = dumps(req)
+        base = {
+            "op": str(req.get("o") or "?"),
+            "fid": 0,
+            "req": req,
+            "tx_bytes": len(payload),
+            "tx_frames": 0,
+            "rx_bytes": 0,
+            "rx_frames": 0,
+            "attempts": 0,
+            "ms": 0.0,
+            "ok": False,
+        }
         if len(payload) > MAX_REQ:
-            raise FLError(f"request too large ({len(payload)} bytes, max {MAX_REQ}); split it")
+            msg = f"request too large ({len(payload)} bytes, max {MAX_REQ}); split it"
+            self._log_midi(**base, error=msg)
+            raise FLError(msg)
         with self._lock:
             self._open()
             if self.info is None and req.get("o") != "ping":
                 self.info = self._roundtrip(dumps({"o": "ping"}), timeout)
                 if self.info.get("proto") != PROTO or self.info.get("ver", 0) < SCRIPT_VERSION:
                     self.info = None
-                    raise FLError(
+                    msg = (
                         "FL MCP script in FL Studio is outdated: run `fl-mcp install`, "
                         "then restart FL Studio."
                     )
+                    self._log_midi(**base, error=msg)
+                    raise FLError(msg)
             return self._roundtrip(payload, timeout)
 
     def _roundtrip(self, payload: bytes, timeout: float | None) -> Any:
         wait = timeout or self.timeout
         self._fid = self._fid % 127 + 1
         fid = self._fid
+        started = time.perf_counter()
+        attempts = tx_frames = rx_bytes = rx_frames = 0
+        op = "?"
+        req_meta: Any = payload
+        try:
+            parsed = json.loads(payload)
+            req_meta = parsed
+            if isinstance(parsed, dict):
+                op = str(parsed.get("o") or "?")
+        except ValueError:
+            pass
+
+        def finish(*, ok: bool, error: str = "", res: Any = None) -> None:
+            self._log_midi(
+                op=op,
+                fid=fid,
+                req=req_meta,
+                tx_bytes=len(payload),
+                tx_frames=tx_frames,
+                rx_bytes=rx_bytes,
+                rx_frames=rx_frames,
+                attempts=attempts,
+                ms=(time.perf_counter() - started) * 1000,
+                ok=ok,
+                error=error,
+                res=res,
+            )
+
         for _ in range(2):
+            attempts += 1
             while not self._frames.empty():
                 self._frames.get_nowait()
-            self._send(encode(fid, payload))
+            pairs = encode(fid, payload)
+            tx_frames += len(pairs)
+            self._send(pairs)
             end = time.monotonic() + wait
             while (left := end - time.monotonic()) > 0:
                 try:
@@ -206,15 +259,23 @@ class Bridge:
                     continue
                 if data is None:
                     break
+                rx_bytes = len(data)
+                rx_frames = (rx_bytes + 2) // 3 + 2
                 res = json.loads(data)
                 if res.get("ok"):
-                    return res.get("r")
+                    result = res.get("r")
+                    finish(ok=True, res=result)
+                    return result
                 if res.get("e") == "bad frame":
                     break
-                raise FLError(str(res.get("e") or "unknown FL Studio error"))
-        raise FLError(
+                msg = str(res.get("e") or "unknown FL Studio error")
+                finish(ok=False, error=msg)
+                raise FLError(msg)
+        msg = (
             f"No answer from FL Studio on MIDI port '{self.port}'. Check: FL Studio is running "
             "and not blocked by a dialog; Options > MIDI settings has the port enabled as input "
             "with controller type 'FL MCP' and as output with the same port number; the script is "
             "installed (`fl-mcp install`). Run `fl-mcp doctor` for details."
         )
+        finish(ok=False, error=msg)
+        raise FLError(msg)

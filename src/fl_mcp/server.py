@@ -5,6 +5,7 @@ import functools
 import inspect
 import json
 import os
+import re
 import secrets
 import time
 from collections.abc import AsyncIterator
@@ -32,6 +33,7 @@ from fl_mcp import (
     popupkeys,
     produce,
     render,
+    telemetry,
     uiload,
     units,
 )
@@ -92,17 +94,20 @@ async def _spend(*ops: str) -> AsyncIterator[Spend]:
 
 async def fl_status(
     probe: Annotated[bool, Field(description="also list this FL build's API features")] = False,
-    log: Annotated[bool, Field(description="also list the script's recent errors")] = False,
+    log: Annotated[
+        bool, Field(description="include script errors and TX/RX traffic telemetry")
+    ] = False,
 ) -> str:
     """Project snapshot: FL version, title, tempo, play/record state, loop mode, position,
-    current pattern/channel/mixer track, counts (plus credits when licensed). probe lists the
-    API features this FL build has; log shows the script's last errors: use both when
-    something does not work."""
+    current pattern/channel/mixer track, counts (plus credits when licensed). probe lists API
+    features; log shows script errors plus MIDI TX/RX telemetry."""
     status = await _fl({"o": "status"})
+    telemetry.update_snapshot(status=status)
     if probe:
         status["probe"] = await _fl({"o": "probe"})
     if log:
         status["log"] = await _fl({"o": "diag"})
+        status["traffic"] = telemetry.brief()
     if gate.metered:
         status["account"] = await anyio.to_thread.run_sync(gate.status)
     return _out(status)
@@ -116,11 +121,13 @@ async def fl_list(
     count: Annotated[int, Field(ge=1, le=200)] = 50,
     include_unused: Annotated[bool, Field(description="also list default/empty items")] = False,
 ) -> str:
-    """List channels, mixer tracks, patterns, playlist tracks or every plugin in the project.
-    Returns {cols,rows,next,max}; cols names each row's fields (plugins: where it sits, its slot,
-    parameter and preset counts). Default and empty items are skipped."""
+    """List channels, mixer tracks, patterns, playlist tracks or plugins in the project. Returns
+    {cols,rows,next,max}; default and empty items are skipped unless include_unused=true."""
     req = {"o": "list", "k": kind, "s": start, "n": count, "a": int(include_unused)}
-    return _out(await _fl(req))
+    data = await _fl(req)
+    if start == 0:
+        telemetry.update_snapshot(**{kind: data})
+    return _out(data)
 
 
 async def fl_transport(
@@ -188,16 +195,36 @@ async def fl_steps(
     velocity: Annotated[int | None, Field(ge=0, le=127)] = None,
     pitch: Annotated[int | None, Field(ge=0, le=127, description="MIDI note for 'on'")] = None,
     length: Annotated[int, Field(ge=1, le=256, description="steps to clear/report")] = 16,
+    grid: Annotated[str | None, Field(description="velocity grid (. 0-9 a-z; | ignored)")] = None,
+    swing: Annotated[int, Field(ge=0, le=48, description="off-16th swing ticks")] = 0,
 ) -> str:
-    """Step sequencer of one channel in a pattern. Order: clear, off, on. Returns the steps that
-    are on. With no on/off/clear it only reads."""
+    """Step sequencer of one channel. Pass on/off/clear or a velocity grid ('z.o.|x.z.') with
+    swing. Returns active steps and a bar-grouped visual strip."""
+    if grid is not None:
+        clean = re.sub(r"[\s|-]+", "", grid).lower()
+        if (
+            not clean
+            or len(clean) > 512
+            or any(ch not in ".0123456789abcdefghijklmnopqrstuvwxyz" for ch in clean)
+        ):
+            raise ToolError("grid must be 1..512 characters of . 0-9 a-z (spaces/| allowed)")
+        pat = pattern or (await _fl({"o": "status"}))["pat"]
+        res = await _fl({"o": "grid", "c": channel, "p": pat, "g": clean, "sw": swing})
+        readback = await _fl(
+            {"o": "steps", "c": channel, "p": pat, "n": min(256, max(length, len(clean)))}
+        )
+        readback["bad"] = res.get("bad", 0)
+        readback["view"] = produce.step_view(readback["on"], len(clean), grid=clean)
+        return _out(readback)
     req = {"o": "steps", "c": channel, "p": pattern, "n": length, "clear": int(clear)}
     req.update({"on": on or [], "off": off or []})
     if velocity is not None:
         req["vel"] = velocity
     if pitch is not None:
         req["pit"] = pitch
-    return _out(await _fl(req))
+    out = await _fl(req)
+    out["view"] = produce.step_view(out.get("on") or [], out.get("n") or length)
+    return _out(out)
 
 
 def _note(row: list[float]) -> list[float]:
@@ -240,10 +267,10 @@ async def fl_notes(
     channel: Annotated[int, Field(ge=-1, description="channel to edit, -1 = current")] = -1,
     pattern: Annotated[int, Field(ge=0, description="pattern to edit, 0 = current")] = 0,
     read: Annotated[bool, Field(description="return the last script export")] = False,
+    apply: Annotated[bool, Field(description="apply via desktop script immediately")] = False,
 ) -> str:
-    """Piano roll notes. FL's API cannot write notes directly: this queues them and opens the
-    piano roll; the user must then run Tools > Scripting > FL MCP there and press Accept. Call
-    with read=true afterwards to confirm ('applied') and to read the piano roll back."""
+    """Piano roll notes: queues notes and opens the piano roll. Set apply=true when desktop
+    control is on to apply immediately, or run Tools > Scripting > FL MCP. read=true confirms."""
     folder = notes_dir()
     if read:
         try:
@@ -272,12 +299,29 @@ async def fl_notes(
         raise ToolError("pass notes to queue, or read=true")
     if len(notes) > 1000:
         raise ToolError("at most 1000 notes per call")
+    if apply and not desk.enabled():
+        raise ToolError("apply=true needs desktop control (`fl-mcp desktop on`)")
     rows = [_note(n) for n in notes]
     roll = await _fl({"o": "roll", "c": channel, "p": pattern})
     _write_json(
         folder / "inbox.json",
         {"serial": secrets.randbelow(2**31), "replace": replace, "notes": rows},
     )
+    if apply:
+        try:
+            await _fl({"o": "ui", "a": "win", "w": "roll", "v": "focus"})
+        except ToolError:
+            pass
+        macro_res = await _thread(desk.get().script, folder)
+        return _out(
+            {
+                "queued": len(rows),
+                "channel": roll["ch"],
+                "pattern": roll["pat"],
+                "applied": bool(macro_res.get("applied")),
+                **macro_res,
+            }
+        )
     return _out(
         {
             "queued": len(rows),
@@ -343,11 +387,9 @@ async def fl_library(
     path: Annotated[str | None, Field(description="info: a sample file")] = None,
     limit: Annotated[int, Field(ge=1, le=50)] = 10,
 ) -> str:
-    """Sounds and plugins on this computer. scan indexes FL's sample packs, the folders in
-    FL_MCP_SAMPLES and the plugin database (again after adding sounds). find ranks samples for a
-    role by name and measured sound (length, decay, brightness, low end). kit picks one sample per
-    drum role from one pack for a genre (fl_produce sounds=auto uses it). plugins lists what is
-    installed. info measures one file."""
+    """Sounds and plugins on disk. scan indexes FL packs, FL_MCP_SAMPLES and plugin database.
+    find ranks samples by name and measured sound; kit picks a genre drum kit (sounds=auto).
+    plugins lists installed instruments/effects; info measures one sample."""
     if action == "scan":
         return _out(await _thread(library.scan, 45.0))
     if action == "plugins":
@@ -390,11 +432,9 @@ async def fl_audio(
     ] = None,
     ceiling: Annotated[float, Field(ge=-6, le=0, description="true peak limit, dBTP")] = -1.0,
 ) -> str:
-    """Hear the mix. analyze: LUFS (integrated, short-term, momentary), loudness range, true peak,
-    crest, clipping, DC, stereo width, mono loss, 7-band spectrum and plain advice against the
-    genre's or target loudness. render: export, then analyze: FL's command line for a saved .flp,
-    or the open project through fl_desk when on. compare: with a reference. master: set the master
-    limiter's gain until the loudness hits the target (needs fl_desk). Needs audio extra."""
+    """Audio analysis and mastering (needs audio extra). analyze: LUFS, true peak, crest,
+    clipping, DC, stereo width, 7-band spectrum and mix advice. render: export via CLI (.flp)
+    or fl_desk (open project) then analyze. compare: vs reference. master: dial limiter."""
     if action == "status":
         return _out({"analysis": audio.available(), **await _thread(render.status)})
     goal = target if target is not None else (GENRES[genre].lufs if genre else None)
@@ -449,6 +489,7 @@ async def fl_audio(
     out["target_lufs"] = goal if goal is not None else audio.STREAMING_LUFS
     if made:
         out["render"] = made
+    telemetry.update_snapshot(audio=out)
     return _out(out)
 
 
@@ -470,13 +511,9 @@ async def fl_ui(
     expand: Annotated[bool, Field(description="open folders while stepping")] = False,
     index: Annotated[int | None, Field(ge=0, description="load: mixer track of an effect")] = None,
 ) -> str:
-    """Drive FL's own interface from inside FL, no mouse. window: show/hide/focus the mixer,
-    channels, playlist, roll or browser. key: press up,down,left,right,enter,escape,yes,no,cut,
-    copy,paste,insert,delete,next,previous,tab,menu,itemmenu,f1-f12 in the focused window (can
-    change or delete things). browser: next/prev/expand/collapse/scan/goto/top, then select loads
-    the focused plugin or sample, preview plays it. load: finds query in the browser and loads it
-    (an effect onto mixer track index, else an instrument or sample), checked by what appeared.
-    form: the focused plugin window."""
+    """Drive FL Studio's UI without mouse: window (show/hide/focus mixer, channels, playlist,
+    roll, browser), key (press navigation/editing keys), browser (step/scan/goto/select/preview),
+    load (find query and add effect on mixer index or generator channel), form."""
     if action == "load":
         return _out(await _thread(uiload.load, bridge.call, query or "", index))
     if action == "form":
@@ -666,7 +703,9 @@ async def fl_produce(
     channels: Annotated[str | None, Field(description="'kick=0,bass=3'")] = None,
     pattern: Annotated[str | None, Field(description="queue/show: name or index")] = None,
     role: Annotated[str | None, Field(description="queue: part to send to the piano roll")] = None,
-    template: Annotated[str | None, Field(description=".flp to build on; never modified")] = None,
+    template: Annotated[
+        str | None, Field(description=".flp path or 'auto'; inspect 'list'")
+    ] = None,
     replace_playlist: Annotated[bool, Field(description="flp: drop the template's clips")] = False,
     sounds: Annotated[
         str | None,
@@ -788,13 +827,13 @@ async def fl_mix(
     role: Annotated[str | None, Field(description="chain: kick, bass, master...")] = None,
     apply: Annotated[bool, Field(description="chain: set the role's starting values")] = False,
 ) -> str:
-    """Measure and fix the mix with the mixer's peak meters while the project plays (stops again
-    if it was stopped). meter: peak dBFS per track. balance: faders to role targets (kick -8,
-    bass -9, hats -20). doctor: problems worst first (clipping, headroom, routing, pan, missing
-    plugins). chain: plugins on a track vs what its role wants; apply sets compressor, limiter,
-    reverb and delay values by meaning on plugins already there."""
+    """Measure and balance levels using mixer peaks while FL plays. meter: dBFS per track.
+    balance: move faders to role targets. doctor: sorted mix issues. chain: check/set
+    track plugins (compressor, limiter, reverb, delay) in real units."""
     if action == "doctor":
-        return _out(await _thread(chain.doctor, bridge.call, seconds, bar, plan))
+        doc = await _thread(chain.doctor, bridge.call, seconds, bar, plan)
+        telemetry.update_snapshot(doctor=doc)
+        return _out(doc)
     if action == "chain":
         pairs = await _thread(chain.targets, bridge.call, plan, track, role)
         reports = await _thread(chain.analyze, bridge.call, pairs)
@@ -807,13 +846,13 @@ async def fl_mix(
     names = {r[0]: r[1] for r in mixer_rows}
     if action == "meter":
         result = await _thread(mixing.meter, bridge.call, used, seconds, bar)
-        return _out(
-            {
-                "cols": ["track", "name", "peak_db", "active"],
-                "rows": [[t, names[t], v["peak_db"], v["active"]] for t, v in result.items()],
-                "clipping": [t for t, v in result.items() if v["clips"]],
-            }
-        )
+        peaks_out = {
+            "cols": ["track", "name", "peak_db", "active"],
+            "rows": [[t, names[t], v["peak_db"], v["active"]] for t, v in result.items()],
+            "clipping": [t for t, v in result.items() if v["clips"]],
+        }
+        telemetry.update_snapshot(peaks=peaks_out)
+        return _out(peaks_out)
     goals: dict[int, float] = {}
     if targets:
         try:
@@ -889,9 +928,44 @@ def _flat(node: Any) -> Any:
     return out
 
 
+def _tracked(fn: Any) -> Any:
+    """Wrap a tool handler so every MCP invocation logs incoming args and response size/errors."""
+    name = fn.__name__
+
+    @functools.wraps(fn)
+    async def wrapper(*args: Any, **kwargs: Any) -> Any:
+        started = time.perf_counter()
+        try:
+            res = await fn(*args, **kwargs)
+        except Exception as exc:
+            telemetry.record_mcp(
+                tool=name,
+                args=kwargs,
+                out_bytes=0,
+                ms=(time.perf_counter() - started) * 1000,
+                ok=False,
+                error=str(exc),
+            )
+            raise
+        if isinstance(res, str):
+            out_bytes = len(res.encode("utf-8"))
+        else:
+            out_bytes = len(json.dumps(res, default=str))
+        telemetry.record_mcp(
+            tool=name,
+            args=kwargs,
+            out_bytes=out_bytes,
+            ms=(time.perf_counter() - started) * 1000,
+            ok=True,
+        )
+        return res
+
+    return wrapper
+
+
 def _tool(fn: Any, **hints: bool) -> Tool:
     tool = Tool.from_function(
-        fn,
+        _tracked(fn),
         description=" ".join(inspect.getdoc(fn).split()),
         annotations=ToolAnnotations(openWorldHint=False, **hints),
         structured_output=False,
@@ -952,6 +1026,28 @@ for _key, _topic in guides.TOPICS.items():
         description=f"{_topic.description} Read when {_topic.when}",
         mime_type="text/markdown",
     )(_reader(_key))
+
+
+@mcp.resource(
+    "fl://live/traffic",
+    name="live_traffic",
+    title="Live MIDI & MCP traffic",
+    description="Recent incoming/outgoing MIDI bridge frames, byte counters, latencies and errors.",
+    mime_type="application/json",
+)
+def _live_traffic() -> str:
+    return _out(telemetry.read_traffic(limit=100))
+
+
+@mcp.resource(
+    "fl://live/studio",
+    name="live_studio",
+    title="Live studio snapshot",
+    description="Latest cached FL Studio state: status, channels, mixer, peaks, audio, piano roll.",
+    mime_type="application/json",
+)
+def _live_studio() -> str:
+    return _out(telemetry.read_snapshot())
 
 
 def _task(request: str, *topics: str) -> str:

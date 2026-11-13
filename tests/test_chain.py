@@ -32,7 +32,7 @@ pytestmark = pytest.mark.anyio
         ("FabFilter Pro-C 2", "comp"),
         ("Valhalla VintageVerb", "reverb"),
         ("OTT", "comp"),
-        ("Gross Beat", "other"),
+        ("Gross Beat", "mod"),
         ("Mystery FX", "other"),
     ],
 )

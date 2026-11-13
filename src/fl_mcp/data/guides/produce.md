@@ -18,9 +18,9 @@ One request becomes a playable, varied, in-key arrangement in FL Studio; then it
 
 ## Notes into the piano roll
 
-FL's API cannot write notes, so `fl_notes` queues them: `notes=[[midi, start_beat, length_beats, velocity], ...]` for the selected channel and pattern (`channel`, `pattern` to choose, `replace=true` to clear first), and opens the piano roll. Apply with `fl_desk macro=script` (desktop on) or ask the user to run Tools > Scripting > FL MCP in the piano roll and press Accept. Confirm with `fl_notes read=true`: `applied` must be true. MIDI 60 is C4 (FL labels it C5). A 4/4 bar is 4 beats; at most 1000 notes per call.
+FL's API cannot write notes, so `fl_notes` queues them: `notes=[[midi, start_beat, length_beats, velocity], ...]` for the selected channel and pattern (`channel`, `pattern` to choose, `replace=true` to clear first), and opens the piano roll. Pass `apply=true` (when desktop control is on) or `fl_desk macro=script` to run Tools > Scripting > FL MCP right away, or ask the user to run it once and press Accept. Confirm with `fl_notes read=true`: `applied` must be true. MIDI 60 is C4 (FL labels it C5). A 4/4 bar is 4 beats; at most 1000 notes per call.
 
-Drums can also be written directly: `fl_steps channel=<i> on=[0,4,8,12] velocity=100` (16 steps per bar, 0-based).
+Drums can also be written directly with `fl_steps channel=<i> on=[0,4,8,12] velocity=100` (16 steps per bar, 0-based) or a compact velocity string: `fl_steps channel=<i> grid="z...x...|z.o.x.z." swing=20` (`.` off, `1-9`/`a-z` velocity, `|` bar separators ignored). For full `.flp` builds without hunting for file paths, pass `template=auto` (or `action=inspect template=list` to see discovered templates).
 
 ## Make it musical and not repetitive
 

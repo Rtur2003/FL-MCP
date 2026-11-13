@@ -19,9 +19,14 @@ The server talks to FL Studio through a virtual MIDI port called `FL MCP`. Three
 
 Optional: `fl-mcp desktop on` lets the model see FL's screen and press its keys (`fl_desk`). It stays inside FL windows and stops when the mouse is in the top-left corner. The audio tools need the audio extra: `uv tool install "fl-mcp[audio]"`.
 
+Live monitoring & troubleshooting tools:
+- `fl-mcp dashboard`: opens the local browser studio visualizer & incoming/outgoing traffic monitor (`127.0.0.1:8765`, showing MIDI TX/RX frames, latency, mixer meters, Channel Rack, Piano Roll canvas, 7-band audio spectrum, and discovered `.flp` templates).
+- `fl-mcp traffic --follow`: streams live MIDI & MCP traffic counters and failures in the terminal.
+- `fl-mcp templates`: lists auto-discovered `.flp` project templates on disk (`fl_produce action=flp template=auto`).
+
 ## When something does not work
 
-Call `fl_status probe=true log=true` first: it lists the API functions this FL build has and the controller script's last errors. Then:
+Call `fl_status probe=true log=true` first: it lists the API functions this FL build has, the controller script's last errors, and recent MIDI TX/RX telemetry (also available as `fl://live/traffic` and `fl://live/studio`). Then:
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |

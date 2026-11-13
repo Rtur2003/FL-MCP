@@ -41,12 +41,93 @@ def _doctor() -> int:
 
 
 def _extras() -> None:
-    from fl_mcp import audio, desk, render
+    from fl_mcp import audio, desk, render, telemetry
 
     print(f"audio       : {'ok' if audio.available() else 'missing, install fl-mcp[audio]'}")
     info = render.status()
     print(f"render      : {'ok, ' + info['fl_exe'] if info['fl_exe'] else 'no FL64.exe (Windows)'}")
     print(f"desktop     : {'on' if desk.enabled() else 'off, `fl-mcp desktop on` to allow'}")
+    st = telemetry.read_traffic(limit=0)["stats"]
+    if st["total"]:
+        print(
+            f"traffic     : {st['midi_calls']} midi ({st['tx_bytes']}B tx / {st['rx_bytes']}B rx, "
+            f"avg {st['avg_ms']} ms, {st['midi_errors']} err), {st['mcp_calls']} mcp"
+        )
+
+
+def _format_event(e: dict[str, object]) -> str:
+    import datetime
+
+    ts = datetime.datetime.fromtimestamp(float(e.get("ts") or 0)).strftime("%H:%M:%S")
+    kind = str(e.get("dir") or "?").upper().ljust(4)
+    op = str(e.get("op") or "?").ljust(14)
+    ok = "OK " if e.get("ok") else "ERR"
+    att = int(e.get("attempts") or 1)
+    retry = f" x{att}" if att > 1 else ""
+    bytes_info = f"{e.get('tx_bytes', 0)}->{e.get('rx_bytes', 0)}B".rjust(11)
+    ms = f"{e.get('ms', 0)}ms".rjust(8)
+    detail = str(e.get("error") or e.get("req") or "")
+    return f"{ts} {kind} {op} {ok}{retry:<3} {bytes_info} {ms}  {detail}"
+
+
+def _traffic(args: argparse.Namespace) -> int:
+    import time
+
+    from fl_mcp import telemetry
+
+    if args.clear:
+        n = telemetry.clear_traffic()
+        print(f"cleared {n} traffic events ({telemetry.traffic_path()})")
+        return 0
+    kind = "midi" if args.midi else "mcp" if args.mcp else None
+    data = telemetry.read_traffic(limit=args.limit, kind=kind, only_errors=args.errors)
+    if args.json:
+        print(json.dumps(data, indent=2, ensure_ascii=False))
+        return 0
+    st = data["stats"]
+    print(
+        f"traffic: midi={st['midi_calls']} ({st['midi_errors']} err, {st['retries']} retries, "
+        f"{st['tx_bytes']}B tx / {st['rx_bytes']}B rx, avg {st['avg_ms']}ms, p95 {st['p95_ms']}ms) "
+        f"| mcp={st['mcp_calls']} ({st['mcp_errors']} err)"
+    )
+    seen: set[str] = set()
+    for e in data["events"]:
+        seen.add(str(e.get("id") or ""))
+        print(_format_event(e))
+    if not args.follow:
+        return 0
+    try:
+        while True:
+            time.sleep(0.5)
+            latest = telemetry.read_traffic(limit=50, kind=kind, only_errors=args.errors)["events"]
+            for e in latest:
+                eid = str(e.get("id") or "")
+                if eid and eid not in seen:
+                    seen.add(eid)
+                    print(_format_event(e), flush=True)
+    except KeyboardInterrupt:
+        return 0
+
+
+def _templates(args: argparse.Namespace) -> int:
+    from fl_mcp import produce
+
+    items = produce.discover_templates(limit=60)
+    if args.json:
+        print(json.dumps(items, indent=2, ensure_ascii=False))
+        return 0
+    if not items:
+        print("No .flp templates found. Put .flp templates in ~/.fl-mcp/templates or FL Templates.")
+        return 1
+    for t in items:
+        flag = "sampler-ready" if t["sampler_ready"] else "ready" if t["ready"] else "no-seed"
+        roles = ", ".join(t["roles"]) or "-"
+        print(
+            f"[{flag:<13}] {t['name']:<26} {t['tempo']:>5} BPM  "
+            f"ch={t['channels']:>2}  roles={roles}"
+        )
+        print(f"               {t['path']}")
+    return 0
 
 
 def _selftest(args: argparse.Namespace) -> int:
@@ -224,6 +305,20 @@ def main(argv: list[str] | None = None) -> None:
     setup.add_argument("--client", choices=sorted(clients_names()), default="claude-desktop")
     setup.add_argument("--source", choices=["pypi", "git", "local"], default="pypi")
     setup.add_argument("--desktop", action="store_true", help="also turn desktop control on")
+    dash = sub.add_parser("dashboard", help="open live web studio visualizer & traffic monitor")
+    dash.add_argument("--port", type=int, default=8765, help="HTTP port on 127.0.0.1 (0 = random)")
+    dash.add_argument("--no-open", action="store_true", help="do not launch browser automatically")
+    dash.add_argument("--poll", action="store_true", help="poll FL Studio once on startup")
+    traf = sub.add_parser("traffic", help="show or tail incoming/outgoing MIDI & MCP traffic")
+    traf.add_argument("--limit", type=int, default=30, help="recent events to show (0 = all)")
+    traf.add_argument("--follow", "-f", action="store_true", help="watch live traffic until Ctrl+C")
+    traf.add_argument("--midi", action="store_true", help="only MIDI bridge transactions")
+    traf.add_argument("--mcp", action="store_true", help="only MCP tool calls")
+    traf.add_argument("--errors", action="store_true", help="only failed calls")
+    traf.add_argument("--json", action="store_true", help="output raw JSON")
+    traf.add_argument("--clear", action="store_true", help="clear recorded traffic log")
+    tpl = sub.add_parser("templates", help="list auto-discovered FL Studio .flp templates")
+    tpl.add_argument("--json", action="store_true", help="output JSON")
     args = parser.parse_args(argv)
 
     logging.basicConfig(
@@ -246,6 +341,16 @@ def main(argv: list[str] | None = None) -> None:
         raise SystemExit(_config(args))
     elif args.cmd == "setup":
         raise SystemExit(_setup(args))
+    elif args.cmd == "dashboard":
+        from fl_mcp.dashboard import serve_dashboard
+
+        raise SystemExit(
+            serve_dashboard(port=args.port, open_browser=not args.no_open, poll_first=args.poll)
+        )
+    elif args.cmd == "traffic":
+        raise SystemExit(_traffic(args))
+    elif args.cmd == "templates":
+        raise SystemExit(_templates(args))
     elif args.cmd in ("login", "logout", "account"):
         raise SystemExit(_licence(args))
     else:
