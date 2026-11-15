@@ -56,9 +56,10 @@ INSTRUCTIONS = (
     "fl_status/fl_list, change with fl_set; use fl_api + fl_call only for anything else."
 )
 DESK_NOTE = (
-    " fl_desk is on: it sees FL's screen and presses keys and buttons in FL only. Use it for what "
-    "the API cannot do: macro=script applies queued piano roll notes, macro=export bakes audio, "
-    "macro=open loads a project. Take a shot first; click positions are read off the shot."
+    " fl_desk is on: in stealth/polite mode screenshots use PrintWindow and shortcuts use "
+    "background PostMessage before touching focus (and polite restores your previous window). Use "
+    "it for what the API cannot do: macro=script applies queued piano roll notes, macro=export "
+    "bakes audio, macro=open loads a project. Take a shot first; clicks read off the shot."
 )
 CREDITS_NOTE = (
     " fl_produce (new plans, .flp projects) and fl_mix balance use licence credits; fl_status "
@@ -454,6 +455,16 @@ async def fl_library(
     return _out({"cols": cols, "rows": rows})
 
 
+def _render_blocking(flp: str | Path, fmt: str, *, always_copy: bool = False) -> dict[str, Any]:
+    try:
+        sig = inspect.signature(render.render)
+    except (TypeError, ValueError):
+        return render.render(flp, fmt)
+    if always_copy and "always_copy" in sig.parameters:
+        return render.render(flp, fmt, always_copy=True, isolate=True)
+    return render.render(flp, fmt)
+
+
 async def fl_audio(
     action: Literal["analyze", "render", "compare", "master", "status"] = "analyze",
     path: Annotated[str | None, Field(description="audio file; default latest export")] = None,
@@ -496,25 +507,47 @@ async def fl_audio(
         return _out(await _thread(mastering.run, bridge.call, measure, aim, ceiling))
     made: dict[str, Any] | None = None
     if action == "render":
-        if not project and desk.enabled() and fmt in ("wav", "mp3"):  # the open project, as is
+        mode = desk.mode()
+        if (
+            not project
+            and desk.enabled()
+            and mode == "foreground"
+            and fmt in ("wav", "mp3")
+        ):
             target = data_dir() / "exports" / f"mix-{int(time.time())}.{fmt}"
             made = await _thread(lambda: desk.get().export(target, fmt))
         else:
             flp = project or await _thread(render.newest_project)
-            if not flp:
-                raise ToolError(
-                    "no project to render: save it in FL (Ctrl+S) and call again, or pass project"
-                )
             try:
                 await _fl({"o": "ping"})
+                fl_open = True
             except ToolError:
-                pass  # FL is not answering: it is closed, which the batch renderer needs
+                fl_open = False
+            if not flp:
+                if desk.enabled() and mode != "stealth" and fmt in ("wav", "mp3"):
+                    target = data_dir() / "exports" / f"mix-{int(time.time())}.{fmt}"
+                    made = await _thread(lambda: desk.get().export(target, fmt))
+                else:
+                    raise ToolError(
+                        "no project to render: save it in FL (Ctrl+S) and call again, or pass "
+                        "project"
+                    )
+            elif fl_open:
+                if os.name == "nt" and (project or desk.enabled()) and render.find_fl() is not None:
+                    made = await _thread(_render_blocking, flp, fmt, always_copy=True)
+                    made["parallel"] = True
+                    made["note"] = (
+                        "Rendered saved .flp on an isolated hidden desktop while FL Studio "
+                        "remained open (unsaved edits in FL are not included unless saved)."
+                    )
+                else:
+                    raise ToolError(
+                        "FL Studio is open, and its command-line renderer starts its own copy: "
+                        "save and close FL then call again, pass project= on Windows, or turn on "
+                        "fl_desk to export the open project"
+                    )
             else:
-                raise ToolError(
-                    "FL Studio is open, and its command-line renderer starts its own copy: save "
-                    "and close FL then call again, or turn on fl_desk to export the open project"
-                )
-            made = await _thread(render.render, flp, fmt)
+                made = await _thread(_render_blocking, flp, fmt)
         path = made["audio"]
     path = path or await _thread(render.newest_audio)
     if not path:
