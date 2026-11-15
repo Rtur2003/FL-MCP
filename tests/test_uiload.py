@@ -179,10 +179,6 @@ def test_popup_confirm_and_dismiss_avoid_cursor_stealing_by_default(monkeypatch)
     posted = []
     open_menu = [True]
 
-    class Rect:
-        def __init__(self):
-            self.left, self.top, self.right, self.bottom = 100, 200, 320, 420
-
     class User32:
         def FindWindowW(self, cls, title):  # noqa: N802
             return 88 if open_menu[0] else 0
@@ -204,6 +200,7 @@ def test_popup_confirm_and_dismiss_avoid_cursor_stealing_by_default(monkeypatch)
             raise AssertionError("physical mouse_event must not run by default")
 
     monkeypatch.setattr(popupkeys, "_user32", lambda: User32())
+    monkeypatch.setattr(popupkeys, "window", lambda: 88 if open_menu[0] else 0)
     monkeypatch.setattr(popupkeys.time, "sleep", lambda _s: None)
     assert popupkeys.confirm() is True
     assert any(m == popupkeys.WM_LBUTTONDOWN for _, m, _, _ in posted)
@@ -256,6 +253,7 @@ def test_popup_cursor_fallback_restores_original_cursor(monkeypatch):
                 open_menu[0] = False
 
     monkeypatch.setattr(popupkeys, "_user32", lambda: User32())
+    monkeypatch.setattr(popupkeys, "window", lambda: 99 if open_menu[0] else 0)
     monkeypatch.setattr(popupkeys.time, "sleep", lambda _s: None)
     assert popupkeys.confirm(allow_cursor_fallback=True) is True
     assert len(moves) == 2 and moves[-1] == (640, 360)
@@ -265,6 +263,8 @@ def test_uiload_skips_focus_fl_unless_mode_is_foreground(fl, tmp_path, monkeypat
     from fl_mcp import desk
 
     monkeypatch.setenv("FL_MCP_DIR", str(tmp_path))
+    monkeypatch.delenv("FL_MCP_DESKTOP", raising=False)
+    monkeypatch.delenv("FL_MCP_DESK_MODE", raising=False)
     focus_calls = []
 
     class SpyDesk:
