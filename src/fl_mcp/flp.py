@@ -236,46 +236,8 @@ class Flp:
 
     @classmethod
     def parse(cls, raw: bytes) -> "Flp":
-        if len(raw) < 22 or raw[:4] != b"FLhd":
-            raise FlpError("not an FL Studio project (missing FLhd header)")
-        size, fmt, _, ppq = struct.unpack("<IHHH", raw[4:14])
-        if size != 6:
-            raise FlpError("unexpected header size")
-        if fmt != 0:
-            raise FlpError("only project files (.flp) are supported, not scores or states")
-        if ppq not in PPQS:
-            raise FlpError(f"unsupported timebase {ppq}")
-        if raw[14:18] != b"FLdt":
-            raise FlpError("missing FLdt data chunk")
-        if (
-            struct.unpack("<I", raw[18:22])[0] == 0
-            or struct.unpack("<I", raw[18:22])[0] != len(raw) - 22
-        ):
-            raise FlpError("data chunk size does not match the file (truncated or corrupted?)")
-        events, pos = [], 22
-        while pos < len(raw):
-            start, eid = pos, raw[pos]
-            pos += 1
-            if eid == 172:
-                n = 3
-            elif eid < 192:
-                n = 1 if eid < 64 else 2 if eid < 128 else 4
-            else:
-                n = shift = 0
-                while True:
-                    if pos >= len(raw) or shift > 28:
-                        raise FlpError(f"truncated event at byte {start}")
-                    b = raw[pos]
-                    pos += 1
-                    n |= (b & 0x7F) << shift
-                    shift += 7
-                    if not b & 0x80:
-                        break
-            if pos + n > len(raw):
-                raise FlpError(f"event at byte {start} runs past the end of the file")
-            events.append(Event(eid, raw[pos : pos + n], raw[start : pos + n]))
-            pos += n
-        return cls(raw[:14], events)
+        header, _, _, events = _parse_header_and_events(raw, expected_formats=(0,))
+        return cls(header, events)
 
     def dumps(self) -> bytes:
         body = b"".join(e.encode() for e in self.events)
@@ -351,44 +313,57 @@ class Flp:
                     used.add(struct.unpack("<H", x.data)[0])
         return used
 
-    def add_sampler(
+    def _clone_channel_block(
         self,
+        seed_iid: int,
         name: str,
-        sample: str,
         insert: int = 0,
         color: tuple[int, int, int] | None = None,
         volume: float | None = None,
         pan: float | None = None,
+        *,
+        updates: list[tuple[int, bytes, int | None]] | None = None,
+        drop_ids: set[int] | None = None,
     ) -> int:
-        """Add a Sampler channel playing `sample`, cloned from a sampler channel FL wrote."""
-        spans = self._channel_spans()
-        kinds = {c.iid: c.kind for c in self.channels()}
-        seeds = [iid for iid, kind in kinds.items() if kind == "sampler"]
-        if not seeds:
-            raise FlpError(
-                "the template needs one Sampler channel (it can be empty) to build sample channels"
-            )
         if not 0 <= insert <= 125:
             raise FlpError("insert must be 0-125")
-        start, stop = spans[seeds[0]]
-        block = [Event(e.id, e.data) for e in self.events[start:stop]]
+        spans = self._channel_spans()
+        start, stop = spans[seed_iid]
+        block = [
+            Event(e.id, e.data)
+            for e in self.events[start:stop]
+            if not drop_ids or e.id not in drop_ids
+        ]
         iid = max(spans, default=-1) + 1
         block[0] = Event(NEW_CHAN, struct.pack("<H", iid))
 
-        def put(eid: int, data: bytes) -> None:
+        def put(eid: int, data: bytes, before_id: int | None = None, after_id: int | None = None) -> None:
             for k, e in enumerate(block):
                 if e.id == eid:
                     block[k] = Event(eid, data)
                     return
-            if eid == SAMPLE_PATH:
-                tail = next((k for k, e in enumerate(block) if e.id == 170), None)
-                if tail is not None:
-                    block.insert(tail, Event(eid, data))
+            if before_id is not None:
+                pos = next((k for k, e in enumerate(block) if e.id == before_id), None)
+                if pos is not None:
+                    block.insert(pos, Event(eid, data))
+                    return
+            if after_id is not None:
+                pos = next((k for k, e in enumerate(block) if e.id == after_id), None)
+                if pos is not None:
+                    block.insert(pos + 1, Event(eid, data))
                     return
             block.append(Event(eid, data))
 
+        for eid, data, before_id in updates or ():
+            after_id = (
+                CHAN_TYPE
+                if eid in (PLUGIN_NAME, PLUGIN_FLAGS)
+                else CHAN_COLOR
+                if eid == PLUGIN_PARAMS
+                else None
+            )
+            put(eid, data, before_id=before_id, after_id=after_id)
         put(CHAN_NAME, _utf16(name))
-        put(SAMPLE_PATH, _utf16(sample))
         if any(e.id == CHAN_ROUTE_16 for e in block):
             put(CHAN_ROUTE_16, struct.pack("<H", insert))
         else:
@@ -408,6 +383,93 @@ class Flp:
         count = len(spans) + 1
         self.header = self.header[:10] + struct.pack("<H", count) + self.header[12:]
         return iid
+
+    def add_sampler(
+        self,
+        name: str,
+        sample: str,
+        insert: int = 0,
+        color: tuple[int, int, int] | None = None,
+        volume: float | None = None,
+        pan: float | None = None,
+    ) -> int:
+        """Add a Sampler channel playing `sample`, cloned from a sampler channel FL wrote."""
+        kinds = {c.iid: c.kind for c in self.channels()}
+        seeds = [iid for iid, kind in kinds.items() if kind == "sampler"]
+        if not seeds:
+            raise FlpError(
+                "the template needs one Sampler channel (it can be empty) to build sample channels"
+            )
+        return self._clone_channel_block(
+            seeds[0],
+            name,
+            insert,
+            color,
+            volume,
+            pan,
+            updates=[(SAMPLE_PATH, _utf16(sample), 170)],
+        )
+
+    def add_plugin_from_fst(
+        self,
+        fst_path: str | Path,
+        name: str | None = None,
+        insert: int = 0,
+        sf2_path: str | None = None,
+        color: tuple[int, int, int] | None = None,
+        volume: float | None = None,
+        pan: float | None = None,
+    ) -> int:
+        """Clone a new generator plugin channel offline from an FL Studio `.fst` preset."""
+        preset = read_fst(fst_path)
+        chans = self.channels()
+        if not chans:
+            raise FlpError("the template needs at least one channel to build plugin channels")
+        seed = next((c for c in chans if c.kind == "plugin"), chans[0])
+        params = bytes(preset["params"])
+        if sf2_path is not None:
+            if "soundfont" not in preset["plugin"].lower():
+                raise FlpError(f"preset plugin {preset['plugin']!r} is not SoundFont Player")
+            params = patch_soundfont_blob(params, str(sf2_path))
+        if color is None and preset["color"] and len(preset["color"]) >= 3:
+            c = preset["color"]
+            color = (c[0], c[1], c[2])
+        updates: list[tuple[int, bytes, int | None]] = [
+            (CHAN_TYPE, b"\x02", None),
+            (PLUGIN_NAME, _utf16(preset["plugin"]), None),
+        ]
+        if preset["flags"]:
+            updates.append((PLUGIN_FLAGS, preset["flags"], None))
+        if params:
+            updates.append((PLUGIN_PARAMS, params, None))
+        return self._clone_channel_block(
+            seed.iid,
+            name or preset["name"],
+            insert,
+            color,
+            volume,
+            pan,
+            updates=updates,
+            drop_ids={SAMPLE_PATH},
+        )
+
+    def set_soundfont(self, channel_iid: int, sf2_path: str, name: str | None = None) -> None:
+        """Swap the `.sf2` bank path on an existing SoundFont Player channel in this `.flp`."""
+        spans = self._channel_spans()
+        if channel_iid not in spans:
+            raise FlpError(f"channel id {channel_iid} not found")
+        s, e = spans[channel_iid]
+        pname = next((_text(x.data) for x in self.events[s:e] if x.id == PLUGIN_NAME), "")
+        if "soundfont" not in pname.lower():
+            raise FlpError(f"channel {channel_iid} uses {pname or 'no plugin'}, not SoundFont Player")
+        ev = next((x for x in self.events[s:e] if x.id == PLUGIN_PARAMS), None)
+        if ev is None:
+            raise FlpError(f"channel {channel_iid} has no plugin state event ({PLUGIN_PARAMS})")
+        ev.data, ev.raw = patch_soundfont_blob(ev.data, str(sf2_path)), None
+        if name:
+            cev = next((x for x in self.events[s:e] if x.id == CHAN_NAME), None)
+            if cev is not None:
+                cev.data, cev.raw = _utf16(name), None
 
     def _pattern_blocks(self) -> dict[int, dict[str, list[tuple[int, int]]]]:
         """pattern iid -> {'notes': [(start, end)], 'meta': [(start, end)]} event index ranges."""
