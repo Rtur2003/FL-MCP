@@ -519,7 +519,9 @@ def test_fl2025_event_172_80_byte_playlist_and_16bit_routing(tmp_path):
     assert built.inserts_in_use() == {3, 4, 5}
 
 
-def _make_fst(plugin: str = "3x Osc", name: str = "Warm Lead", sf2_path: str | None = None) -> bytes:
+def _make_fst(
+    plugin: str = "3x Osc", name: str = "Warm Lead", sf2_path: str | None = None
+) -> bytes:
     ev = [
         Event(201, txt(plugin)),
         Event(212, bytes(52)),
@@ -603,7 +605,8 @@ def test_markers_verify_and_build_with_fst_and_sf2(tmp_path, monkeypatch):
     inspected = produce.inspect_flp(out)
     ver = inspected["verify"]
     assert ver["ok"] is True and ver["warnings"] == []
-    end_needed = max(it["position"] + it["length"] for it in Flp.parse(out.read_bytes()).playlist_items())
+    items = Flp.parse(out.read_bytes()).playlist_items()
+    end_needed = max(it["position"] + it["length"] for it in items)
     assert ver["end_marker_ticks"] == end_needed
     assert any(p.get("sf2") == "/sf2/sub.sf2" for p in ver["plugins"])
 
