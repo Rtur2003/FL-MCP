@@ -412,15 +412,16 @@ def export_flp(
     return report
 
 
-def inspect_flp(template: str) -> dict[str, Any]:
-    if template.strip().lower() in ("list", "templates"):
+def inspect_flp(template: str | Path) -> dict[str, Any]:
+    raw = str(template)
+    if raw.strip().lower() in ("list", "templates"):
         items = discover_templates()
         return {
             "count": len(items),
             "ready_count": sum(1 for t in items if t["ready"]),
             "templates": items,
         }
-    path = _template(template)
+    path = _template(raw)
     project = flp.Flp.parse(path.read_bytes())
     summary = project.summary()
     summary["template"] = str(path)
