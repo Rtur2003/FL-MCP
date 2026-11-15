@@ -22,6 +22,12 @@ MOUSEEVENTF = {
     "middle": (0x0020, 0x0040),
 }
 MOUSEEVENTF_WHEEL = 0x0800
+_WM_KEYDOWN, _WM_KEYUP = 0x0100, 0x0101
+_WM_SYSKEYDOWN, _WM_SYSKEYUP = 0x0104, 0x0105
+_PW_RENDERFULLCONTENT = 0x00000002
+_SW_SHOWNOACTIVATE = 4
+_HWND_BOTTOM = 1
+_SWP_NOSIZE, _SWP_NOMOVE, _SWP_NOACTIVATE = 0x0001, 0x0002, 0x0010
 
 VK = {
     "enter": 0x0D, "escape": 0x1B, "tab": 0x09, "space": 0x20, "backspace": 0x08,
@@ -95,6 +101,24 @@ class BITMAPINFO(ctypes.Structure):
     _fields_ = (("bmiHeader", BITMAPINFOHEADER), ("bmiColors", DWORD * 3))
 
 
+class LASTINPUTINFO(ctypes.Structure):
+    _fields_ = (("cbSize", DWORD), ("dwTime", DWORD))
+
+
+class GUITHREADINFO(ctypes.Structure):
+    _fields_ = (
+        ("cbSize", DWORD),
+        ("flags", DWORD),
+        ("hwndActive", ctypes.c_void_p),
+        ("hwndFocus", ctypes.c_void_p),
+        ("hwndCapture", ctypes.c_void_p),
+        ("hwndMenuOwner", ctypes.c_void_p),
+        ("hwndMoveSize", ctypes.c_void_p),
+        ("hwndCaret", ctypes.c_void_p),
+        ("rcCaret", RECT),
+    )
+
+
 def _bind(dll: Any, name: str, restype: Any, *argtypes: Any) -> Any:
     fn = getattr(dll, name)
     fn.restype, fn.argtypes = restype, list(argtypes)
@@ -151,6 +175,18 @@ class WindowsBackend(Backend):
         )
         self.DwmGetWindowAttribute = _bind(dwm, "DwmGetWindowAttribute", I, H, DWORD,
                                            ctypes.c_void_p, DWORD)  # fmt: skip
+        self.GetLastInputInfo = _bind(user32, "GetLastInputInfo", B, P(LASTINPUTINFO))
+        self.AttachThreadInput = _bind(user32, "AttachThreadInput", B, DWORD, DWORD, B)
+        self.GetKeyboardState = _bind(user32, "GetKeyboardState", B, ctypes.c_void_p)
+        self.SetKeyboardState = _bind(user32, "SetKeyboardState", B, ctypes.c_void_p)
+        self.GetGUIThreadInfo = _bind(user32, "GetGUIThreadInfo", B, DWORD, P(GUITHREADINFO))
+        self.PostMessageW = _bind(
+            user32, "PostMessageW", B, H, DWORD, ULONG_PTR, ctypes.c_ssize_t
+        )
+        self.SetWindowPos = _bind(user32, "SetWindowPos", B, H, H, I, I, I, I, DWORD)
+        self.PrintWindow = _bind(user32, "PrintWindow", B, H, H, DWORD)
+        self.GetCurrentThreadId = _bind(kernel32, "GetCurrentThreadId", DWORD)
+        self.GetTickCount = _bind(kernel32, "GetTickCount", DWORD)
 
     @staticmethod
     def _dpi_aware(user32: Any) -> None:
@@ -244,6 +280,64 @@ class WindowsBackend(Backend):
             self.GetSystemMetrics(79),
         )
 
+    def idle_seconds(self) -> float | None:
+        lii = LASTINPUTINFO(cbSize=ctypes.sizeof(LASTINPUTINFO))
+        if not self.GetLastInputInfo(ctypes.byref(lii)):
+            return None
+        elapsed_ms = (self.GetTickCount() - lii.dwTime) & 0xFFFFFFFF
+        return round(elapsed_ms / 1000.0, 2)
+
+    def send_to_back(self, win: Win) -> None:
+        self.SetWindowPos(
+            win.handle,
+            ctypes.c_void_p(_HWND_BOTTOM),
+            0,
+            0,
+            0,
+            0,
+            _SWP_NOSIZE | _SWP_NOMOVE | _SWP_NOACTIVATE,
+        )
+
+    def restore_window(self, win: Win) -> bool:
+        if not win or not win.handle or not self.IsWindowVisible(win.handle):
+            return False
+        self.SetForegroundWindow(win.handle)
+        now = self.GetForegroundWindow()
+        return bool(now) and int(now) == win.handle
+
+    def _bitmap_to_png(
+        self,
+        mem_dc: Any,
+        bitmap: Any,
+        w: int,
+        h: int,
+        max_width: int,
+        *,
+        crop: tuple[int, int, int, int] | None = None,
+        require_content: bool = False,
+    ) -> tuple[bytes, int, int] | None:
+        info = BITMAPINFO()
+        head = info.bmiHeader
+        head.biSize, head.biWidth, head.biHeight = ctypes.sizeof(head), w, -h
+        head.biPlanes, head.biBitCount, head.biCompression = 1, 32, 0
+        buf = ctypes.create_string_buffer(w * h * 4)
+        if self.GetDIBits(mem_dc, bitmap, 0, h, buf, ctypes.byref(info), 0) != h:
+            raise DeskError("could not read the captured bitmap")
+        rgb = imaging.bgra_to_rgb(buf.raw, w, h)
+        if crop is not None:
+            cx, cy, cw, ch = crop
+            if cx >= 0 and cy >= 0 and cx + cw <= w and cy + ch <= h and (cw != w or ch != h):
+                stride, row_b = w * 3, cw * 3
+                off = cx * 3
+                rgb = b"".join(rgb[(cy + r) * stride + off : (cy + r) * stride + off + row_b] for r in range(ch))
+                w, h = cw, ch
+        if require_content:
+            step = max(1, len(rgb) // 256)
+            if not any(rgb[::step]):
+                return None
+        rgb2, w2, h2 = imaging.resize(rgb, w, h, max_width)
+        return imaging.encode_png(rgb2, w2, h2), w2, h2
+
     def capture(self, rect: tuple[int, int, int, int], max_width: int) -> tuple[bytes, int, int]:
         x, y, w, h = rect
         if w < 1 or h < 1:
@@ -256,19 +350,49 @@ class WindowsBackend(Backend):
             # SRCCOPY | CAPTUREBLT: includes layered windows (plugin windows draw that way)
             if not self.BitBlt(mem_dc, 0, 0, w, h, screen_dc, x, y, 0x00CC0020 | 0x40000000):
                 raise DeskError("Windows refused the screen capture (is the screen locked?)")
-            info = BITMAPINFO()
-            head = info.bmiHeader
-            head.biSize, head.biWidth, head.biHeight = ctypes.sizeof(head), w, -h
-            head.biPlanes, head.biBitCount, head.biCompression = 1, 32, 0
-            buf = ctypes.create_string_buffer(w * h * 4)
-            if self.GetDIBits(mem_dc, bitmap, 0, h, buf, ctypes.byref(info), 0) != h:
-                raise DeskError("could not read the captured bitmap")
+            out = self._bitmap_to_png(mem_dc, bitmap, w, h, max_width)
+            assert out is not None
+            return out
         finally:
             self.DeleteObject(bitmap)
             self.DeleteDC(mem_dc)
             self.ReleaseDC(None, screen_dc)
-        rgb, w2, h2 = imaging.resize(imaging.bgra_to_rgb(buf.raw, w, h), w, h, max_width)
-        return imaging.encode_png(rgb, w2, h2), w2, h2
+
+    def capture_window(
+        self, win: Win, max_width: int, *, allow_unminimize: bool = False
+    ) -> tuple[bytes, int, int] | None:
+        if not win or not win.handle:
+            return None
+        if self.IsIconic(win.handle):
+            if not allow_unminimize:
+                return None
+            self.ShowWindow(win.handle, _SW_SHOWNOACTIVATE)
+            self.send_to_back(win)
+            time.sleep(0.12)
+        wr = RECT()
+        if not self.GetWindowRect(win.handle, ctypes.byref(wr)):
+            return None
+        rw, rh = wr.right - wr.left, wr.bottom - wr.top
+        if rw < 10 or rh < 10:
+            return None
+        frame = self._rect(win.handle)
+        crop = None
+        if frame[2] > 0 and frame[3] > 0:
+            crop = (frame[0] - wr.left, frame[1] - wr.top, frame[2], frame[3])
+        screen_dc = self.GetDC(None)
+        mem_dc = self.CreateCompatibleDC(screen_dc)
+        bitmap = self.CreateCompatibleBitmap(screen_dc, rw, rh)
+        try:
+            self.SelectObject(mem_dc, bitmap)
+            if not self.PrintWindow(win.handle, mem_dc, _PW_RENDERFULLCONTENT):
+                return None
+            return self._bitmap_to_png(
+                mem_dc, bitmap, rw, rh, max_width, crop=crop, require_content=True
+            )
+        finally:
+            self.DeleteObject(bitmap)
+            self.DeleteDC(mem_dc)
+            self.ReleaseDC(None, screen_dc)
 
     def _send(self, *events: INPUT) -> None:
         arr = (INPUT * len(events))(*events)
@@ -293,6 +417,52 @@ class WindowsBackend(Backend):
                 raise DeskError(f"this keyboard layout has no key for '{key}'")
             return scan & 0xFF, bool(scan & 0x100), False
         raise DeskError(f"unknown key '{key}'")
+
+    def post_key(self, win: Win, combo: Combo) -> bool:
+        """Deliver a shortcut directly to `win` without foreground activation when permitted."""
+        if not win or not win.handle or any(m not in VK for m in combo.mods):
+            return False
+        try:
+            vk, shift, ext = self._vk(combo.key)
+        except DeskError:
+            return False
+        mods = list(combo.mods)
+        if shift and "shift" not in mods:
+            mods.append("shift")
+        target_tid = self.GetWindowThreadProcessId(win.handle, None)
+        cur_tid = self.GetCurrentThreadId()
+        if not target_tid:
+            return False
+        target_hwnd = win.handle
+        gui = GUITHREADINFO(cbSize=ctypes.sizeof(GUITHREADINFO))
+        if self.GetGUIThreadInfo(target_tid, ctypes.byref(gui)) and gui.hwndFocus:
+            target_hwnd = int(gui.hwndFocus)
+        need_attach = target_tid != cur_tid
+        if need_attach and not self.AttachThreadInput(cur_tid, target_tid, True):
+            return False
+        prev_state = (ctypes.c_ubyte * 256)()
+        saved = False
+        try:
+            saved = bool(self.GetKeyboardState(prev_state))
+            new_state = (ctypes.c_ubyte * 256)(*prev_state)
+            for m in mods:
+                new_state[VK[m]] = 0x80
+            new_state[vk] = 0x80
+            self.SetKeyboardState(new_state)
+            scan = self.MapVirtualKeyW(vk, 0) & 0xFF
+            has_alt = "alt" in mods
+            down_msg = _WM_SYSKEYDOWN if has_alt and "ctrl" not in mods else _WM_KEYDOWN
+            up_msg = _WM_SYSKEYUP if has_alt and "ctrl" not in mods else _WM_KEYUP
+            lp_base = 1 | (scan << 16) | ((1 << 24) if ext else 0) | ((1 << 29) if has_alt else 0)
+            lp_up = lp_base | (1 << 30) | (1 << 31)
+            ok1 = bool(self.PostMessageW(target_hwnd, down_msg, vk, lp_base))
+            ok2 = bool(self.PostMessageW(target_hwnd, up_msg, vk, lp_up))
+            return ok1 and ok2
+        finally:
+            if saved:
+                self.SetKeyboardState(prev_state)
+            if need_attach:
+                self.AttachThreadInput(cur_tid, target_tid, False)
 
     def key(self, combo: Combo) -> None:
         if any(m not in VK for m in combo.mods):
