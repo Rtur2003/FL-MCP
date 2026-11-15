@@ -9,6 +9,7 @@ The entries below the first ones (favourite, delete file) are never reached.
 import ctypes
 import sys
 import time
+from typing import Any
 
 WM_KEYDOWN, WM_KEYUP = 0x0100, 0x0101
 WM_MOUSEMOVE, WM_LBUTTONDOWN, WM_LBUTTONUP = 0x0200, 0x0201, 0x0202
