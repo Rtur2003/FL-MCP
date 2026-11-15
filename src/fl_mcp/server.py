@@ -104,6 +104,7 @@ async def fl_status(
     current pattern/channel/mixer track, counts (plus credits when licensed). probe lists API
     features; log shows script errors plus MIDI TX/RX telemetry."""
     status = await _fl({"o": "status"})
+    status["desktop"] = desk.mode()
     telemetry.update_snapshot(status=status)
     if probe:
         status["probe"] = await _fl({"o": "probe"})
@@ -491,11 +492,11 @@ async def fl_audio(
             raise ToolError("compare needs path: no audio was exported recently")
         return _out(await _thread(audio.compare, mine, reference))
     if action == "master":
-        if not desk.enabled():
+        if not desk.enabled() or desk.mode() == "stealth":
             raise ToolError(
-                "master exports the open project on every pass, which needs fl_desk "
-                "(fl-mcp desktop on). Without it set the limiter with fl_param, render with "
-                "fl_audio and repeat (mix guide)"
+                "master exports the open project via File > Export, which needs fl_desk in "
+                "'polite' or 'foreground' mode (fl-mcp desktop polite). Without it set the "
+                "limiter with fl_param, render with fl_audio and repeat (mix guide)"
             )
 
         def measure() -> dict[str, Any]:
@@ -664,31 +665,36 @@ async def fl_desk(
             png, meta = d.shot(full)
             return meta, png
         info: dict[str, Any] = {"did": action}
-        if action in ("click", "double", "right", "drag", "scroll"):
-            if x is None or y is None:
-                raise ToolError(f"{action} needs x and y, read off a shot")
-            d.point(action, x, y, to_x, to_y, amount)
-            info["at"] = [x, y]
-        elif action == "type":
-            info["typed"] = d.write(text or "")
-        elif action == "key":
-            info["keys"] = d.press(keys or "")
-        elif macro == "script":
-            info.update(d.script(notes_dir()))
-        elif macro == "export":
-            target = Path(path) if path else folder / "exports" / f"mix-{int(time.time())}.wav"
-            info.update(d.export(target, target.suffix.lstrip(".").lower() or "wav"))
-        elif macro == "open":
-            info.update(d.open_project(Path(path or "")))
-        elif macro == "save":
-            info.update(d.save())
-        else:
-            raise ToolError("macro needs script, export, open or save")
-        if not look:
-            return info, None
-        d.sleep(0.4)
-        png, _ = d.shot(full)
-        return info, png
+        restore_prev = d.backend.foreground() if action != "macro" else None
+        try:
+            if action in ("click", "double", "right", "drag", "scroll"):
+                if x is None or y is None:
+                    raise ToolError(f"{action} needs x and y, read off a shot")
+                d.point(action, x, y, to_x, to_y, amount)
+                info["at"] = [x, y]
+            elif action == "type":
+                info["typed"] = d.write(text or "")
+            elif action == "key":
+                info["keys"] = d.press(keys or "")
+            elif macro == "script":
+                info.update(d.script(notes_dir()))
+            elif macro == "export":
+                target = Path(path) if path else folder / "exports" / f"mix-{int(time.time())}.wav"
+                info.update(d.export(target, target.suffix.lstrip(".").lower() or "wav"))
+            elif macro == "open":
+                info.update(d.open_project(Path(path or "")))
+            elif macro == "save":
+                info.update(d.save())
+            else:
+                raise ToolError("macro needs script, export, open or save")
+            if not look:
+                return info, None
+            d.sleep(0.4)
+            png, _ = d.shot(full)
+            return info, png
+        finally:
+            if restore_prev is not None:
+                d._restore_if_polite(restore_prev)
 
     if action == "macro" and macro == "script":
         try:  # the shortcut only reaches the piano roll when that window has the focus
