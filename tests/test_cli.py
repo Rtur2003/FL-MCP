@@ -266,7 +266,7 @@ def test_desktop_cli_supports_stealth_polite_foreground(tmp_path, monkeypatch, c
             cli.main(["desktop", target])
         assert e.value.code == 0
         out = capsys.readouterr().out
-        assert f"desktop control is on ({target})" in out
+        assert f"Desktop control is on (mode={target})" in out
         assert desk.mode() == target
     with pytest.raises(SystemExit) as e_off:
         cli.main(["desktop", "off"])
