@@ -342,3 +342,97 @@ def test_the_current_project_is_the_flp_saved_a_moment_ago(tmp_path, monkeypatch
     assert render.newest_project(now=now) == new
     os.utime(new, (now - 600, now - 600))
     assert render.newest_project(now=now) is None
+
+
+def test_always_copy_isolates_a_lone_project_for_parallel_render(tmp_path):
+    folder = tmp_path / "Solo"
+    folder.mkdir()
+    flp = folder / "song.flp"
+    flp.write_bytes(b"FLhd-orig")
+
+    def fl_writes(cmd, clock):
+        source = Path(cmd.split('/F"')[1].split('"')[0])
+        assert source != folder.resolve()
+        assert (source / "song.flp").read_bytes() == b"FLhd-orig"
+        out = Path(cmd.split('/O"')[1].rstrip('"'))
+        (out / "song.wav").write_bytes(b"z" * 100)
+        os.utime(out / "song.wav", (1001, 1001))
+
+    out, calls = run_render(tmp_path, flp, writes=fl_writes, always_copy=True)
+    assert out["copied"] is True and "/F" in calls[0]
+    assert flp.read_bytes() == b"FLhd-orig"
+
+
+def test_hidden_popen_creates_isolated_desktop_and_cleans_handles(monkeypatch):
+    import ctypes
+    import subprocess
+    import sys
+
+    created = {}
+    closed_handles = []
+    closed_desktops = []
+
+    class User32:
+        def CreateDesktopW(self, name, dev, devmode, flags, access, sa):  # noqa: N802
+            created["desktop"] = name
+            return 9001
+
+        def CloseDesktop(self, hdesk):  # noqa: N802
+            closed_desktops.append(hdesk)
+            return 1
+
+    class Kernel32:
+        def CreateProcessW(  # noqa: N802
+            self, app, cmd, pa, ta, inherit, flags, env, cwd, si_ptr, pi_ptr
+        ):
+            si = ctypes.cast(si_ptr, ctypes.POINTER(render._STARTUPINFOW)).contents
+            pi = ctypes.cast(pi_ptr, ctypes.POINTER(render._PROCESS_INFORMATION)).contents
+            created["flags"] = flags
+            created["dwFlags"] = si.dwFlags
+            created["show"] = si.wShowWindow
+            created["lpDesktop"] = si.lpDesktop
+            pi.hProcess = 7001
+            pi.hThread = 7002
+            return 1
+
+        def WaitForSingleObject(self, handle, ms):  # noqa: N802
+            return 0
+
+        def GetExitCodeProcess(self, handle, code_ptr):  # noqa: N802
+            code_ptr._obj.value = 0
+            return 1
+
+        def CloseHandle(self, handle):  # noqa: N802
+            closed_handles.append(handle)
+            return 1
+
+    class FakeWindll:
+        user32 = User32()
+        kernel32 = Kernel32()
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(ctypes, "windll", FakeWindll(), raising=False)
+    proc = render.hidden_popen('"C:/FL/FL64.exe" /R', isolated_desktop=True)
+    assert isinstance(proc, render._DesktopProcess)
+    assert created["desktop"].startswith("FLMCP_Render_")
+    assert created["lpDesktop"] == created["desktop"]
+    assert created["show"] == render._SW_HIDE
+    assert created["dwFlags"] == render._STARTF_USESHOWWINDOW
+    assert proc.poll() == 0
+    assert 7002 in closed_handles and 7001 in closed_handles
+    assert closed_desktops == [9001]
+
+    # Fallback when CreateDesktopW fails returns hidden subprocess.Popen args cleanly
+    monkeypatch.setattr(FakeWindll.user32, "CreateDesktopW", lambda *a: 0)
+    popen_args = {}
+
+    def fake_popen(cmd, **kw):
+        popen_args["cmd"] = cmd
+        popen_args.update(kw)
+        return "subproc"
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(subprocess, "STARTUPINFO", lambda: type("SI", (), {})(), raising=False)
+    assert render.hidden_popen("cmd", isolated_desktop=True) == "subproc"
+    assert popen_args["creationflags"] == render._CREATE_NO_WINDOW | render._BELOW_NORMAL_PRIORITY_CLASS
+    assert popen_args["startupinfo"].wShowWindow == render._SW_HIDE
