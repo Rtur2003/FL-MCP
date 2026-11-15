@@ -669,6 +669,153 @@ class Flp:
         head = self.version.split(".")[0]
         return int(head) if head.isdigit() else 0
 
+    def _arrangement_bounds(self, arrangement: int = 0) -> tuple[int, int]:
+        arrs = [i for i, e in enumerate(self.events) if e.id == NEW_ARR]
+        if not arrs:
+            ev = self._playlist_event(arrangement)
+            idx = self.events.index(ev)
+            return idx, len(self.events)
+        if arrangement >= len(arrs):
+            raise FlpError("project has no playlist data")
+        start = arrs[arrangement]
+        stop = arrs[arrangement + 1] if arrangement + 1 < len(arrs) else len(self.events)
+        return start, stop
+
+    def markers(self, arrangement: int = 0) -> list[dict[str, Any]]:
+        """Return arrangement time markers (position ticks, flags, name, event indices)."""
+        start, stop = self._arrangement_bounds(arrangement)
+        pl_idx = next(
+            (i for i in range(start, stop) if self.events[i].id == PLAYLIST),
+            start,
+        )
+        out: list[dict[str, Any]] = []
+        i = pl_idx + 1
+        while i < stop:
+            if self.events[i].id != TIME_MARKER_POS:
+                i += 1
+                continue
+            raw_val = struct.unpack("<I", self.events[i].data)[0]
+            flags, pos = raw_val >> 24, raw_val & 0x00FFFFFF
+            name, name_idx = "", None
+            j = i + 1
+            while j < stop and self.events[j].id not in (TIME_MARKER_POS, NEW_ARR, PLAYLIST, 238):
+                if self.events[j].id == TIME_MARKER_NAME:
+                    name = _text(self.events[j].data)
+                    name_idx = j
+                    break
+                j += 1
+            out.append(
+                {
+                    "position": pos,
+                    "flags": flags,
+                    "name": name,
+                    "idx_pos": i,
+                    "idx_name": name_idx,
+                }
+            )
+            i = max(i + 1, j + 1)
+        return out
+
+    def set_end_marker(
+        self, ticks: int, arrangement: int = 0, *, create: bool = True
+    ) -> dict[str, Any] | None:
+        """Move the arrangement 'end' marker to `ticks`, or insert one if requested."""
+        if ticks < 0:
+            raise FlpError("end marker ticks must be >= 0")
+        marks = self.markers(arrangement)
+        existing = next(
+            (m for m in marks if m["flags"] == 0 and m["name"].strip().lower() == "end"),
+            None,
+        )
+        if existing is not None:
+            ev = self.events[existing["idx_pos"]]
+            ev.data, ev.raw = struct.pack("<I", ticks), None
+            return {"action": "updated", "position": ticks}
+        if not create:
+            return None
+        if marks:
+            anchor = max(m["idx_name"] or m["idx_pos"] for m in marks) + 1
+        else:
+            start, stop = self._arrangement_bounds(arrangement)
+            anchor = next(
+                (i + 1 for i in range(start, stop) if self.events[i].id == PLAYLIST),
+                stop,
+            )
+        block = [
+            Event(TIME_MARKER_POS, struct.pack("<I", ticks)),
+            Event(33, b"\x04"),
+            Event(34, b"\x04"),
+            Event(TIME_MARKER_NAME, _utf16("end")),
+        ]
+        self.events[anchor:anchor] = block
+        return {"action": "created", "position": ticks}
+
+    def verify(self) -> dict[str, Any]:
+        """Run an offline structural & musical readiness check on this `.flp`."""
+        chans = self.channels()
+        spans = self._channel_spans()
+        pats = self.patterns()
+        has_playlist = any(e.id == PLAYLIST for e in self.events)
+        items = self.playlist_items() if has_playlist else []
+        marks = self.markers() if has_playlist else []
+        max_tick = max((it["position"] + it["length"] for it in items), default=0)
+        end_m = next((m for m in marks if m["flags"] == 0 and m["name"].lower() == "end"), None)
+        bars = round(max_tick / (4 * self.ppq), 2) if self.ppq else 0.0
+        duration_s = round((max_tick / max(1, self.ppq)) * (60.0 / max(1.0, self.tempo)), 2)
+
+        channel_routes: dict[int, int] = {}
+        channel_plugins: list[dict[str, Any]] = []
+        for c in chans:
+            s, e = spans.get(c.iid, (0, 0))
+            route = 0
+            plugin = ""
+            sf2 = None
+            for ev in self.events[s:e]:
+                if ev.id == CHAN_ROUTE:
+                    route = ev.data[0]
+                elif ev.id == CHAN_ROUTE_16:
+                    route = struct.unpack("<H", ev.data)[0]
+                elif ev.id == PLUGIN_NAME:
+                    plugin = _text(ev.data)
+                elif ev.id == PLUGIN_PARAMS and "soundfont" in plugin.lower():
+                    sf2 = read_soundfont_blob_path(ev.data)
+            channel_routes[c.iid] = route
+            if plugin or sf2:
+                info: dict[str, Any] = {"iid": c.iid, "name": c.name, "plugin": plugin, "insert": route}
+                if sf2:
+                    info["sf2"] = sf2
+                channel_plugins.append(info)
+
+        warnings: list[str] = []
+        if not items:
+            warnings.append("playlist has no arrangement clips")
+        if end_m is not None and max_tick > 0 and end_m["position"] < max_tick:
+            warnings.append(
+                f"'end' marker at tick {end_m['position']} cuts off arrangement ending at {max_tick}"
+            )
+        empty_pats = [pid for pid, pinfo in pats.items() if pinfo["notes"] == 0 and pinfo["name"]]
+        if len(pats) > 0 and len(empty_pats) == len(pats):
+            warnings.append("all patterns have 0 notes")
+        unrouted = [c.name for c in chans if c.kind != "automation" and channel_routes.get(c.iid, 0) == 0]
+        if chans and len(unrouted) == len([c for c in chans if c.kind != "automation"]):
+            warnings.append("all channels route to Master (insert 0); separate inserts help mixing")
+
+        return {
+            "ok": not warnings,
+            "version": self.version,
+            "ppq": self.ppq,
+            "tempo": self.tempo,
+            "bars": bars,
+            "duration_s": duration_s,
+            "channels": len(chans),
+            "plugins": channel_plugins,
+            "patterns": len(pats),
+            "empty_patterns": len(empty_pats),
+            "playlist_items": len(items),
+            "end_marker_ticks": end_m["position"] if end_m else None,
+            "warnings": warnings,
+        }
+
 
 # ---------------------------------------------------------------- plan -> project
 
@@ -679,6 +826,58 @@ def note_record(
     flags = 0x4000 | (0x08 if slide else 0)
     return NOTE.pack(
         position, flags, channel, length, key, 0, 120, 0, 64, 0, 64, velocity, 128, 128
+    )
+
+
+def _find_soundfont_fst() -> Path | None:
+    from fl_mcp import paths
+
+    roots = [*paths.fl_install_dirs(), paths.fl_user_dir()]
+    for base in roots:
+        for pat in ("*Soundfont*.fst", "*SoundFont*.fst"):
+            hits = sorted(base.rglob(pat)) if base.is_dir() else []
+            if hits:
+                return hits[0]
+    return None
+
+
+def _add_soundfont_channel(
+    flp: Flp,
+    role: str,
+    sf2_path: str,
+    insert: int,
+    color: tuple[int, int, int],
+    pan: float | None,
+) -> int:
+    spans = flp._channel_spans()
+    for ch in flp.channels():
+        s, e = spans.get(ch.iid, (0, 0))
+        pname = next((_text(x.data) for x in flp.events[s:e] if x.id == PLUGIN_NAME), "")
+        if "soundfont" in pname.lower():
+            blob = next((x.data for x in flp.events[s:e] if x.id == PLUGIN_PARAMS), None)
+            if blob is not None:
+                patched = patch_soundfont_blob(blob, sf2_path)
+                return flp._clone_channel_block(
+                    ch.iid,
+                    role.capitalize(),
+                    insert,
+                    color,
+                    pan=pan,
+                    updates=[(PLUGIN_PARAMS, patched, None)],
+                )
+    fst = _find_soundfont_fst()
+    if fst is None:
+        raise FlpError(
+            "adding an .sf2 instrument needs a SoundFont Player channel in the template or "
+            "a SoundFont Player.fst preset in FL Studio's plugin database"
+        )
+    return flp.add_plugin_from_fst(
+        fst,
+        name=role.capitalize(),
+        insert=insert,
+        sf2_path=sf2_path,
+        color=color,
+        pan=pan,
     )
 
 
@@ -693,8 +892,8 @@ def build(
 ) -> dict:
     """Write `out` = template + the plan's patterns and playlist. The template is never changed.
 
-    sounds maps a role to a sample file: that role then gets a new Sampler channel playing it
-    (on its own mixer insert unless inserts is False), instead of a channel of the template."""
+    sounds maps a role to a sample (.wav/.ogg), plugin preset (.fst), or SoundFont (.sf2):
+    that role gets its own channel on a free mixer insert (unless inserts is False)."""
     from fl_mcp.produce import GROUP_COLORS, detect_roles
 
     flp = Flp.parse(Path(template).read_bytes())
@@ -713,18 +912,26 @@ def build(
             continue
         mix = plan.mix.get(role)
         color = GROUP_COLORS.get(_group_of(role), "#999999").lstrip("#")
+        rgb = (int(color[0:2], 16), int(color[2:4], 16), int(color[4:6], 16))
         if inserts:
             insert += 1
             if insert > 125:
                 raise FlpError("the mixer has no free insert left for another channel")
-        iids[role] = flp.add_sampler(
-            role.capitalize(),
-            sample,
-            insert if inserts else 0,
-            tuple(int(color[k : k + 2], 16) for k in (0, 2, 4)),
-            pan=mix.pan if mix else None,
-        )
-        created[role] = {"iid": iids[role], "insert": insert if inserts else 0, "sample": sample}
+        target_insert = insert if inserts else 0
+        low = sample.lower()
+        if low.endswith(".fst"):
+            iids[role] = flp.add_plugin_from_fst(
+                sample, name=role.capitalize(), insert=target_insert, color=rgb, pan=mix.pan if mix else None
+            )
+        elif low.endswith(".sf2"):
+            iids[role] = _add_soundfont_channel(
+                flp, role, sample, target_insert, rgb, mix.pan if mix else None
+            )
+        else:
+            iids[role] = flp.add_sampler(
+                role.capitalize(), sample, target_insert, rgb, pan=mix.pan if mix else None
+            )
+        created[role] = {"iid": iids[role], "insert": target_insert, "sample": sample}
     existing = flp.patterns()
     base = max(existing, default=0)
     if base + len(plan.patterns) > 999:
@@ -756,6 +963,9 @@ def build(
         ],
         playlist,
     )
+    end_tick = max((it["position"] + it["length"] for it in flp.playlist_items()), default=0)
+    if end_tick > 0:
+        flp.set_end_marker(end_tick, create=False)
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_bytes(flp.dumps())
