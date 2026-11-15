@@ -35,7 +35,7 @@ Needs `fl-mcp desktop stealth|polite|foreground|on` and a restart. Modes:
 
 Rules:
 
-1. `fl_desk action=shot` first. Positions are read off the latest shot (background capture sets `background=true`), so take a new one whenever the screen may have changed. Its size is up to 1568 px wide; coordinates are in that picture, the tool scales them.
+1. `fl_desk action=shot` first. Positions are read off the latest shot (background capture reports `"background": true` in the result), so take a new one whenever the screen may have changed. Its size is up to 1568 px wide; coordinates are in that picture, the tool scales them.
 2. One small step, then look: every action returns a new picture unless `look=false`. Check the result before the next step; stop and report when the screen is not what you expected.
 3. Input goes to FL windows only. In `polite` or `foreground`, if FL cannot be brought forward the call fails and nothing is sent. Blocked: keys that close windows or leave FL. Moving the mouse to the top-left corner stops everything.
 4. Prefer keys to clicks: `key keys="mod+s"` (`mod` is Ctrl on Windows, Cmd on a Mac), `type text=...` for names and paths, `click`/`double`/`right`/`drag`/`scroll` only where there is no key.
