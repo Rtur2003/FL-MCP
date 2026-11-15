@@ -371,3 +371,114 @@ def test_key_codes_cover_everything_a_combo_can_name():
     for name in desk.NAMED | {"ctrl", "alt", "shift"}:
         assert name in desk_win.VK, name
     assert desk_win.VK["f1"] == 0x70 and desk_win.VK["f12"] == 0x7B
+
+
+class StealthFakeDesk(FakeDesk):
+    def __init__(self, *, idle_s=None, bg_png=None, bg_post=False, **kw):
+        super().__init__(**kw)
+        self.idle_vals = list(idle_s) if isinstance(idle_s, list) else [idle_s]
+        self.bg_png = bg_png
+        self.bg_post = bg_post
+        self.posted = []
+        self.restored = []
+
+    def idle_seconds(self):
+        if len(self.idle_vals) > 1:
+            return self.idle_vals.pop(0)
+        return self.idle_vals[0]
+
+    def capture_window(self, win, max_width, *, allow_unminimize=False):
+        if self.bg_png is None:
+            return None
+        return self.bg_png, min(win.rect[2], max_width), 400
+
+    def post_key(self, win, combo):
+        self.posted.append((win.handle, "+".join((*combo.mods, combo.key))))
+        if self.on_key and self.bg_post:
+            self.on_key(combo)
+        return self.bg_post
+
+    def restore_window(self, win):
+        self.restored.append(win)
+        self.front = win
+        return True
+
+
+def test_desktop_modes_round_trip(tmp_path, monkeypatch):
+    monkeypatch.setenv("FL_MCP_DIR", str(tmp_path))
+    monkeypatch.delenv("FL_MCP_DESKTOP", raising=False)
+    monkeypatch.delenv("FL_MCP_DESK_MODE", raising=False)
+    assert desk.mode() == "off" and desk.enabled() is False
+
+    desk.set_enabled(True)
+    assert desk.mode() == "polite" and desk.enabled() is True
+    for m in ("stealth", "foreground", "polite"):
+        desk.set_enabled(m)
+        assert desk.mode() == m and desk.enabled() is True
+    desk.set_enabled("off")
+    assert desk.mode() == "off" and desk.enabled() is False
+
+    with pytest.raises(DeskError, match="desktop mode must be"):
+        desk.set_enabled("invalid")
+
+    monkeypatch.setenv("FL_MCP_DESKTOP", "stealth")
+    assert desk.mode() == "stealth"
+    monkeypatch.setenv("FL_MCP_DESKTOP", "0")
+    assert desk.mode() == "off"
+
+
+def test_stealth_mode_never_steals_focus_and_supports_background_shot_and_script(tmp_path):
+    notes = tmp_path / "notes"
+    notes.mkdir()
+    (notes / "inbox.json").write_text(json.dumps({"serial": 42}))
+    fake = StealthFakeDesk(
+        front=BROWSER,
+        bg_png=imaging.encode_png(bytes([1, 2, 3]) * (200 * 400), 200, 400),
+        bg_post=True,
+    )
+    fake.on_key = lambda _c: (notes / "state.json").write_text(json.dumps({"serial": 42, "ts": 1}))
+    clock = Time()
+    d = Desk(fake, clock.sleep, clock.now, platform="win32", mode="stealth")
+
+    with pytest.raises(DeskError, match="stealth.*focus steal"):
+        d.focus_fl()
+    assert fake.front == BROWSER
+
+    _png, meta = d.shot()
+    assert meta["background"] is True and fake.front == BROWSER
+
+    res = d.script(folder=notes)
+    assert res["applied"] is True and res["background"] is True
+    assert fake.front == BROWSER and fake.posted == [(FL.handle, "ctrl+alt+y")]
+
+    fake.bg_png = None
+    with pytest.raises(DeskError, match="stealth"):
+        d.shot()
+
+
+def test_polite_mode_waits_for_idle_and_restores_previous_window(tmp_path):
+    notes = tmp_path / "notes"
+    notes.mkdir()
+    (notes / "inbox.json").write_text(json.dumps({"serial": 7}))
+    fake = StealthFakeDesk(front=BROWSER, idle_s=[0.1, 0.2, 2.0], bg_post=False)
+    fake.on_key = lambda _c: (notes / "state.json").write_text(json.dumps({"serial": 7, "ts": 2}))
+    clock = Time()
+    d = Desk(fake, clock.sleep, clock.now, platform="win32", mode="polite")
+
+    res = d.script(folder=notes)
+    assert res["applied"] is True and res["background"] is False
+    assert fake.restored == [BROWSER] and fake.front == BROWSER
+
+    busy_fake = StealthFakeDesk(front=BROWSER, idle_s=[0.1])
+    busy_clock = Time()
+    busy_d = Desk(busy_fake, busy_clock.sleep, busy_clock.now, platform="win32", mode="polite")
+    with pytest.raises(DeskError, match="user is actively typing"):
+        busy_d.focus_fl()
+
+
+@pytest.mark.skipif(ctypes.sizeof(ctypes.c_void_p) != 8, reason="64-bit layout")
+def test_windows_v030_structures_match_win32_abi():
+    from fl_mcp import desk_win as w
+
+    assert ctypes.sizeof(w.LASTINPUTINFO) == 8
+    assert ctypes.sizeof(w.GUITHREADINFO) == 72
