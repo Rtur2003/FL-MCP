@@ -1,7 +1,7 @@
 {
   "name": "fl-studio",
   "displayName": "FL Studio",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Control FL Studio from Claude: produce tracks fast, mix and master with measurements, drive any plugin in real units, and do what the scripting API cannot.",
   "author": {
     "name": "Hasan Arthur Altuntaş",
