@@ -592,7 +592,7 @@ function renderDoctor(doc){
     ["FL Controller Script", doc.fl_script_installed ? "Installed" : "Missing", doc.fl_script_installed],
     ["Piano Roll Script", doc.piano_roll_script_installed ? "Installed" : "Missing", doc.piano_roll_script_installed],
     ["Audio Analysis Extra", doc.audio_analysis ? "Available" : "Not installed", doc.audio_analysis],
-    ["Desktop Control", doc.desktop_enabled ? "Enabled" : "Off", true],
+    ["Desktop Control", doc.desktop_enabled ? ("Enabled (" + (doc.desktop_mode || "polite") + ")") : "Off", true],
   ];
   $("#docBox").innerHTML = rows.map(([k, v, ok]) => `
     <div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--border)">
