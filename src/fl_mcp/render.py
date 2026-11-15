@@ -5,6 +5,7 @@ FL is already running it may hand the project to that instance; the answer then 
 not at all, which is reported rather than hidden."""
 
 import ctypes
+import itertools
 import os
 import shutil
 import subprocess
@@ -19,6 +20,8 @@ from typing import Any
 from fl_mcp import paths
 
 FORMATS = ("wav", "mp3", "ogg", "flac")
+_RENDER_DIR_LOCK = threading.Lock()
+_RENDER_SEQ = itertools.count(1)
 _STARTF_USESHOWWINDOW = 0x00000001
 _SW_HIDE = 0
 _CREATE_NO_WINDOW = 0x08000000
@@ -275,9 +278,7 @@ def render(
             else ("FL Studio's FL64.exe was not found: set FL_MCP_FL_DIR to its folder")
         )
         raise ValueError(f"cannot render from the command line: {why}")
-    base = (workdir or paths.data_dir() / "renders") / str(int(wall()))
-    out = base / "audio"
-    out.mkdir(parents=True, exist_ok=True)
+    base, out = _alloc_render_dir(workdir or paths.data_dir() / "renders", int(wall()))
     source, copied = project.parent, False
     if always_copy or _siblings(project):
         source, copied = base / "project", True
@@ -328,7 +329,11 @@ def render(
             "of FL Studio: close FL first. Otherwise export from its File menu, or turn on fl_desk"
         )
     finally:
-        if not finished and isinstance(proc, _DesktopProcess):
-            proc.terminate()
-        elif isinstance(proc, _DesktopProcess):
-            proc.close()
+        if isinstance(proc, _DesktopProcess):
+            proc.terminate() if not finished else proc.close()
+        elif not finished and hasattr(proc, "terminate"):
+            try:
+                if proc.poll() is None:
+                    proc.terminate()
+            except Exception:
+                pass
