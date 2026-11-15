@@ -434,5 +434,7 @@ def test_hidden_popen_creates_isolated_desktop_and_cleans_handles(monkeypatch):
     monkeypatch.setattr(subprocess, "Popen", fake_popen)
     monkeypatch.setattr(subprocess, "STARTUPINFO", lambda: type("SI", (), {})(), raising=False)
     assert render.hidden_popen("cmd", isolated_desktop=True) == "subproc"
-    assert popen_args["creationflags"] == render._CREATE_NO_WINDOW | render._BELOW_NORMAL_PRIORITY_CLASS
+    assert popen_args["creationflags"] == (
+        render._CREATE_NO_WINDOW | render._BELOW_NORMAL_PRIORITY_CLASS
+    )
     assert popen_args["startupinfo"].wShowWindow == render._SW_HIDE
