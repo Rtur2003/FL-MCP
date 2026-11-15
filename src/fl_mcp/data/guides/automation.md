@@ -8,8 +8,8 @@ Nothing is impossible, the method just has to change. Go down this ladder and st
 | Notes in the piano roll | 1b. piano roll script | `fl_notes`, then `fl_desk macro=script` |
 | Open a window, press a key, move around FL's browser, load a plugin or sample | 2. FL's own UI from inside FL, no mouse | `fl_ui` |
 | New channels, patterns, playlist clips, sample channels | 3. write a project file | `fl_produce template=<.flp>` (+ `sounds=auto`), then open it |
-| Audio file of the mix | 4. FL's command line | `fl_audio action=render` |
-| Anything a person can see and click | 5. the desktop | `fl_desk` (opt-in) |
+| Audio file of the mix | 4. FL's command line | `fl_audio action=render` (isolated hidden desktop when `project=` is given on Windows) |
+| Anything a person can see and click | 5. the desktop | `fl_desk` (opt-in: `stealth`, `polite`, or `foreground`) |
 
 Check what this FL build offers with `fl_status probe=true` before relying on rung 2.
 
@@ -27,13 +27,19 @@ A `.flp` can be written with the notes, patterns, playlist and sample channels i
 
 ## Rung 5: the desktop
 
-Needs `fl-mcp desktop on` and a restart. Rules:
+Needs `fl-mcp desktop stealth|polite|foreground|on` and a restart. Modes:
 
-1. `fl_desk action=shot` first. Positions are read off the latest shot, so take a new one whenever the screen may have changed. Its size is up to 1568 px wide; coordinates are in that picture, the tool scales them.
+- `stealth`: strictly non-intrusive (`PrintWindow` capture and `PostMessage` shortcuts only; never steals focus or moves the user's cursor).
+- `polite` (default for `on`): prefers background capture and keystrokes; waits until the user is idle (1.2 s) before focusing FL when required, and restores the previous foreground window afterwards.
+- `foreground`: immediate bring-to-front focus and cursor fallback allowed.
+
+Rules:
+
+1. `fl_desk action=shot` first. Positions are read off the latest shot (background capture sets `background=true`), so take a new one whenever the screen may have changed. Its size is up to 1568 px wide; coordinates are in that picture, the tool scales them.
 2. One small step, then look: every action returns a new picture unless `look=false`. Check the result before the next step; stop and report when the screen is not what you expected.
-3. Input goes to FL windows only. If FL cannot be brought forward the call fails and nothing is sent. Blocked: keys that close windows or leave FL. Moving the mouse to the top-left corner stops everything.
+3. Input goes to FL windows only. In `polite` or `foreground`, if FL cannot be brought forward the call fails and nothing is sent. Blocked: keys that close windows or leave FL. Moving the mouse to the top-left corner stops everything.
 4. Prefer keys to clicks: `key keys="mod+s"` (`mod` is Ctrl on Windows, Cmd on a Mac), `type text=...` for names and paths, `click`/`double`/`right`/`drag`/`scroll` only where there is no key.
-5. Macros do the common jobs and report: `script` runs the piano roll script again and confirms the notes arrived; `export` renders the open project (File > Export, wav or mp3) to a new file; `open` loads a project; `save` saves.
+5. Macros do the common jobs and report: `script` tries background `PostMessage` before focusing FL (falling back only in `polite`/`foreground`), then confirms `state.json`; `export` renders the open project (File > Export, wav or mp3) to a new file; `open` loads a project; `save` saves.
 6. Never confirm destructive dialogs (discard changes, overwrite, delete) for the user. Show the picture and ask.
 
 ## After any step

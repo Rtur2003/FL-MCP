@@ -90,16 +90,14 @@ class MacBackend(Backend):
         if not win or not win.process:
             return False
         try:
-            _osa(f'tell application {_quote(win.process)} to activate')
+            _osa(f"tell application {_quote(win.process)} to activate")
             return True
         except DeskError:
             return False
 
     def idle_seconds(self) -> float | None:
         try:
-            cg = ctypes.CDLL(
-                "/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics"
-            )
+            cg = ctypes.CDLL("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics")
             fn = cg.CGEventSourceSecondsSinceLastEventType
             fn.argtypes = [ctypes.c_int32, ctypes.c_uint32]
             fn.restype = ctypes.c_double

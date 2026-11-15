@@ -808,14 +808,10 @@ class Flp:
         if len(pats) > 0 and len(empty_pats) == len(pats):
             warnings.append("all patterns have 0 notes")
         unrouted = [
-            c.name
-            for c in chans
-            if c.kind != "automation" and channel_routes.get(c.iid, 0) == 0
+            c.name for c in chans if c.kind != "automation" and channel_routes.get(c.iid, 0) == 0
         ]
         if chans and len(unrouted) == len([c for c in chans if c.kind != "automation"]):
-            warnings.append(
-                "all channels route to Master (insert 0); separate inserts help mixing"
-            )
+            warnings.append("all channels route to Master (insert 0); separate inserts help mixing")
 
         return {
             "ok": not warnings,

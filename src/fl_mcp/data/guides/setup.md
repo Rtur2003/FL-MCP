@@ -11,7 +11,7 @@ The server talks to FL Studio through a virtual MIDI port called `FL MCP`. Three
 
 `fl-mcp selftest --deep` additionally loads Fruity Balance through FL's browser onto a mixer track and undoes it: it tells you whether adding plugins works on your FL build (save the project first; if undo does not take it back, delete the plugin by hand).
 
-Optional: `fl-mcp desktop on` lets the model see FL's screen and press its keys (`fl_desk`). It stays inside FL windows and stops when the mouse is in the top-left corner. The audio tools need the audio extra: `uv tool install "fl-mcp[audio]"`.
+Optional: `fl-mcp desktop on` (or `stealth`, `polite`, `foreground`) lets the model see FL's screen and drive shortcuts (`fl_desk`). `polite` (default when on) captures via background `PrintWindow` and waits for you to be idle before focusing FL, restoring your previous window afterwards; `stealth` never steals focus. Browser popup confirmation (`fl_ui`) avoids moving your mouse cursor unless in `foreground` mode. The audio tools need the audio extra: `uv tool install "fl-mcp[audio]"`.
 
 Live monitoring & troubleshooting tools:
 - `fl-mcp dashboard`: opens the local browser studio visualizer & incoming/outgoing traffic monitor (`127.0.0.1:8765`, showing MIDI TX/RX frames, latency, mixer meters, Channel Rack, Piano Roll canvas, 7-band audio spectrum, and discovered `.flp` templates).
@@ -29,7 +29,7 @@ Call `fl_status probe=true log=true` first: it lists the API functions this FL b
 | `fl_notes` queued, nothing in the piano roll | the piano roll script never ran | in the piano roll: Tools > Scripting > FL MCP, press Accept once; afterwards `fl_desk macro=script` (or Ctrl+Alt+Y) repeats it |
 | `fl_param` says a parameter has no text | plugin does not report value strings | set 0-1 `value`, or read it on screen with `fl_desk` |
 | `fl_param real=` cannot reach a value | the parameter's range does not contain it | read `text` after the call: it shows what FL really set |
-| `fl_audio render`: "FL Studio is open" | FL's command-line renderer starts its own copy of FL | save and close FL, or use `fl_desk` (desktop on) to export the open project, or File > Export by hand |
+| `fl_audio render`: "FL Studio is open" | Rendering the *open* project needs `fl_desk` (`polite`/`foreground`) unless a `.flp` path is given | Pass `project=<file.flp>` on Windows to render in a hidden background desktop alongside open FL, use `fl_desk`, or save and close FL |
 | `fl_desk`: "Windows blocked the input" | FL runs as administrator | start Claude as administrator too, or run FL normally |
 | Credits | `fl_status` shows the balance; `fl-mcp account` shows prices | tell the user instead of retrying |
 

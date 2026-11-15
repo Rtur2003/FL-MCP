@@ -180,9 +180,7 @@ class WindowsBackend(Backend):
         self.GetKeyboardState = _bind(user32, "GetKeyboardState", B, ctypes.c_void_p)
         self.SetKeyboardState = _bind(user32, "SetKeyboardState", B, ctypes.c_void_p)
         self.GetGUIThreadInfo = _bind(user32, "GetGUIThreadInfo", B, DWORD, P(GUITHREADINFO))
-        self.PostMessageW = _bind(
-            user32, "PostMessageW", B, H, DWORD, ULONG_PTR, ctypes.c_ssize_t
-        )
+        self.PostMessageW = _bind(user32, "PostMessageW", B, H, DWORD, ULONG_PTR, ctypes.c_ssize_t)
         self.SetWindowPos = _bind(user32, "SetWindowPos", B, H, H, I, I, I, I, DWORD)
         self.PrintWindow = _bind(user32, "PrintWindow", B, H, H, DWORD)
         self.GetCurrentThreadId = _bind(kernel32, "GetCurrentThreadId", DWORD)

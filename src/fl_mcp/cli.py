@@ -304,9 +304,7 @@ def main(argv: list[str] | None = None) -> None:
     desktop = sub.add_parser(
         "desktop", help="let the model see and drive FL silently (stealth/polite/foreground)"
     )
-    desktop.add_argument(
-        "action", choices=["on", "off", "stealth", "polite", "foreground", "test"]
-    )
+    desktop.add_argument("action", choices=["on", "off", "stealth", "polite", "foreground", "test"])
     conf = sub.add_parser("config", help="print the text that registers this server with a client")
     conf.add_argument("client", nargs="?", choices=sorted(clients_names()))
     conf.add_argument("--source", choices=["pypi", "git", "local"], default="pypi")

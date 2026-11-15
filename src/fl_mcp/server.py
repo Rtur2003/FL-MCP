@@ -508,12 +508,7 @@ async def fl_audio(
     made: dict[str, Any] | None = None
     if action == "render":
         mode = desk.mode()
-        if (
-            not project
-            and desk.enabled()
-            and mode == "foreground"
-            and fmt in ("wav", "mp3")
-        ):
+        if not project and desk.enabled() and mode == "foreground" and fmt in ("wav", "mp3"):
             target = data_dir() / "exports" / f"mix-{int(time.time())}.{fmt}"
             made = await _thread(lambda: desk.get().export(target, fmt))
         else:

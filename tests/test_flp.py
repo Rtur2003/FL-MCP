@@ -535,9 +535,13 @@ def _make_fst(
     else:
         ev.append(Event(213, b"\x01\x02\x03\x04"))
     body = b"".join(e.encode() for e in ev)
-    return b"FLhd" + struct.pack("<IHHH", 6, flp.FST_FORMAT, 1, 96) + b"FLdt" + struct.pack(
-        "<I", len(body)
-    ) + body
+    return (
+        b"FLhd"
+        + struct.pack("<IHHH", 6, flp.FST_FORMAT, 1, 96)
+        + b"FLdt"
+        + struct.pack("<I", len(body))
+        + body
+    )
 
 
 def test_read_fst_add_plugin_and_soundfont_patching(tmp_path):
