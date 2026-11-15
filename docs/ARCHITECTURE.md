@@ -76,9 +76,9 @@ The engine varies on purpose: fills at phrase ends, drop-outs before drops, snar
 
 `src/fl_mcp/flp.py` reads a project as a list of events (`id`, payload) and writes it back. Events it does not understand are kept byte for byte, so a file from a newer FL version round-trips unchanged; truncated or corrupt files are refused with a reason.
 
-Patch operations: set tempo, replace a pattern's notes and name, clone a pattern from a seed (the template's named pattern with a note), and append or replace playlist clips. Playlist records are 32 bytes up to FL 20 and 60 bytes from FL 21; when the length fits both, the project version decides. Output is a new file; the template is never changed.
+Patch operations: set tempo, replace a pattern's notes and name, clone a pattern from a seed (the template's named pattern with a note), append or replace playlist clips, add instrument channels from `.fst` plugin presets (`FST_FORMAT = 48`) or `.sf2` SoundFonts (via `patch_soundfont_blob` on SoundFont Player event `213`), manage arrangement `end` time markers (`148`/`205`), and validate structure/routing/notes/markers offline via `verify()`. Playlist records are 32 bytes up to FL 20, 60 bytes from FL 21, and 80 bytes in FL 2025; when the length fits multiple formats, the project version decides. Output is a new file; the template is never changed.
 
-Risk, stated plainly: FL does not publish this format, and FL Studio itself is the only complete judge of a file. The module is verified against real FL 20.8.4 projects and an independent parser, but a project written for a newer FL version should be opened and checked once by a person.
+Risk, stated plainly: FL does not publish this format, and FL Studio itself is the only complete judge of a file. The module is verified against real FL 20.8.4 and FL 2025 `.flp`/`.fst` files and an independent parser, but a project written for a newer FL version should be opened and checked once by a person.
 
 ## Audio analysis
 
@@ -86,13 +86,17 @@ Risk, stated plainly: FL does not publish this format, and FL Studio itself is t
 
 ## The desktop tier
 
-`desk.py` holds the policy and the macros; `desk_win.py` and `desk_mac.py` hold the operating-system calls behind a small `Backend` interface, so the policy is tested against a fake desktop.
+`desk.py` holds the policy and the macros; `desk_win.py` and `desk_mac.py` hold the operating-system calls behind a `Backend` interface, so the policy is tested against a fake desktop.
 
-- Input is sent only if an FL window (matched by process, then by title) is in front; otherwise FL is brought forward, and if that fails nothing is sent. The check is repeated before every step of a macro.
+- **Three non-intrusive modes (`stealth`, `polite`, `foreground`)**:
+  - `stealth` never steals window focus or moves the cursor: screenshots rely strictly on background `PrintWindow(..., PW_RENDERFULLCONTENT)` with DWM frame cropping, and piano-roll script hotkeys use `AttachThreadInput` + `PostMessageW` to FL's focused window (`GUITHREADINFO.hwndFocus`).
+  - `polite` (default for `fl-mcp desktop on`) tries background capture and `PostMessageW` first, waits until `GetLastInputInfo` reports the user has been idle (>= 1.2 s) before bringing FL forward when a UI dialog demands focus, and calls `restore_window` to return focus to the user's previous window afterwards.
+  - `foreground` permits immediate focus changes and fallback cursor operations.
+- **Hidden-desktop CLI rendering & cursor-less popups**: On Windows, `render.hidden_popen` spawns `FL64.exe /R` inside a private `CreateDesktopW` desktop (`FLMCP_Render_<pid>_<tid>`) with `SW_HIDE`, `CREATE_NO_WINDOW`, and `BELOW_NORMAL_PRIORITY_CLASS`, copying isolated projects via `always_copy=True` so parallel offline renders never surface windows or collide with open FL. `popupkeys.py` confirms/dismisses `TQuickPopupMenuWindow` via `PostMessageW` (`VK_RETURN`/`VK_ESCAPE`, then client coordinates / `WM_CANCELMODE`) and only touches physical cursor fallback in `foreground` mode (restoring cursor position afterwards).
 - Key combos are parsed to a small grammar (`mod+shift+r`); window-closing and system keys are blocked. A mouse in the top-left corner raises a failsafe.
-- A screenshot is the union of FL's visible windows, shrunk to at most 1568 px wide; later clicks are given in that picture's coordinates and scaled back. A click before any screenshot is refused.
-- Windows structures use fixed-width field types so their sizes (`INPUT` is 40 bytes on 64-bit) are checked by a test on any 64-bit system. The process asks for per-monitor DPI awareness so pixels in pictures and clicks agree.
-- Off by default: `fl-mcp desktop on` writes a flag file (or `FL_MCP_DESKTOP=1`); the tool is not even registered otherwise.
+- A screenshot captures FL's main window in the background or the union of FL's visible windows in the foreground, shrunk to at most 1568 px wide; later clicks are given in that picture's coordinates and scaled back. A click before any screenshot is refused.
+- Fixed-width ctypes structures (`INPUT` = 40 B, `LASTINPUTINFO` = 8 B, `GUITHREADINFO` = 72 B on 64-bit) keep struct sizes portable across OSes. The Windows backend requests per-monitor DPI awareness so coordinates stay exact.
+- Off by default: `fl-mcp desktop on|stealth|polite|foreground` writes `desktop.on` (or `FL_MCP_DESKTOP=stealth|polite|foreground|1|0`); `fl_desk` is not registered while off. See `docs/FL_STUDIO_NOTES.md` for verified binary/Win32 format notes.
 
 ## Guides, prompts and the plugin
 
