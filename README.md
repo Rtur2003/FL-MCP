@@ -71,7 +71,7 @@ The plugin starts the server and adds five skills (**setup**, **produce**, **mix
 | --- | --- |
 | `fl_produce` | **Fast production.** Builds a genre-aware song plan and delivers it: drums into the Channel Rack, a MIDI file, or a finished `.flp` with samples (see below) |
 | `fl_mix` | `doctor` finds problems worst first; `meter` and `balance` use FL's peak meters while the project plays (kick -8 dB, bass -9 dB, hats -20 dB...); `chain` checks each track's plugins against its role and sets compressor, limiter, reverb and delay values by meaning |
-| `fl_audio` | **Hear the mix.** LUFS (integrated, short-term, momentary), loudness range, true peak, crest factor, clipping, DC, stereo width and mono loss, a 7-band spectrum and plain advice; renders the project first (the open one through `fl_desk`, or a saved `.flp` through FL's command line with FL closed), compares with a reference; `master` moves the master limiter's gain until the loudness hits the genre's target, measuring after each step |
+| `fl_audio` | **Hear the mix.** LUFS (integrated, short-term, momentary), loudness range, true peak, crest factor, clipping, DC, stereo width and mono loss, a 7-band spectrum and plain advice; renders the project first (`polite`/`foreground` open export via `fl_desk`, or isolated hidden-desktop CLI render on a saved `.flp` via `project=`), compares with a reference; `master` moves the master limiter's gain until the loudness hits the genre's target, measuring after each step |
 | `fl_param` | **Any plugin**, stock or third party: list parameters by name, set one in real units (`real="-18 dB"`), set many (`settings="Threshold=-18 dB, Ratio=4:1"`), read and load presets |
 | `fl_list` | channels, mixer tracks, patterns, playlist tracks or every plugin in the project |
 | `fl_library` | indexes your sample packs and plugins; ranks samples for a role by name and by measured sound; picks a coherent drum kit for a genre |
@@ -83,7 +83,7 @@ The plugin starts the server and adds five skills (**setup**, **produce**, **mix
 | `fl_notes` | queue piano roll notes (`apply=true` runs the script immediately when desktop control is on) and read the piano roll back |
 | `fl_call` | raw FL scripting API, batched (`modules`: transport mixer channels patterns playlist plugins ui general arrangement) |
 | `fl_api` | API reference for `fl_call`: signatures and `midi` constants; works without FL |
-| `fl_desk` | *opt-in* (`fl-mcp desktop on`). See and drive FL's screen: screenshots, keys, clicks, and macros that run the piano roll script, export audio, open and save projects |
+| `fl_desk` | *opt-in* (`fl-mcp desktop stealth\|polite\|foreground\|on`). Non-intrusive screen capture (`PrintWindow`), background `PostMessage` keys, clicks, and macros that run the piano roll script, export audio, open and save projects |
 
 Try: *"Make a 128 BPM techno track in F# minor, then mix and master it."*
 
@@ -109,10 +109,10 @@ FL's API cannot write notes. `fl_notes` and `fl_produce action=queue` write them
 ## Desktop control (opt-in)
 
 ```bash
-fl-mcp desktop on      # then restart your AI client; `off` undoes it, `test` takes a screenshot
+fl-mcp desktop polite     # default for `on` (`stealth`, `polite`, or `foreground`; restart AI client; `off` undoes it, `test` captures FL)
 ```
 
-`fl_desk` gives the model eyes and hands for what no API covers: `shot` returns a picture of FL's windows (dialogs included), `click`/`double`/`right`/`drag`/`scroll` take positions off the last picture, `type` and `key` enter text and combos (`mod+s`; `mod` is Ctrl on Windows, Cmd on a Mac). Safety: input goes to FL windows only (FL is brought forward first, and nothing is sent if that fails), keys that close windows or leave FL are blocked, and moving the mouse to the top-left corner stops everything. Windows uses user32/GDI (no extra packages); macOS uses System Events and `screencapture` (grant Accessibility and Screen Recording; `cliclick` adds double-click, right-click and drag).
+`fl_desk` gives the model eyes and hands for what no API covers without interrupting your workflow: `stealth` strictly uses background `PrintWindow` capture and `PostMessage` keystrokes (never steals focus or moves the cursor); `polite` (default) tries background paths first, waits until you are idle before temporary focus if needed, and restores your previous window afterwards; `foreground` switches directly to FL. Input goes to FL windows only, dangerous keys (`alt+f4`, `ctrl+alt+del`, `cmd+q`) are blocked, and moving the mouse to `(0, 0)` triggers an immediate failsafe. Windows uses user32/GDI/dwmapi; macOS uses System Events, CoreGraphics idle detection, and `screencapture` (`cliclick` adds double-click, right-click and drag).
 
 ## Guides, prompts and resources
 
@@ -136,7 +136,7 @@ This repository builds an **unmetered** server: nothing needs a licence. A comme
 | `FL_MCP_SAMPLES` | unset | extra sample folders for `fl_library` (path-separated) |
 | `FL_MCP_FL_DIR` | auto | FL Studio install folder(s) (for the command-line render) |
 | `FL_MCP_PROJECTS` | unset | extra folders where finished projects and exports are looked for |
-| `FL_MCP_DESKTOP` | unset | `1` turns `fl_desk` on, `0` off (overrides `fl-mcp desktop`) |
+| `FL_MCP_DESKTOP` | unset | `stealth`, `polite`, `foreground`, `1` (`polite`), or `0` (overrides `fl-mcp desktop`) |
 | `FL_MCP_FL_PROCESS` | unset | extra process name(s) that count as FL Studio for `fl_desk` |
 | `FL_MCP_DEBUG` | unset | log to stderr |
 | `FL_MCP_TRAFFIC` | `1` | record MIDI TX/RX and MCP traffic to `~/.fl-mcp/traffic.jsonl` (`0` disables) |
