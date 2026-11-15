@@ -10,15 +10,19 @@ the public reverse-engineering work (see NOTICE); no code from it is included.
 import struct
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from fl_mcp.music.plan import Plan
 
 PPQS = (24, 48, 72, 96, 120, 144, 168, 192, 384, 768, 960)
 TEMPO, VERSION = 156, 199
 NEW_CHAN, CHAN_TYPE, CHAN_NAME, PLUGIN_NAME, SAMPLE_PATH = 64, 21, 203, 201, 196
+PLUGIN_FLAGS, PLUGIN_PARAMS = 212, 213
 CHAN_ROUTE, CHAN_ROUTE_16, CHAN_COLOR, CHAN_LEVELS = 22, 104, 128, 219  # insert, RGB, pan/vol
 NEW_PAT, PAT_NAME, PAT_COLOR, NOTES = 65, 193, 150, 224
 NEW_ARR, PLAYLIST = 99, 233
+TIME_MARKER_POS, TIME_MARKER_NAME = 148, 205
+FST_FORMAT = 48
 PATTERN_EVENTS = {
     25,
     26,
@@ -103,6 +107,125 @@ def _text(data: bytes) -> str:
 
 def _utf16(text: str) -> bytes:
     return text.encode("utf-16le") + b"\x00\x00"
+
+
+def _encode_varint(n: int) -> bytes:
+    out = bytearray()
+    size = n
+    while True:
+        out.append((size & 0x7F) | (0x80 if size >> 7 else 0))
+        size >>= 7
+        if not size:
+            return bytes(out)
+
+
+def _decode_varint(raw: bytes, pos: int) -> tuple[int, int]:
+    n = shift = 0
+    while True:
+        if pos >= len(raw) or shift > 28:
+            raise FlpError(f"truncated varint at byte {pos}")
+        b = raw[pos]
+        pos += 1
+        n |= (b & 0x7F) << shift
+        shift += 7
+        if not b & 0x80:
+            return n, pos
+
+
+def _parse_header_and_events(
+    raw: bytes, *, expected_formats: tuple[int, ...] = (0,)
+) -> tuple[bytes, int, int, list[Event]]:
+    if len(raw) < 22 or raw[:4] != b"FLhd":
+        raise FlpError("not an FL Studio file (missing FLhd header)")
+    size, fmt, channels, ppq = struct.unpack("<IHHH", raw[4:14])
+    if size != 6:
+        raise FlpError("unexpected header size")
+    if fmt not in expected_formats:
+        raise FlpError("only project files (.flp) are supported, not scores or states")
+    if expected_formats == (0,) and ppq not in PPQS:
+        raise FlpError(f"unsupported timebase {ppq}")
+    if raw[14:18] != b"FLdt":
+        raise FlpError("missing FLdt data chunk")
+    dlen = struct.unpack("<I", raw[18:22])[0]
+    if dlen == 0 or dlen != len(raw) - 22:
+        raise FlpError("data chunk size does not match the file (truncated or corrupted?)")
+    events, pos = [], 22
+    while pos < len(raw):
+        start, eid = pos, raw[pos]
+        pos += 1
+        if eid == 172:
+            n = 3
+        elif eid < 192:
+            n = 1 if eid < 64 else 2 if eid < 128 else 4
+        else:
+            try:
+                n, pos = _decode_varint(raw, pos)
+            except FlpError as exc:
+                raise FlpError(f"truncated event at byte {start}") from exc
+        if pos + n > len(raw):
+            raise FlpError(f"event at byte {start} runs past the end of the file")
+        events.append(Event(eid, raw[pos : pos + n], raw[start : pos + n]))
+        pos += n
+    return raw[:14], fmt, channels, events
+
+
+_SF2_HEADER_BYTES = 56
+
+
+def patch_soundfont_blob(blob: bytes, sf2_path: str) -> bytes:
+    """Replace the `.sf2` path inside an FL SoundFont Player event 213 state blob."""
+    if len(blob) < _SF2_HEADER_BYTES + 2:
+        raise FlpError("SoundFont Player plugin state blob is too short")
+    old_len, path_start = _decode_varint(blob, _SF2_HEADER_BYTES)
+    path_end = path_start + old_len
+    if path_end > len(blob):
+        raise FlpError("SoundFont Player plugin state path runs past end of blob")
+    encoded = sf2_path.encode("utf-8")
+    return blob[:_SF2_HEADER_BYTES] + _encode_varint(len(encoded)) + encoded + blob[path_end:]
+
+
+def read_soundfont_blob_path(blob: bytes) -> str | None:
+    """Extract the `.sf2` path stored inside a SoundFont Player event 213 blob, if readable."""
+    if len(blob) < _SF2_HEADER_BYTES + 2:
+        return None
+    try:
+        length, path_start = _decode_varint(blob, _SF2_HEADER_BYTES)
+        if path_start + length > len(blob) or length == 0:
+            return None
+        text = blob[path_start : path_start + length].decode("utf-8", "replace")
+        return text if ".sf2" in text.lower() or "\\" in text or "/" in text else None
+    except FlpError:
+        return None
+
+
+def read_fst(path: str | Path) -> dict[str, Any]:
+    """Read an FL Studio `.fst` plugin preset into structured fields for offline injection."""
+    p = Path(path)
+    raw = p.read_bytes()
+    if len(raw) < 22 or raw[:4] != b"FLhd":
+        raise FlpError(f"not an FL Studio preset (.fst): {p.name}")
+    fmt = struct.unpack("<H", raw[8:10])[0]
+    if fmt != FST_FORMAT:
+        raise FlpError(f"expected .fst format {FST_FORMAT}, got {fmt}")
+    _, _, _, events = _parse_header_and_events(raw, expected_formats=(FST_FORMAT,))
+    by_id: dict[int, bytes] = {}
+    for ev in events:
+        by_id.setdefault(ev.id, ev.data)
+    plugin = _text(by_id[PLUGIN_NAME]) if PLUGIN_NAME in by_id else ""
+    if not plugin:
+        raise FlpError(f".fst preset {p.name} has no plugin identifier (event {PLUGIN_NAME})")
+    name = _text(by_id[CHAN_NAME]) if CHAN_NAME in by_id else p.stem
+    params = by_id.get(PLUGIN_PARAMS, b"")
+    sf2 = read_soundfont_blob_path(params) if "soundfont" in plugin.lower() else None
+    return {
+        "file": str(p),
+        "plugin": plugin,
+        "name": name or plugin,
+        "flags": by_id.get(PLUGIN_FLAGS),
+        "params": params,
+        "color": by_id.get(CHAN_COLOR),
+        "sf2": sf2,
+    }
 
 
 class Flp:
