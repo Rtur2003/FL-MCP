@@ -171,3 +171,123 @@ def test_without_a_menu_window_nothing_is_sent(monkeypatch):
     monkeypatch.setattr(popupkeys, "window", lambda: 0)
     assert popupkeys.confirm() is False
     assert popupkeys.dismiss() is True
+
+
+def test_popup_confirm_and_dismiss_avoid_cursor_stealing_by_default(monkeypatch):
+    from fl_mcp import popupkeys
+
+    posted = []
+    open_menu = [True]
+
+    class Rect:
+        def __init__(self):
+            self.left, self.top, self.right, self.bottom = 100, 200, 320, 420
+
+    class User32:
+        def FindWindowW(self, cls, title):  # noqa: N802
+            return 88 if open_menu[0] else 0
+
+        def GetWindowRect(self, hwnd, ptr):  # noqa: N802
+            r = ptr._obj
+            r.left, r.top, r.right, r.bottom = 100, 200, 320, 420
+            return 1
+
+        def PostMessageW(self, hwnd, msg, wparam, lparam):  # noqa: N802
+            posted.append((hwnd, msg, wparam, lparam))
+            if msg == popupkeys.WM_LBUTTONUP:
+                open_menu[0] = False
+
+        def SetCursorPos(self, x, y):  # noqa: N802
+            raise AssertionError("cursor must not move without allow_cursor_fallback")
+
+        def mouse_event(self, *args):
+            raise AssertionError("physical mouse_event must not run by default")
+
+    monkeypatch.setattr(popupkeys, "_user32", lambda: User32())
+    monkeypatch.setattr(popupkeys.time, "sleep", lambda _s: None)
+    assert popupkeys.confirm() is True
+    assert any(m == popupkeys.WM_LBUTTONDOWN for _, m, _, _ in posted)
+    assert any(m == popupkeys.WM_LBUTTONUP for _, m, _, _ in posted)
+
+    posted.clear()
+    open_menu[0] = True
+
+    class DismissU32(User32):
+        def PostMessageW(self, hwnd, msg, wparam, lparam):  # noqa: N802
+            posted.append((hwnd, msg, wparam, lparam))
+            if msg == popupkeys.WM_CANCELMODE:
+                open_menu[0] = False
+
+    monkeypatch.setattr(popupkeys, "_user32", lambda: DismissU32())
+    assert popupkeys.dismiss() is True
+    assert (88, popupkeys.WM_CANCELMODE, 0, 0) in posted
+
+
+def test_popup_cursor_fallback_restores_original_cursor(monkeypatch):
+    from fl_mcp import popupkeys
+
+    cursor = [640, 360]
+    moves = []
+    open_menu = [True]
+
+    class User32:
+        def FindWindowW(self, cls, title):  # noqa: N802
+            return 99 if open_menu[0] else 0
+
+        def GetWindowRect(self, hwnd, ptr):  # noqa: N802
+            r = ptr._obj
+            r.left, r.top, r.right, r.bottom = 100, 200, 300, 400
+            return 1
+
+        def PostMessageW(self, hwnd, msg, wparam, lparam):  # noqa: N802
+            return 1
+
+        def GetCursorPos(self, ptr):  # noqa: N802
+            p = ptr._obj
+            p.x, p.y = cursor[0], cursor[1]
+            return 1
+
+        def SetCursorPos(self, x, y):  # noqa: N802
+            moves.append((x, y))
+            cursor[0], cursor[1] = x, y
+
+        def mouse_event(self, flags, *args):
+            if flags == popupkeys.MOUSEEVENTF_LEFTUP:
+                open_menu[0] = False
+
+    monkeypatch.setattr(popupkeys, "_user32", lambda: User32())
+    monkeypatch.setattr(popupkeys.time, "sleep", lambda _s: None)
+    assert popupkeys.confirm(allow_cursor_fallback=True) is True
+    assert len(moves) == 2 and moves[-1] == (640, 360)
+
+
+def test_uiload_skips_focus_fl_unless_mode_is_foreground(fl, tmp_path, monkeypatch):
+    from fl_mcp import desk
+
+    monkeypatch.setenv("FL_MCP_DIR", str(tmp_path))
+    focus_calls = []
+
+    class SpyDesk:
+        def focus_fl(self):
+            focus_calls.append(1)
+
+    monkeypatch.setattr(desk, "get", lambda: SpyDesk())
+
+    desk.set_enabled("polite")
+    fl.fake.popup_mode = True
+    fallback_flags = []
+
+    def confirm_spy(allow_cursor_fallback=False):
+        fallback_flags.append(allow_cursor_fallback)
+        return fl.fake.confirm_menu()
+
+    uiload.load(fl.call, "Fruity Limiter", track=3, confirm=confirm_spy, dismiss=lambda _=False: True)
+    assert focus_calls == []
+    assert fallback_flags == [False]
+
+    desk.set_enabled("foreground")
+    fl.fake.popup_mode = True
+    fallback_flags.clear()
+    uiload.load(fl.call, "Fruity Limiter", track=3, confirm=confirm_spy, dismiss=lambda _=False: True)
+    assert focus_calls == [1]
+    assert fallback_flags == [True]
