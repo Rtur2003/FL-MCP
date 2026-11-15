@@ -612,6 +612,7 @@ def test_markers_verify_and_build_with_fst_and_sf2(tmp_path, monkeypatch):
 
     # Empty playlist & empty patterns report clear warnings
     empty_proj = Flp.parse(template(clips=0))
+    empty_proj.put_pattern(1, [], "Empty")
     empty_ver = empty_proj.verify()
     assert any("no arrangement clips" in w for w in empty_ver["warnings"])
     assert any("0 notes" in w for w in empty_ver["warnings"])
