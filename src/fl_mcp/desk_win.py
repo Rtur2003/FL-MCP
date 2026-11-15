@@ -188,15 +188,28 @@ class WindowsBackend(Backend):
 
     @staticmethod
     def _dpi_aware(user32: Any) -> None:
+        ws = dt = None
+        H, B, DWORD = ctypes.c_void_p, ctypes.c_int, ctypes.c_uint32  # noqa: N806
         try:
-            ws = user32.OpenWindowStationW("winsta0", False, 0x037F)
+            open_ws = _bind(user32, "OpenWindowStationW", H, ctypes.c_wchar_p, B, DWORD)
+            set_ws = _bind(user32, "SetProcessWindowStation", B, H)
+            open_dt = _bind(user32, "OpenDesktopW", H, ctypes.c_wchar_p, DWORD, B, DWORD)
+            set_dt = _bind(user32, "SetThreadDesktop", B, H)
+            ws = open_ws("winsta0", False, 0x037F)
             if ws:
-                user32.SetProcessWindowStation(ws)
-            dt = user32.OpenDesktopW("default", 0, False, 0x01FF)
+                set_ws(ws)
+            dt = open_dt("default", 0, False, 0x01FF)
             if dt:
-                user32.SetThreadDesktop(dt)
+                set_dt(dt)
         except Exception:
             pass
+        finally:
+            for val, fn_name in ((dt, "CloseDesktop"), (ws, "CloseWindowStation")):
+                if val:
+                    try:
+                        _bind(user32, fn_name, B, H)(val)
+                    except Exception:
+                        pass
         # physical pixels everywhere, so screenshots and click coordinates are the same space
         for attempt in (
             lambda: user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4)),
@@ -297,7 +310,12 @@ class WindowsBackend(Backend):
         )
 
     def restore_window(self, win: Win) -> bool:
-        if not win or not win.handle or not self.IsWindowVisible(win.handle):
+        if (
+            not win
+            or not win.handle
+            or not self.IsWindowVisible(win.handle)
+            or self.IsIconic(win.handle)
+        ):
             return False
         self.SetForegroundWindow(win.handle)
         now = self.GetForegroundWindow()
@@ -340,25 +358,54 @@ class WindowsBackend(Backend):
         rgb2, w2, h2 = imaging.resize(rgb, w, h, max_width)
         return imaging.encode_png(rgb2, w2, h2), w2, h2
 
+    def _capture_bitmap(
+        self,
+        w: int,
+        h: int,
+        paint: Any,
+        max_width: int,
+        *,
+        crop: tuple[int, int, int, int] | None = None,
+        require_content: bool = False,
+    ) -> tuple[bytes, int, int] | None:
+        screen_dc = self.GetDC(None)
+        if not screen_dc:
+            return None
+        mem_dc = bitmap = old = None
+        try:
+            mem_dc = self.CreateCompatibleDC(screen_dc)
+            bitmap = self.CreateCompatibleBitmap(screen_dc, w, h)
+            if not mem_dc or not bitmap:
+                return None
+            old = self.SelectObject(mem_dc, bitmap)
+            if not paint(screen_dc, mem_dc):
+                return None
+            return self._bitmap_to_png(
+                mem_dc, bitmap, w, h, max_width, crop=crop, require_content=require_content
+            )
+        finally:
+            if mem_dc and old:
+                self.SelectObject(mem_dc, old)
+            if bitmap:
+                self.DeleteObject(bitmap)
+            if mem_dc:
+                self.DeleteDC(mem_dc)
+            self.ReleaseDC(None, screen_dc)
+
     def capture(self, rect: tuple[int, int, int, int], max_width: int) -> tuple[bytes, int, int]:
         x, y, w, h = rect
         if w < 1 or h < 1:
             raise DeskError("nothing to capture: the area is empty")
-        screen_dc = self.GetDC(None)
-        mem_dc = self.CreateCompatibleDC(screen_dc)
-        bitmap = self.CreateCompatibleBitmap(screen_dc, w, h)
-        try:
-            self.SelectObject(mem_dc, bitmap)
+        out = self._capture_bitmap(
+            w,
+            h,
             # SRCCOPY | CAPTUREBLT: includes layered windows (plugin windows draw that way)
-            if not self.BitBlt(mem_dc, 0, 0, w, h, screen_dc, x, y, 0x00CC0020 | 0x40000000):
-                raise DeskError("Windows refused the screen capture (is the screen locked?)")
-            out = self._bitmap_to_png(mem_dc, bitmap, w, h, max_width)
-            assert out is not None
-            return out
-        finally:
-            self.DeleteObject(bitmap)
-            self.DeleteDC(mem_dc)
-            self.ReleaseDC(None, screen_dc)
+            lambda sdc, mdc: bool(self.BitBlt(mdc, 0, 0, w, h, sdc, x, y, 0x00CC0020 | 0x40000000)),
+            max_width,
+        )
+        if out is None:
+            raise DeskError("Windows refused the screen capture (is the screen locked?)")
+        return out
 
     def capture_window(
         self, win: Win, max_width: int, *, allow_unminimize: bool = False
@@ -381,20 +428,14 @@ class WindowsBackend(Backend):
         crop = None
         if frame[2] > 0 and frame[3] > 0:
             crop = (frame[0] - wr.left, frame[1] - wr.top, frame[2], frame[3])
-        screen_dc = self.GetDC(None)
-        mem_dc = self.CreateCompatibleDC(screen_dc)
-        bitmap = self.CreateCompatibleBitmap(screen_dc, rw, rh)
-        try:
-            self.SelectObject(mem_dc, bitmap)
-            if not self.PrintWindow(win.handle, mem_dc, _PW_RENDERFULLCONTENT):
-                return None
-            return self._bitmap_to_png(
-                mem_dc, bitmap, rw, rh, max_width, crop=crop, require_content=True
-            )
-        finally:
-            self.DeleteObject(bitmap)
-            self.DeleteDC(mem_dc)
-            self.ReleaseDC(None, screen_dc)
+        return self._capture_bitmap(
+            rw,
+            rh,
+            lambda _sdc, mdc: bool(self.PrintWindow(win.handle, mdc, _PW_RENDERFULLCONTENT)),
+            max_width,
+            crop=crop,
+            require_content=True,
+        )
 
     def _send(self, *events: INPUT) -> None:
         arr = (INPUT * len(events))(*events)
@@ -459,6 +500,9 @@ class WindowsBackend(Backend):
             lp_up = lp_base | (1 << 30) | (1 << 31)
             ok1 = bool(self.PostMessageW(target_hwnd, down_msg, vk, lp_base))
             ok2 = bool(self.PostMessageW(target_hwnd, up_msg, vk, lp_up))
+            if ok1 or ok2:
+                # Let target message queue read modifier state before restoring/detaching.
+                time.sleep(0.035)
             return ok1 and ok2
         finally:
             if saved:
