@@ -281,13 +281,17 @@ def test_uiload_skips_focus_fl_unless_mode_is_foreground(fl, tmp_path, monkeypat
         fallback_flags.append(allow_cursor_fallback)
         return fl.fake.confirm_menu()
 
-    uiload.load(fl.call, "Fruity Limiter", track=3, confirm=confirm_spy, dismiss=lambda _=False: True)
+    uiload.load(
+        fl.call, "Fruity Limiter", track=3, confirm=confirm_spy, dismiss=lambda _=False: True
+    )
     assert focus_calls == []
     assert fallback_flags == [False]
 
     desk.set_enabled("foreground")
     fl.fake.popup_mode = True
     fallback_flags.clear()
-    uiload.load(fl.call, "Fruity Limiter", track=3, confirm=confirm_spy, dismiss=lambda _=False: True)
+    uiload.load(
+        fl.call, "Fruity Limiter", track=3, confirm=confirm_spy, dismiss=lambda _=False: True
+    )
     assert focus_calls == [1]
     assert fallback_flags == [True]
