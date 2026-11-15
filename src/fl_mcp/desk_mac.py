@@ -3,6 +3,7 @@
 macOS asks once for permission: System Settings > Privacy & Security > Accessibility and Screen
 Recording, for the app that runs the server (Claude, or the terminal)."""
 
+import ctypes
 import shutil
 import struct
 import subprocess
@@ -84,6 +85,28 @@ class MacBackend(Backend):
     def focus(self, win: Win) -> bool:
         _osa(f'tell application "{APP}" to activate')
         return True
+
+    def restore_window(self, win: Win) -> bool:
+        if not win or not win.process:
+            return False
+        try:
+            _osa(f'tell application {_quote(win.process)} to activate')
+            return True
+        except DeskError:
+            return False
+
+    def idle_seconds(self) -> float | None:
+        try:
+            cg = ctypes.CDLL(
+                "/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics"
+            )
+            fn = cg.CGEventSourceSecondsSinceLastEventType
+            fn.argtypes = [ctypes.c_int32, ctypes.c_uint32]
+            fn.restype = ctypes.c_double
+            val = float(fn(1, 0xFFFFFFFF))
+            return round(val, 2) if val >= 0 else None
+        except Exception:
+            return None
 
     def cursor(self) -> tuple[int, int]:
         if shutil.which("cliclick"):
