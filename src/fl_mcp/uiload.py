@@ -112,8 +112,10 @@ def load(
         raise ValueError("load needs query: the plugin or sample name")
     confirm = confirm or popupkeys.confirm
     dismiss = dismiss or popupkeys.dismiss
-    dismiss()  # a menu left open would block every other call
-    if desk.enabled():
+    mode = getattr(desk, "mode", lambda: "foreground" if desk.enabled() else "off")()
+    allow_cursor = mode == "foreground"
+    _call_popup(dismiss, allow_cursor)  # a menu left open would block every other call
+    if mode == "foreground":
         try:
             desk.get().focus_fl()
         except Exception:
@@ -147,16 +149,16 @@ def load(
                 item = str(hit["item"][0])
                 stops.append(item)
                 call({"o": "ui", "a": "browser", "b": "select", "new": track is None})
-                confirmed = confirm()
+                confirmed = _call_popup(confirm, allow_cursor)
                 fresh = _settle(call, before, confirmed)
                 if fresh:
                     return {"loaded": fresh, "via": item}
-                dismiss()
+                _call_popup(dismiss, allow_cursor)
                 call({"o": "ui", "a": "browser", "b": "nav", "d": "next", "sh": True})
             if stops:
                 break
     finally:
-        dismiss()
+        _call_popup(dismiss, allow_cursor)
         if old_fx is not None:
             try:
                 call({"o": "set", "k": "channel", "i": old_fx[0], "p": {"fx": old_fx[1]}})

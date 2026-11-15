@@ -87,10 +87,25 @@ def _rect(hwnd: int) -> tuple[int, int, int, int] | None:
     return None
 
 
+def _post_client_click(u32: Any, hwnd: int, rel_x: int, rel_y: int) -> None:
+    """Deliver a click in client coordinates via PostMessage without touching the cursor."""
+    lp = _lparam_xy(rel_x, rel_y)
+    try:
+        u32.PostMessageW(hwnd, WM_MOUSEMOVE, 0, lp)
+        time.sleep(0.02)
+        u32.PostMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, lp)
+        time.sleep(0.02)
+        u32.PostMessageW(hwnd, WM_LBUTTONUP, 0, lp)
+    except Exception:
+        pass
+
+
 def _click(x: int, y: int) -> None:
     u32 = _user32()
     if u32 is None or not hasattr(u32, "SetCursorPos") or not hasattr(u32, "mouse_event"):
         return
+    saved = _POINT()
+    had_pos = bool(hasattr(u32, "GetCursorPos") and u32.GetCursorPos(ctypes.byref(saved)))
     try:
         u32.SetCursorPos(x, y)
         time.sleep(0.02)
@@ -99,6 +114,12 @@ def _click(x: int, y: int) -> None:
         u32.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
     except Exception:
         pass
+    finally:
+        if had_pos:
+            try:
+                u32.SetCursorPos(saved.x, saved.y)
+            except Exception:
+                pass
 
 
 def _closed(timeout: float) -> bool:
@@ -110,31 +131,49 @@ def _closed(timeout: float) -> bool:
     return not window()
 
 
-def confirm() -> bool:
-    """Press Return or click Item 1 in the open menu; True once the menu has closed."""
+def confirm(allow_cursor_fallback: bool = False) -> bool:
+    """Accept Item 1 of the open menu via Return / cursor-less click before touching the cursor."""
     u32 = _user32()
     hwnd = wait_window()
     if u32 is None or not hwnd:
         return False
     u32.PostMessageW(hwnd, WM_KEYDOWN, VK_RETURN, 0)
     u32.PostMessageW(hwnd, WM_KEYUP, VK_RETURN, 0)
+    if _closed(0.35):
+        return True
     r = _rect(hwnd)
     if r:
-        cx = min(r[0] + 50, (r[0] + r[2]) // 2)
-        cy = r[1] + 16
-        _click(cx, cy)
-    return _closed(1.5)
+        rel_x = min(50, max(8, (r[2] - r[0]) // 2))
+        rel_y = min(16, max(4, (r[3] - r[1]) // 2))
+        _post_client_click(u32, hwnd, rel_x, rel_y)
+        if _closed(0.35):
+            return True
+        if allow_cursor_fallback:
+            cx = min(r[0] + 50, (r[0] + r[2]) // 2)
+            cy = r[1] + 16
+            _click(cx, cy)
+            return _closed(0.9)
+    return not window()
 
 
-def dismiss() -> bool:
-    """Close the open menu without choosing anything; True when no menu is left."""
+def dismiss(allow_cursor_fallback: bool = False) -> bool:
+    """Close the open menu without choosing anything; avoids stealing the cursor by default."""
     u32 = _user32()
     hwnd = window()
     if u32 is None or not hwnd:
         return True
     u32.PostMessageW(hwnd, WM_KEYDOWN, VK_ESCAPE, 0)
     u32.PostMessageW(hwnd, WM_KEYUP, VK_ESCAPE, 0)
+    if _closed(0.30):
+        return True
+    try:
+        u32.PostMessageW(hwnd, WM_CANCELMODE, 0, 0)
+    except Exception:
+        pass
+    if _closed(0.30):
+        return True
     r = _rect(hwnd)
-    if r:
+    if r and allow_cursor_fallback:
         _click(max(0, r[0] - 20), max(0, r[1] - 20))
-    return _closed(1.0)
+        return _closed(0.6)
+    return not window()
