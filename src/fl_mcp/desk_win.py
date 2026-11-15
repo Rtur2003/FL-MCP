@@ -329,7 +329,11 @@ class WindowsBackend(Backend):
             if cx >= 0 and cy >= 0 and cx + cw <= w and cy + ch <= h and (cw != w or ch != h):
                 stride, row_b = w * 3, cw * 3
                 off = cx * 3
-                rgb = b"".join(rgb[(cy + r) * stride + off : (cy + r) * stride + off + row_b] for r in range(ch))
+                rows = [
+                    rgb[(cy + r) * stride + off : (cy + r) * stride + off + row_b]
+                    for r in range(ch)
+                ]
+                rgb = b"".join(rows)
                 w, h = cw, ch
         if require_content:
             step = max(1, len(rgb) // 256)
