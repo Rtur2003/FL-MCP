@@ -3,6 +3,19 @@
 All notable changes to FL-MCP are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.3.0] - 2026-11-15
+
+### Added
+- **Non-Intrusive Desktop Control Modes (`stealth`, `polite`, `foreground`)**: added `fl-mcp desktop stealth|polite|foreground|on|off` (and `FL_MCP_DESKTOP` mode values), defaulting `on` to `polite`. `stealth` uses background `PrintWindow` + `PostMessageW` strictly with zero focus stealing; `polite` tries background capture/keystrokes first, waits for user idle (`GetLastInputInfo`, 1.2 s) before temporary focus, and restores the user's previous window (`restore_window`) afterwards.
+- **Isolated Hidden-Desktop Parallel Rendering (`render.hidden_popen`)**: on Windows, `fl_audio(action="render", project=...)` runs `FL64.exe /R` inside an isolated Win32 desktop (`CreateDesktopW`, `SW_HIDE`, `CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS`, `always_copy=True`) so offline renders complete in parallel without interrupting an open FL Studio session or stealing window focus.
+- **Offline `.fst` Preset & `.sf2` SoundFont Support (`fl_mcp.flp`)**: added `read_fst()` (`FST_FORMAT = 48`), `patch_soundfont_blob()`, `read_soundfont_blob_path()`, `Flp.add_plugin_from_fst()`, `Flp.set_soundfont()`, and `.fst`/`.sf2` role wiring inside `build()`.
+- **Arrangement `end` Markers & Offline Verification (`Flp.markers`, `Flp.set_end_marker`, `Flp.verify`)**: reads/updates arrangement `"end"` time markers automatically during `build()` to avoid truncated renders, and adds offline structural warnings to `fl_produce(action="inspect")` (`"verify"`).
+- **Dashboard & Doctor Mode Exposure**: `doctor_info()`, `fl-mcp doctor`, and the Live Studio web dashboard now report active desktop control mode (`stealth`, `polite`, `foreground`, or `off`).
+
+### Changed
+- **Cursor-Preserving Browser Menu Confirmation (`popupkeys.py` & `uiload.py`)**: replaced unconditional physical `SetCursorPos` popup clicks with `PostMessageW` (`VK_RETURN`/`VK_ESCAPE`) followed by client-coordinate `WM_MOUSEMOVE`/`WM_LBUTTONDOWN`/`WM_LBUTTONUP` or `WM_CANCELMODE`; physical cursor fallback and `focus_fl()` now run only in `foreground` mode (with cursor position saved and restored).
+- Updated guides (`setup`, `automation`, `produce`, `mix`), `docs/ARCHITECTURE.md`, `docs/CAPABILITIES.md`, and added `docs/FL_STUDIO_NOTES.md`.
+
 ## [0.2.0] - 2026-11-13
 
 ### Added
