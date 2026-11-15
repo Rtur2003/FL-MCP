@@ -557,7 +557,7 @@ def test_read_fst_add_plugin_and_soundfont_patching(tmp_path):
 
     bad_file = tmp_path / "song.flp"
     bad_file.write_bytes(template())
-    with pytest.raises(FlpError, match="not an .fst preset"):
+    with pytest.raises(FlpError, match=r"expected \.fst format 48"):
         flp.read_fst(bad_file)
 
     proj = Flp.parse(template())
