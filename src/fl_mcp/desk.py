@@ -70,7 +70,7 @@ class Backend:
         raise NotImplementedError
 
     def post_key(self, win: Win, combo: Combo) -> bool:
-        """Send a key combo directly to `win` without changing foreground focus; False if unsupported."""
+        """Send a key combo directly to `win` without focus; False if unsupported."""
         return False
 
     def type(self, text: str) -> None:
@@ -143,7 +143,9 @@ def set_enabled(on: bool | str) -> Path:
             path.unlink(missing_ok=True)
             return path
         if val not in (*MODES, "on"):
-            raise DeskError(f"desktop mode must be off, on, stealth, polite, or foreground (got {on!r})")
+            raise DeskError(
+                f"desktop mode must be off, on, stealth, polite, or foreground (got {on!r})"
+            )
         chosen = DEFAULT_ON_MODE if val == "on" else val
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(f"{chosen}\n", encoding="utf-8")
@@ -331,7 +333,7 @@ class Desk:
     # -- seeing
 
     def shot(self, full: bool = False, max_width: int = MAX_WIDTH) -> tuple[bytes, dict[str, Any]]:
-        """A PNG of FL Studio (background PrintWindow in stealth/polite when possible, else front)."""
+        """Capture FL Studio (PrintWindow in stealth/polite when possible, else front)."""
         sx, sy, sw, sh = self.backend.screen()
         background = False
         if full:
@@ -572,7 +574,10 @@ class Desk:
         try:
             self._keys("mod+s")
             self.sleep(1.0)
-            return {"saved": True, "note": "an untitled project opens a Save As dialog: see the shot"}
+            return {
+                "saved": True,
+                "note": "an untitled project opens a Save As dialog: see the shot",
+            }
         finally:
             self._restore_if_polite(prev)
 
