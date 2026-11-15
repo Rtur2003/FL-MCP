@@ -4,12 +4,24 @@ FL's scripting API cannot create plugins, but its browser can be walked from ins
 focused item loaded. Whether that worked is decided by what appeared in the project, not by the
 browser's answer: the plugin inventory is read before and after."""
 
+import inspect
 import time
 from collections import Counter
 from collections.abc import Callable
 from typing import Any
 
 from fl_mcp import desk, popupkeys
+
+
+def _call_popup(fn: Callable[..., bool], allow_cursor: bool) -> bool:
+    """Invoke a popup confirm/dismiss callable, passing cursor preference if supported."""
+    try:
+        sig = inspect.signature(fn)
+    except (TypeError, ValueError):
+        return fn()
+    if "allow_cursor_fallback" in sig.parameters:
+        return fn(allow_cursor_fallback=allow_cursor)
+    return fn()
 
 Call = Callable[[dict[str, Any]], Any]
 ATTEMPTS = 6  # several browser items can share a name (the plugin, its preset folder...)

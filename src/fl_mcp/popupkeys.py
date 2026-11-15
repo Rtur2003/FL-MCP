@@ -11,7 +11,10 @@ import sys
 import time
 
 WM_KEYDOWN, WM_KEYUP = 0x0100, 0x0101
+WM_MOUSEMOVE, WM_LBUTTONDOWN, WM_LBUTTONUP = 0x0200, 0x0201, 0x0202
+WM_CANCELMODE = 0x001F
 VK_RETURN, VK_ESCAPE = 0x0D, 0x1B
+MK_LBUTTON = 0x0001
 MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP = 0x0002, 0x0004
 CLASS = "TQuickPopupMenuWindow"
 
@@ -25,20 +28,33 @@ class _RECT(ctypes.Structure):
     ]
 
 
+class _POINT(ctypes.Structure):
+    _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+
+
+def _lparam_xy(x: int, y: int) -> int:
+    return ((y & 0xFFFF) << 16) | (x & 0xFFFF)
+
+
 def _user32():
     windll = getattr(__import__("ctypes"), "windll", None) if sys.platform == "win32" else None
     if windll is None:
         return None
+    u32 = windll.user32
     try:
-        ws = windll.user32.OpenWindowStationW("winsta0", False, 0x037F)
+        ws = u32.OpenWindowStationW("winsta0", False, 0x037F)
         if ws:
-            windll.user32.SetProcessWindowStation(ws)
-        dt = windll.user32.OpenDesktopW("default", 0, False, 0x01FF)
+            u32.SetProcessWindowStation(ws)
+        dt = u32.OpenDesktopW("default", 0, False, 0x01FF)
         if dt:
-            windll.user32.SetThreadDesktop(dt)
+            u32.SetThreadDesktop(dt)
+            if hasattr(u32, "CloseDesktop"):
+                u32.CloseDesktop(dt)
+        if ws and hasattr(u32, "CloseWindowStation"):
+            u32.CloseWindowStation(ws)
     except Exception:
         pass
-    return windll.user32
+    return u32
 
 
 def window() -> int:
