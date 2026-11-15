@@ -283,3 +283,13 @@ def test_read_snapshot_ignores_non_dict_piano_and_plan_files(tmp_path, monkeypat
     assert "piano_inbox" not in snap
     assert "piano_state" not in snap
     assert "latest_plan" not in snap
+
+
+def test_dashboard_and_doctor_expose_desktop_mode(tmp_path, monkeypatch):
+    monkeypatch.setenv("FL_MCP_DIR", str(tmp_path / "data"))
+    monkeypatch.delenv("FL_MCP_DESKTOP", raising=False)
+    desk.set_enabled("stealth")
+    doc = dashboard.doctor_info()
+    state = dashboard.build_state(refresh_templates=False)
+    assert doc["desktop_mode"] == "stealth" and doc["desktop_enabled"] is True
+    assert state["meta"]["desktop_mode"] == "stealth"
