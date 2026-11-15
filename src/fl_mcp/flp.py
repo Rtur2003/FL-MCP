@@ -136,7 +136,8 @@ def _parse_header_and_events(
     raw: bytes, *, expected_formats: tuple[int, ...] = (0,)
 ) -> tuple[bytes, int, int, list[Event]]:
     if len(raw) < 22 or raw[:4] != b"FLhd":
-        raise FlpError("not an FL Studio file (missing FLhd header)")
+        kind = "project" if expected_formats == (0,) else "file"
+        raise FlpError(f"not an FL Studio {kind} (missing FLhd header)")
     size, fmt, channels, ppq = struct.unpack("<IHHH", raw[4:14])
     if size != 6:
         raise FlpError("unexpected header size")
@@ -337,7 +338,9 @@ class Flp:
         iid = max(spans, default=-1) + 1
         block[0] = Event(NEW_CHAN, struct.pack("<H", iid))
 
-        def put(eid: int, data: bytes, before_id: int | None = None, after_id: int | None = None) -> None:
+        def put(
+            eid: int, data: bytes, before_id: int | None = None, after_id: int | None = None
+        ) -> None:
             for k, e in enumerate(block):
                 if e.id == eid:
                     block[k] = Event(eid, data)
@@ -461,7 +464,9 @@ class Flp:
         s, e = spans[channel_iid]
         pname = next((_text(x.data) for x in self.events[s:e] if x.id == PLUGIN_NAME), "")
         if "soundfont" not in pname.lower():
-            raise FlpError(f"channel {channel_iid} uses {pname or 'no plugin'}, not SoundFont Player")
+            raise FlpError(
+                f"channel {channel_iid} uses {pname or 'no plugin'}, not SoundFont Player"
+            )
         ev = next((x for x in self.events[s:e] if x.id == PLUGIN_PARAMS), None)
         if ev is None:
             raise FlpError(f"channel {channel_iid} has no plugin state event ({PLUGIN_PARAMS})")
@@ -781,7 +786,12 @@ class Flp:
                     sf2 = read_soundfont_blob_path(ev.data)
             channel_routes[c.iid] = route
             if plugin or sf2:
-                info: dict[str, Any] = {"iid": c.iid, "name": c.name, "plugin": plugin, "insert": route}
+                info: dict[str, Any] = {
+                    "iid": c.iid,
+                    "name": c.name,
+                    "plugin": plugin,
+                    "insert": route,
+                }
                 if sf2:
                     info["sf2"] = sf2
                 channel_plugins.append(info)
@@ -791,14 +801,21 @@ class Flp:
             warnings.append("playlist has no arrangement clips")
         if end_m is not None and max_tick > 0 and end_m["position"] < max_tick:
             warnings.append(
-                f"'end' marker at tick {end_m['position']} cuts off arrangement ending at {max_tick}"
+                f"'end' marker at tick {end_m['position']} cuts off arrangement ending at "
+                f"{max_tick}"
             )
         empty_pats = [pid for pid, pinfo in pats.items() if pinfo["notes"] == 0 and pinfo["name"]]
         if len(pats) > 0 and len(empty_pats) == len(pats):
             warnings.append("all patterns have 0 notes")
-        unrouted = [c.name for c in chans if c.kind != "automation" and channel_routes.get(c.iid, 0) == 0]
+        unrouted = [
+            c.name
+            for c in chans
+            if c.kind != "automation" and channel_routes.get(c.iid, 0) == 0
+        ]
         if chans and len(unrouted) == len([c for c in chans if c.kind != "automation"]):
-            warnings.append("all channels route to Master (insert 0); separate inserts help mixing")
+            warnings.append(
+                "all channels route to Master (insert 0); separate inserts help mixing"
+            )
 
         return {
             "ok": not warnings,
@@ -921,7 +938,11 @@ def build(
         low = sample.lower()
         if low.endswith(".fst"):
             iids[role] = flp.add_plugin_from_fst(
-                sample, name=role.capitalize(), insert=target_insert, color=rgb, pan=mix.pan if mix else None
+                sample,
+                name=role.capitalize(),
+                insert=target_insert,
+                color=rgb,
+                pan=mix.pan if mix else None,
             )
         elif low.endswith(".sf2"):
             iids[role] = _add_soundfont_channel(
