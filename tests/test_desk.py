@@ -452,7 +452,7 @@ def test_stealth_mode_never_steals_focus_and_supports_background_shot_and_script
     assert fake.front == BROWSER and fake.posted == [(FL.handle, "ctrl+alt+y")]
 
     fake.bg_png = None
-    with pytest.raises(DeskError, match="stealth"):
+    with pytest.raises(DeskError, match="cannot be captured in the background"):
         d.shot()
 
 
