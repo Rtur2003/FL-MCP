@@ -43,10 +43,14 @@ def _doctor() -> int:
 def _extras() -> None:
     from fl_mcp import audio, desk, render, telemetry
 
+    render_status = render.status()
+    mode = desk.mode()
+    exe_msg = (
+        f"ok, {render_status['fl_exe']}" if render_status["fl_exe"] else "no FL64.exe (Windows)"
+    )
     print(f"audio       : {'ok' if audio.available() else 'missing, install fl-mcp[audio]'}")
-    info = render.status()
-    print(f"render      : {'ok, ' + info['fl_exe'] if info['fl_exe'] else 'no FL64.exe (Windows)'}")
-    print(f"desktop     : {'on' if desk.enabled() else 'off, `fl-mcp desktop on` to allow'}")
+    print(f"render      : {exe_msg}")
+    print(f"desktop     : {mode if mode != 'off' else 'off, `fl-mcp desktop on` to allow'}")
     st = telemetry.read_traffic(limit=0)["stats"]
     if st["total"]:
         print(
@@ -146,16 +150,19 @@ def _selftest(args: argparse.Namespace) -> int:
 def _desktop(args: argparse.Namespace) -> int:
     from fl_mcp import desk
 
-    if args.action in ("on", "off"):
-        desk.set_enabled(args.action == "on")
-        if args.action == "on":
+    action = args.action
+    if action in ("on", "off", "stealth", "polite", "foreground"):
+        desk.set_enabled(action)
+        if action == "off":
+            print("Desktop control is off.")
+        else:
+            mode = desk.mode()
             print(
-                "Desktop control is on: restart your AI client. The model can then see FL Studio's "
-                "screen (fl_desk) and press keys and buttons, only while an FL window is in front. "
+                f"Desktop control is on (mode={mode}): restart your AI client. fl_desk uses "
+                "background PrintWindow/PostMessage first so FL stays out of the way; in polite "
+                "mode any foreground fallback waits until you are idle and restores your window. "
                 "Fling the mouse to the top-left corner to stop it. `fl-mcp desktop off` undoes it."
             )
-        else:
-            print("Desktop control is off.")
         return 0
     try:
         d = desk.Desk(desk.make_backend())
@@ -168,7 +175,8 @@ def _desktop(args: argparse.Namespace) -> int:
         target = desk.flag_file().with_name("desk-test.png")
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(png)
-        print(f"screenshot {meta['size'][0]}x{meta['size'][1]} saved to {target}")
+        bg = "background" if meta.get("background") else "foreground"
+        print(f"screenshot ({bg}) {meta['size'][0]}x{meta['size'][1]} saved to {target}")
     except desk.DeskError as exc:
         print(exc, file=sys.stderr)
         return 1
@@ -293,8 +301,12 @@ def main(argv: list[str] | None = None) -> None:
         help="also load PLUGIN (default Fruity Balance) through FL's browser and undo it; "
         "save your project first",
     )
-    desktop = sub.add_parser("desktop", help="let the model see and drive FL's screen (opt-in)")
-    desktop.add_argument("action", choices=["on", "off", "test"])
+    desktop = sub.add_parser(
+        "desktop", help="let the model see and drive FL silently (stealth/polite/foreground)"
+    )
+    desktop.add_argument(
+        "action", choices=["on", "off", "stealth", "polite", "foreground", "test"]
+    )
     conf = sub.add_parser("config", help="print the text that registers this server with a client")
     conf.add_argument("client", nargs="?", choices=sorted(clients_names()))
     conf.add_argument("--source", choices=["pypi", "git", "local"], default="pypi")
