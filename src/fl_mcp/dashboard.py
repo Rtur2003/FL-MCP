@@ -66,6 +66,7 @@ def doctor_info() -> dict[str, Any]:
         "midi_port_found": False,
         "midi_error": "",
         "desktop_enabled": desk.enabled(),
+        "desktop_mode": desk.mode(),
         "data_dir": str(paths.data_dir()),
         "notes_dir": str(paths.notes_dir()),
     }
@@ -151,6 +152,7 @@ def build_state(
             "ts": round(time.time(), 3),
             "port": DEFAULT_PORT,
             "desktop_enabled": desk.enabled(),
+            "desktop_mode": desk.mode(),
             "data_dir": str(paths.data_dir()),
             "notes_dir": str(paths.notes_dir()),
         },
