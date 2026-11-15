@@ -250,6 +250,16 @@ def command_line(exe: Path, fmt: str, source: Path, out: Path) -> str:
     return f'"{exe}" /R /E{fmt} /F"{source}" /O"{out}"'
 
 
+def _alloc_render_dir(root: Path, ts: int) -> tuple[Path, Path]:
+    with _RENDER_DIR_LOCK:
+        base = root / str(ts)
+        while base.exists():
+            base = root / f"{ts}-{next(_RENDER_SEQ)}"
+        out = base / "audio"
+        out.mkdir(parents=True, exist_ok=True)
+        return base, out
+
+
 def render(
     flp: str | Path,
     fmt: str = "wav",
