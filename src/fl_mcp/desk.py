@@ -518,6 +518,7 @@ class Desk:
             raise DeskError(f"{path} already exists: choose another name")
         path.parent.mkdir(parents=True, exist_ok=True)
         prev = self.backend.foreground()
+        restored = False
         try:
             self._keys("mod+r" if fmt == "wav" else "mod+shift+r")
             self.sleep(1.5)
@@ -526,6 +527,9 @@ class Desk:
             self._keys("enter")
             self.sleep(1.5)
             self._keys("enter")  # the render options dialog's Start button
+            # Hand focus back immediately once rendering begins in FL.
+            self._restore_if_polite(prev)
+            restored = True
             start, size, stable = self.clock(), -1, 0
             while self.clock() - start < timeout:
                 self.sleep(1.0)
@@ -548,7 +552,8 @@ class Desk:
                 "screenshot, a dialog may be waiting (FL's export dialogs differ between versions)"
             )
         finally:
-            self._restore_if_polite(prev)
+            if not restored:
+                self._restore_if_polite(prev)
 
     def open_project(self, path: Path) -> dict[str, Any]:
         path = path.expanduser().resolve()
