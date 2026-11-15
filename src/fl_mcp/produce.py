@@ -425,4 +425,5 @@ def inspect_flp(template: str) -> dict[str, Any]:
     summary = project.summary()
     summary["template"] = str(path)
     summary["roles"], summary["unmatched"] = detect_roles([c[1] for c in summary["channels"]])
+    summary["verify"] = project.verify()
     return summary
