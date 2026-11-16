@@ -235,12 +235,13 @@ def dispatch_action(
             }
         if action == "desktop_mode":
             mode = body.get("mode", "stealth")
-            active = desk.set_enabled(mode)
+            flag_path = desk.set_enabled(mode)
             return {
                 "ok": True,
                 "action": action,
-                "desktop_enabled": bool(active),
-                "desktop_mode": active,
+                "desktop_enabled": desk.enabled(),
+                "desktop_mode": desk.mode(),
+                "path": str(flag_path),
             }
         if action == "autostart":
             enable = bool(body.get("enable", True))
