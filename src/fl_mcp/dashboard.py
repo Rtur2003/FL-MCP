@@ -14,10 +14,10 @@ import importlib.resources
 import json
 import math
 import os
+import platform
 import sys
 import threading
 import time
-import webbrowser
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -162,13 +162,17 @@ def build_state(
     refresh_templates: bool = False,
 ) -> dict[str, Any]:
     """Combined payload for `/api/state` and CLI JSON diagnostics."""
-    from fl_mcp import clients, service_daemon
+    from fl_mcp import app, clients, service_daemon
 
+    rt = app.detect_runtime()
     return {
         "meta": {
             "version": __version__,
             "ts": round(time.time(), 3),
             "port": _active_port(),
+            "platform": rt["os"],
+            "arch": rt["arch"],
+            "app_runtime": rt["default_backend"],
             "desktop_enabled": desk.enabled(),
             "desktop_mode": desk.mode(),
             "data_dir": str(paths.data_dir()),
@@ -222,6 +226,12 @@ def make_handler(bridge_factory: Any = Bridge) -> type[BaseHTTPRequestHandler]:
                     self._send_bytes(loaded[0], loaded[1], "public, max-age=3600")
                     return
                 self._send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
+                return
+            if parsed.path == "/manifest.webmanifest":
+                from fl_mcp import app as studio_app
+
+                body = json.dumps(studio_app.app_manifest(), ensure_ascii=False).encode("utf-8")
+                self._send_bytes(body, "application/manifest+json", "public, max-age=3600")
                 return
             if parsed.path.startswith("/assets/"):
                 loaded = load_asset(parsed.path[len("/assets/") :])
@@ -277,31 +287,51 @@ def start_server(
     return ThreadingHTTPServer((host, port), make_handler(bridge_factory))
 
 
-def serve_dashboard(port: int = 8765, open_browser: bool = True, poll_first: bool = False) -> int:
-    """Start the local HTTP monitor server and block until Ctrl+C."""
-    from fl_mcp import service_daemon
+def serve_dashboard(
+    port: int = 8765,
+    open_browser: bool = True,
+    poll_first: bool = False,
+    *,
+    backend: str = "auto",
+) -> int:
+    """Start the local Studio server and open it inside a native desktop app window."""
+    from fl_mcp import app, service_daemon
 
     st = service_daemon.service_status()
     if st["running"] and st.get("port") == port:
         if poll_first:
             poll_fl_once()
         url = str(st["url"])
-        print(f"FL-MCP Background Service already hosts Studio UI at {url}", flush=True)
+        print(f"FL-MCP Background Service already hosts Studio at {url}", flush=True)
         if open_browser:
-            webbrowser.open(url)
+            app.open_studio_window(url, backend=backend, host="127.0.0.1", port=port)
         return 0
     if poll_first:
         poll_fl_once()
     srv = start_server("127.0.0.1", port)
     actual_port = srv.server_port
     url = f"http://127.0.0.1:{actual_port}/"
-    print(f"FL-MCP Studio & Traffic Dashboard running at {url} (Ctrl+C to stop)", flush=True)
+    print(f"FL-MCP Studio running at {url} (Ctrl+C to stop)", flush=True)
+    rt = app.detect_runtime()
+    chosen = rt["default_backend"] if backend == "auto" else backend
+    if open_browser and chosen in ("webview", "native"):
+        t = threading.Thread(target=srv.serve_forever, daemon=True)
+        t.start()
+        try:
+            app.open_studio_window(url, backend=chosen, host="127.0.0.1", port=actual_port)
+        finally:
+            srv.shutdown()
+            srv.server_close()
+        return 0
     if open_browser:
-        threading.Timer(0.3, lambda: webbrowser.open(url)).start()
+        threading.Timer(
+            0.3,
+            lambda: app.open_studio_window(url, backend=chosen, host="127.0.0.1", port=actual_port),
+        ).start()
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
-        print("\nStopped dashboard.")
+        print("\nStopped FL-MCP Studio.")
     finally:
         srv.server_close()
     return 0
