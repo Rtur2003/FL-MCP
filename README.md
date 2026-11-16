@@ -38,7 +38,7 @@ fl-mcp setup
 
 **4. Check:** `fl-mcp doctor` (each layer in one line), then `fl-mcp selftest` (every feature, with a report; `--deep` also loads a plugin through FL's browser and undoes it).
 
-**5. Add to your client:** `fl-mcp config <client>` prints the exact text and file for `claude-desktop`, `claude-code`, `cursor`, `vscode`, `windsurf`, `gemini` and `codex` (`--source git` to run from this repository, `--source local` to run from the Python that is installed). For example:
+**5. Add to your client:** `fl-mcp config <client> [--write]` prints or writes the config for `claude-desktop`, `claude-code`, `cursor`, `vscode`, `windsurf`, `gemini`, `antigravity`, and `codex` (`--source git` to run from this repository, `--source local` for the current Python, `--transport http` to connect to the persistent background service). For example:
 
 ```bash
 claude mcp add fl-studio -- uvx --from "fl-mcp[audio]" fl-mcp
@@ -46,15 +46,18 @@ claude mcp add fl-studio -- uvx --from "fl-mcp[audio]" fl-mcp
 
 Claude Desktop can instead install the `.mcpb` extension (`python packaging/build_mcpb.py` builds it); full release bundles (wheel, sdist, `.mcpb`, Claude Code plugin zip, standalone FL scripts bundle, `SHA256SUMS.txt`) are built via `python packaging/build_release.py` or automatically when a `v*` tag is pushed.
 
-### Live monitor & traffic inspector
+### Background service, live monitor & traffic inspector
 
 ```bash
+fl-mcp service start      # detached daemon: Studio UI + http://127.0.0.1:8765/mcp + SSE
+fl-mcp service status     # inspect running daemon PID, endpoints, autostart & log path
+fl-mcp service autostart enable   # optional login autostart (Registry / launchd / systemd)
 fl-mcp dashboard          # opens http://127.0.0.1:8765 in your browser
 fl-mcp traffic --follow   # stream live MIDI TX/RX frames and MCP calls in terminal
 fl-mcp templates          # list auto-discovered .flp project templates
 ```
 
-The browser dashboard visualizes real-time incoming/outgoing MIDI CC frames and MCP tool calls (`~/.fl-mcp/traffic.jsonl`), latency sparklines, Channel Rack & Mixer peak meters, a Piano Roll canvas (`inbox.json` vs `state.json`), 7-band audio spectrum/LUFS metrics, and discovered templates — even while Claude Desktop or Cursor drives FL Studio in the background.
+The detached service (`fl-mcp service`) runs quietly in the background without holding terminal windows open and hosts the Studio Dashboard UI, a gentle FL telemetry poller, and persistent Streamable-HTTP (`/mcp`) + SSE (`/sse`) MCP endpoints. The dashboard visualizes real-time incoming/outgoing MIDI CC frames and MCP tool calls (`~/.fl-mcp/traffic.jsonl`), Mixer peak meters, Channel Rack routing, Piano Roll canvas, 7-band audio spectrum/LUFS metrics, universal paths, and registered AI client status.
 
 ### Claude Code plugin
 
@@ -116,7 +119,7 @@ fl-mcp desktop polite     # default for `on` (`stealth`, `polite`, or `foregroun
 
 ## Guides, prompts and resources
 
-`fl://guide/setup`, `produce`, `mix`, `plugins` and `automation` are MCP resources (markdown, with tables filled from the real genre and plugin data), alongside `fl://live/traffic` and `fl://live/studio` for live telemetry and cached studio state. The prompts `make_beat`, `mix_check`, `master`, `fix_connection` and `load_plugin` carry the task plus the relevant guide, so clients that surface prompts as slash commands get one-shot workflows. The Claude Code plugin's skills are generated from the same files (`python scripts/build_plugin.py`; a test fails if they drift).
+`fl://guide/setup`, `produce`, `mix`, `plugins` and `automation` are MCP resources (markdown, with tables filled from the real genre and plugin data), alongside `fl://live/traffic`, `fl://live/studio`, and `fl://info/paths` for live telemetry, cached studio state, and resolved universal paths. The prompts `make_beat`, `mix_check`, `master`, `fix_connection` and `load_plugin` carry the task plus the relevant guide, so clients that surface prompts as slash commands get one-shot workflows. The Claude Code plugin's skills are generated from the same files (`python scripts/build_plugin.py`; a test fails if they drift).
 
 ## Limits
 
@@ -135,6 +138,7 @@ This repository builds an **unmetered** server: nothing needs a licence. A comme
 | `FL_MCP_DIR` | `~/.fl-mcp` | folder for plans, output, the library index and the piano roll exchange (set it before `fl-mcp install`) |
 | `FL_MCP_SAMPLES` | unset | extra sample folders for `fl_library` (path-separated) |
 | `FL_MCP_FL_DIR` | auto | FL Studio install folder(s) (for the command-line render) |
+| `FL_MCP_FL_USER_DIR` | auto | FL Studio user data folder (`Settings/`, if moved outside Documents/Registry) |
 | `FL_MCP_PROJECTS` | unset | extra folders where finished projects and exports are looked for |
 | `FL_MCP_DESKTOP` | unset | `stealth`, `polite`, `foreground`, `1` (`polite`), or `0` (overrides `fl-mcp desktop`) |
 | `FL_MCP_FL_PROCESS` | unset | extra process name(s) that count as FL Studio for `fl_desk` |
