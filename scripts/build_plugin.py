@@ -89,8 +89,8 @@ def manifest() -> dict:
             "desktop": {
                 "type": "boolean",
                 "title": "Desktop control",
-                "description": "Let the model see FL Studio's screen and press its keys "
-                "(only while an FL window is in front). Off by default.",
+                "description": "Enable non-intrusive background/polite FL Studio screen and "
+                "shortcut control (`fl_desk`). Off by default.",
                 "default": False,
             },
             "port": {
