@@ -10,7 +10,6 @@ Renders industrial-grade, zero-hallucination DAW hardware icons and FFT spectrum
 
 from __future__ import annotations
 
-import math
 import shutil
 import struct
 import subprocess
@@ -120,7 +119,7 @@ def render_master_icon(size: int = 512) -> np.ndarray:
     blu = blu * (1.0 - 0.22 * well_mask) + well_rim * 40.0
 
     # 3. Sleek Segmented 270-degree LED Meter Collar (r = 0.655, thickness = 0.040)
-    # Angles mapped so 0.0 is 135 deg (bottom-left) sweeping 270 deg clockwise to 45 deg (bottom-right)
+    # Angles: 0.0 is 135 deg (bottom-left) sweeping 270 deg clockwise to 45 deg (bottom-right)
     deg = (np.degrees(theta) - 135.0) % 360.0
     in_sweep = (deg <= 270.0).astype(np.float32)
     ring_sd = np.abs(r - 0.655) - 0.021
@@ -138,7 +137,7 @@ def render_master_icon(size: int = 512) -> np.ndarray:
     glow_g = np.zeros_like(grn)
     glow_b = np.zeros_like(blu)
 
-    # Lit segments (0..18): smooth transition from Studio Cyan (#2BD4B5) -> Amber (#FF7A2F) -> Gold (#FFB84D)
+    # Lit segments (0..18): Studio Cyan (#2BD4B5) -> Amber (#FF7A2F) -> Gold (#FFB84D)
     lit_mask = (seg_idx <= 18).astype(np.float32) * seg_cov
     peak_mask = (seg_idx == 22).astype(np.float32) * seg_cov
     unlit_mask = ((seg_idx > 18) & (seg_idx != 22)).astype(np.float32) * seg_cov
@@ -181,8 +180,7 @@ def render_master_icon(size: int = 512) -> np.ndarray:
     blu += collar * 80.0
 
     # 5. Four Precision Studio Mixer Fader / Step-Sequencer Columns inside the Medallion
-    # Symmetrically spaced at x = -0.24, -0.08, +0.08, +0.24
-    # Each has: a recessed dark track slot, a glowing active signal bar, and a tactile metallic fader cap
+    # Symmetrically spaced at x = -0.24, -0.08, +0.08, +0.24 (recessed slot + active bar + cap)
     fader_specs = [
         (-0.24, -0.02, (43.0, 212.0, 181.0)),  # Ch 1: Cyan-Teal
         (-0.08, -0.20, (255.0, 122.0, 47.0)),  # Ch 2: High FL Amber peak
@@ -381,41 +379,50 @@ def write_icns(out_path: Path, png_128: bytes, png_256: bytes) -> None:
 
 
 def write_logo_svg(out_path: Path) -> None:
-    svg = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
-  <defs>
-    <linearGradient id="chassis" x1="8" y1="6" x2="56" y2="58" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#1A2230"/>
-      <stop offset="1" stop-color="#090C12"/>
-    </linearGradient>
-    <linearGradient id="medallion" x1="16" y1="14" x2="48" y2="50" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#1E2738"/>
-      <stop offset="1" stop-color="#0B0F17"/>
-    </linearGradient>
-    <linearGradient id="arc" x1="12" y1="48" x2="50" y2="16" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#2BD4B5"/>
-      <stop offset="0.5" stop-color="#FF7A2F"/>
-      <stop offset="1" stop-color="#FFB84D"/>
-    </linearGradient>
-  </defs>
-  <rect x="2" y="2" width="60" height="60" rx="14" fill="url(#chassis)" stroke="#2E3B52" stroke-width="1.5"/>
-  <path d="M17.2 46.8A21 21 0 1 1 46.8 46.8" stroke="#222B3C" stroke-width="3.2" stroke-linecap="round"/>
-  <path d="M17.2 46.8A21 21 0 1 1 48.5 19.5" stroke="url(#arc)" stroke-width="3.2" stroke-linecap="round" stroke-dasharray="3.6 1.5"/>
-  <circle cx="32" cy="32" r="17.5" fill="url(#medallion)" stroke="#384762" stroke-width="1.2"/>
-  <rect x="23.2" y="23" width="2.8" height="17" rx="1.4" fill="#07090E"/>
-  <rect x="28.1" y="23" width="2.8" height="17" rx="1.4" fill="#07090E"/>
-  <rect x="33.0" y="23" width="2.8" height="17" rx="1.4" fill="#07090E"/>
-  <rect x="37.9" y="23" width="2.8" height="17" rx="1.4" fill="#07090E"/>
-  <rect x="23.2" y="31" width="2.8" height="9" rx="1.4" fill="#2BD4B5"/>
-  <rect x="28.1" y="25" width="2.8" height="15" rx="1.4" fill="#FF7A2F"/>
-  <rect x="33.0" y="28.5" width="2.8" height="11.5" rx="1.4" fill="#FFA844"/>
-  <rect x="37.9" y="24" width="2.8" height="16" rx="1.4" fill="#FF7A2F"/>
-  <rect x="22.8" y="30.2" width="3.6" height="1.6" rx="0.8" fill="#FFF0D6"/>
-  <rect x="27.7" y="24.2" width="3.6" height="1.6" rx="0.8" fill="#FFF0D6"/>
-  <rect x="32.6" y="27.7" width="3.6" height="1.6" rx="0.8" fill="#FFF0D6"/>
-  <rect x="37.5" y="23.2" width="3.6" height="1.6" rx="0.8" fill="#FFF0D6"/>
-</svg>
-"""
-    out_path.write_text(svg, encoding="utf-8")
+    lines = [
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">',
+        "  <defs>",
+        '    <linearGradient id="chassis" x1="8" y1="6" x2="56" y2="58"'
+        ' gradientUnits="userSpaceOnUse">',
+        '      <stop offset="0" stop-color="#1A2230"/>',
+        '      <stop offset="1" stop-color="#090C12"/>',
+        "    </linearGradient>",
+        '    <linearGradient id="medallion" x1="16" y1="14" x2="48" y2="50"'
+        ' gradientUnits="userSpaceOnUse">',
+        '      <stop offset="0" stop-color="#1E2738"/>',
+        '      <stop offset="1" stop-color="#0B0F17"/>',
+        "    </linearGradient>",
+        '    <linearGradient id="arc" x1="12" y1="48" x2="50" y2="16"'
+        ' gradientUnits="userSpaceOnUse">',
+        '      <stop offset="0" stop-color="#2BD4B5"/>',
+        '      <stop offset="0.5" stop-color="#FF7A2F"/>',
+        '      <stop offset="1" stop-color="#FFB84D"/>',
+        "    </linearGradient>",
+        "  </defs>",
+        '  <rect x="2" y="2" width="60" height="60" rx="14" fill="url(#chassis)"'
+        ' stroke="#2E3B52" stroke-width="1.5"/>',
+        '  <path d="M17.2 46.8A21 21 0 1 1 46.8 46.8" stroke="#222B3C"'
+        ' stroke-width="3.2" stroke-linecap="round"/>',
+        '  <path d="M17.2 46.8A21 21 0 1 1 48.5 19.5" stroke="url(#arc)"'
+        ' stroke-width="3.2" stroke-linecap="round" stroke-dasharray="3.6 1.5"/>',
+        '  <circle cx="32" cy="32" r="17.5" fill="url(#medallion)"'
+        ' stroke="#384762" stroke-width="1.2"/>',
+        '  <rect x="23.2" y="23" width="2.8" height="17" rx="1.4" fill="#07090E"/>',
+        '  <rect x="28.1" y="23" width="2.8" height="17" rx="1.4" fill="#07090E"/>',
+        '  <rect x="33.0" y="23" width="2.8" height="17" rx="1.4" fill="#07090E"/>',
+        '  <rect x="37.9" y="23" width="2.8" height="17" rx="1.4" fill="#07090E"/>',
+        '  <rect x="23.2" y="31" width="2.8" height="9" rx="1.4" fill="#2BD4B5"/>',
+        '  <rect x="28.1" y="25" width="2.8" height="15" rx="1.4" fill="#FF7A2F"/>',
+        '  <rect x="33.0" y="28.5" width="2.8" height="11.5" rx="1.4" fill="#FFA844"/>',
+        '  <rect x="37.9" y="24" width="2.8" height="16" rx="1.4" fill="#FF7A2F"/>',
+        '  <rect x="22.8" y="30.2" width="3.6" height="1.6" rx="0.8" fill="#FFF0D6"/>',
+        '  <rect x="27.7" y="24.2" width="3.6" height="1.6" rx="0.8" fill="#FFF0D6"/>',
+        '  <rect x="32.6" y="27.7" width="3.6" height="1.6" rx="0.8" fill="#FFF0D6"/>',
+        '  <rect x="37.5" y="23.2" width="3.6" height="1.6" rx="0.8" fill="#FFF0D6"/>',
+        "</svg>",
+        "",
+    ]
+    out_path.write_text("\n".join(lines), encoding="utf-8")
 
 
 def main() -> None:
