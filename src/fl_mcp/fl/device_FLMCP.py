@@ -180,12 +180,17 @@ def _num(v, lo, hi, what):
 
 
 def _col(s):
-    s = str(s).strip().lstrip("#")
-    if len(s) == 3:
-        s = s[0] * 2 + s[1] * 2 + s[2] * 2
+    s = str(s).strip()
+    if len(s) == 4 and s.startswith("#"):
+        s = s[1] * 2 + s[2] * 2 + s[3] * 2
+    else:
+        s = s.lstrip("#")
     if len(s) != 6:
         raise ValueError("color must be #RRGGBB")
-    return int(s[0:2], 16) | (int(s[2:4], 16) << 8) | (int(s[4:6], 16) << 16)
+    try:
+        return int(s[0:2], 16) | (int(s[2:4], 16) << 8) | (int(s[4:6], 16) << 16)
+    except ValueError:
+        raise ValueError("color must be #RRGGBB")
 
 
 def _flip(current, want, toggle):
