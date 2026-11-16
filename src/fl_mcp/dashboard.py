@@ -187,6 +187,153 @@ def build_state(
     }
 
 
+def dispatch_action(
+    body: dict[str, Any],
+    *,
+    bridge_factory: Any = Bridge,
+    bridge: Any | None = None,
+    http_port: int = 8765,
+) -> dict[str, Any]:
+    """Execute an interactive Studio Desktop App action and return structured status."""
+    from fl_mcp import app as studio_app
+    from fl_mcp import clients, install, server, service_daemon
+    from fl_mcp.music import compose, theory
+
+    action = str(body.get("action") or "").strip()
+    if not action:
+        return {"ok": False, "action": "", "error": "missing action"}
+
+    owns = bridge is None
+    b: Any | None = None
+    try:
+        if action == "install_scripts":
+            installed = install.install()
+            return {
+                "ok": True,
+                "action": action,
+                "installed": [str(p) for p in installed],
+                "doctor": doctor_info(),
+            }
+        if action == "install_client":
+            target = str(body.get("client") or "all").strip()
+            transport = str(body.get("transport") or "http").strip()
+            source = str(body.get("source") or "local").strip()
+            http_url = str(body.get("http_url") or f"http://127.0.0.1:{http_port}/mcp")
+            if target == "all":
+                res: Any = clients.install_all(
+                    source=source, transport=transport, http_url=http_url
+                )
+            else:
+                res = clients.install_client(
+                    target, source=source, transport=transport, http_url=http_url
+                )
+            return {
+                "ok": True,
+                "action": action,
+                "result": res,
+                "clients": clients.client_statuses(),
+            }
+        if action == "desktop_mode":
+            mode = body.get("mode", "stealth")
+            active = desk.set_enabled(mode)
+            return {
+                "ok": True,
+                "action": action,
+                "desktop_enabled": bool(active),
+                "desktop_mode": active,
+            }
+        if action == "autostart":
+            enable = bool(body.get("enable", True))
+            res = (
+                service_daemon.enable_autostart(port=http_port)
+                if enable
+                else service_daemon.disable_autostart()
+            )
+            return {"ok": True, "action": action, "autostart": res}
+        if action == "app_shortcut":
+            res = studio_app.install_app_shortcut()
+            return {"ok": True, "action": action, "shortcut": res}
+        if action == "produce_plan":
+            genre = str(body.get("genre") or "house").strip()
+            key = str(body.get("key") or "Am").strip()
+            raw_bpm = body.get("bpm")
+            bpm = float(raw_bpm) if raw_bpm not in (None, "") else None
+            length = max(1, min(64, int(body.get("length") or 4)))
+            built = compose(genre, key=key, bpm=bpm, length=length)
+            saved = produce.save_plan(built)
+            telemetry.update_snapshot(plan=built)
+            return {"ok": True, "action": action, "plan": built, "path": str(saved)}
+        if action == "notes":
+            ndir = paths.notes_dir()
+            inbox_file = ndir / "inbox.json"
+            clear_mode = body.get("clear")
+            if clear_mode == "queue":
+                inbox_file.unlink(missing_ok=True)
+                telemetry.update_snapshot(inbox={"notes": [], "clear": False})
+                return {"ok": True, "action": action, "cleared_queue": True}
+            raw_notes = list(body.get("notes") or [])
+            chords = str(body.get("chords") or "").strip()
+            if chords:
+                raw_notes.extend(theory.chords_to_notes(chords))
+            clean = [server._note(n) for n in raw_notes]
+            if bool(body.get("preview")):
+                if not clean:
+                    return {"ok": False, "action": action, "error": "enter chords or notes first"}
+                b = bridge_factory() if owns else bridge
+                ch_arg = body.get("channel")
+                if ch_arg not in (None, ""):
+                    ch = int(ch_arg)
+                else:
+                    st = b.call({"o": "status"})
+                    ch = int((st or {}).get("ch") or 0)
+                seen: dict[int, int] = {}
+                for r in clean:
+                    seen.setdefault(int(r[0]), int(r[3]))
+                pitches = list(seen.items())[:16]
+                for p, v in pitches:
+                    b.call({"o": "note", "c": ch, "n": p, "v": v})
+                time.sleep(0.22)
+                for p, _ in pitches:
+                    b.call({"o": "note", "c": ch, "n": p, "v": 0})
+                return {"ok": True, "action": action, "previewed": len(pitches), "channel": ch}
+            clear_roll = clear_mode in (True, "roll", "all")
+            if not clean and not clear_roll:
+                return {"ok": False, "action": action, "error": "enter chords or notes to queue"}
+            payload = {"notes": clean, "clear": bool(clear_roll), "ts": round(time.time(), 3)}
+            server._write_json(inbox_file, payload)
+            telemetry.update_snapshot(inbox=payload)
+            return {
+                "ok": True,
+                "action": action,
+                "queued": len(clean),
+                "cleared": bool(clear_roll),
+            }
+        if action == "transport":
+            act = str(body.get("transport_action") or body.get("a") or "").strip()
+            val = body.get("value")
+            b = bridge_factory() if owns else bridge
+            res = b.call({"o": "tr", "a": act, "v": val})
+            poll_fl_once(bridge_factory, bridge=b)
+            return {"ok": True, "action": action, "result": res}
+        if action == "set":
+            kind = str(body.get("kind") or "mixer").strip()
+            idx = int(body.get("index", 0))
+            props = dict(body.get("props") or {})
+            b = bridge_factory() if owns else bridge
+            res = b.call({"o": "set", "k": kind, "i": idx, "p": props})
+            poll_fl_once(bridge_factory, bridge=b)
+            return {"ok": True, "action": action, "result": res}
+        return {"ok": False, "action": action, "error": f"unknown action: {action}"}
+    except Exception as exc:
+        return {"ok": False, "action": action, "error": str(exc)}
+    finally:
+        if owns and b is not None:
+            try:
+                b.close()
+            except Exception:
+                pass
+
+
 def make_handler(bridge_factory: Any = Bridge) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, format: str, *args: Any) -> None:
@@ -262,10 +409,30 @@ def make_handler(bridge_factory: Any = Bridge) -> type[BaseHTTPRequestHandler]:
                 return
             self._send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
 
+        def _read_json_body(self) -> dict[str, Any]:
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+                if length <= 0:
+                    return {}
+                raw = json.loads(self.rfile.read(length).decode("utf-8"))
+                return raw if isinstance(raw, dict) else {}
+            except Exception:
+                return {}
+
         def do_POST(self) -> None:
             parsed = urlparse(self.path)
             if parsed.path == "/api/poll":
                 self._send_json(poll_fl_once(bridge_factory))
+                return
+            if parsed.path == "/api/action":
+                port_num = int(getattr(self.server, "server_port", 8765))
+                self._send_json(
+                    dispatch_action(
+                        self._read_json_body(),
+                        bridge_factory=bridge_factory,
+                        http_port=port_num,
+                    )
+                )
                 return
             if parsed.path == "/api/traffic/clear":
                 cleared = telemetry.clear_traffic()

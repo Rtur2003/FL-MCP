@@ -195,3 +195,99 @@ async def test_competitor_parity_mixer_status_and_piano_roll(fl, monkeypatch, tm
     assert prev == {"previewed": 2, "channel": 2}
     assert (2, 60, 110) in fl.fake.auditioned
     assert (2, 60, 0) in fl.fake.auditioned
+
+    # Normalized float velocity (0 < v < 1) and 3-digit hex color (#RGB)
+    assert server._note([60, 0, 1, 0.8]) == [60, 0.0, 1.0, 102]
+    mx_col = json.loads(await server.fl_set(kind="mixer", index=1, color="#F72"))
+    assert mx_col["i"] == 1
+
+
+def test_app_mcp_dispatch_and_windowed_stdio_guard(monkeypatch, tmp_path):
+    monkeypatch.setenv("FL_MCP_DIR", str(tmp_path))
+    called = []
+    monkeypatch.setattr(server, "serve", lambda: called.append("served"))
+    studio_app.main(["--mcp"])
+    assert called == ["served"]
+
+    orig_out, orig_err = sys.stdout, sys.stderr
+    try:
+        sys.stdout = None
+        sys.stderr = None
+        studio_app._ensure_stdio()
+        assert sys.stdout is not None and sys.stderr is not None
+        sys.stdout.write("windowed ok\n")
+        sys.stdout.flush()
+    finally:
+        sys.stdout = orig_out
+        sys.stderr = orig_err
+
+
+def test_build_app_linux_tar_has_no_duplicate_members(monkeypatch, tmp_path):
+    import subprocess
+    import tarfile
+
+    build_app = _load_pkg_mod("build_app")
+
+    def fake_run(cmd, check=True):
+        dist_arg = next(a.split("=", 1)[1] for a in cmd if a.startswith("--distpath="))
+        bundle = Path(dist_arg) / "fl-mcp-studio"
+        (bundle / "_internal").mkdir(parents=True, exist_ok=True)
+        (bundle / "fl-mcp-studio").write_text("#!/bin/sh\n", encoding="utf-8")
+        (bundle / "_internal" / "base.dat").write_text("ok", encoding="utf-8")
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    tar_out = build_app.build_app_archive(tmp_path, os_name="linux", arch="x86_64", dry_run=False)
+    assert tar_out.is_file()
+    with tarfile.open(tar_out, "r:gz") as tf:
+        names = tf.getnames()
+    assert len(names) == len(set(names)), f"Duplicate tar entries: {names}"
+    assert "fl-mcp-studio/fl-mcp-studio" in names
+    assert "fl-mcp-studio/FL-Studio-Scripts/install-fl-scripts.py" in names
+
+
+def test_interactive_studio_action_endpoint(fl, monkeypatch, tmp_path):
+    monkeypatch.setenv("FL_MCP_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("FL_MCP_FL_USER_DIR", str(tmp_path / "fl_user"))
+    monkeypatch.setattr(server, "bridge", fl.bridge)
+    app = service_daemon.create_asgi_app(poll=False)
+    with TestClient(app) as client:
+        r_desk = client.post(
+            "/api/action", json={"action": "desktop_mode", "mode": "stealth"}
+        ).json()
+        assert r_desk["ok"] is True and r_desk["desktop_mode"] == "stealth"
+
+        r_plan = client.post(
+            "/api/action",
+            json={"action": "produce_plan", "genre": "techno", "key": "Fm", "length": 4},
+        ).json()
+        assert r_plan["ok"] is True and r_plan["plan"]["genre"] == "techno"
+
+        r_notes = client.post(
+            "/api/action", json={"action": "notes", "chords": "Am7@0:4, Fmaj7@4:4"}
+        ).json()
+        assert r_notes["ok"] is True and r_notes["queued"] == 8
+
+        r_prev = client.post(
+            "/api/action",
+            json={"action": "notes", "chords": "Cmaj7@0:2", "preview": True, "channel": 1},
+        ).json()
+        assert r_prev["ok"] is True and r_prev["previewed"] == 4 and r_prev["channel"] == 1
+
+        r_clr = client.post("/api/action", json={"action": "notes", "clear": "queue"}).json()
+        assert r_clr["ok"] is True and r_clr["cleared_queue"] is True
+
+        r_tr = client.post(
+            "/api/action",
+            json={"action": "transport", "transport_action": "tempo", "value": 134},
+        ).json()
+        assert r_tr["ok"] is True and r_tr["result"]["bpm"] == 134.0
+
+        r_set = client.post(
+            "/api/action",
+            json={"action": "set", "kind": "mixer", "index": 2, "props": {"mute": 1}},
+        ).json()
+        assert r_set["ok"] is True and r_set["result"]["mute"] == 1
+
+        r_scr = client.post("/api/action", json={"action": "install_scripts"}).json()
+        assert r_scr["ok"] is True and len(r_scr["installed"]) == 2

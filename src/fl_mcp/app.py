@@ -14,6 +14,7 @@ and Linux (x86_64/arm64):
 from __future__ import annotations
 
 import argparse
+import contextlib
 import importlib.util
 import json
 import os

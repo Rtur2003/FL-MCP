@@ -434,6 +434,26 @@ def create_asgi_app(
             threading.Timer(0.1, stop_callback).start()
         return JSONResponse({"stopping": True})
 
+    async def api_action(request: Request) -> JSONResponse:
+        import anyio
+
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        payload = body if isinstance(body, dict) else {}
+
+        def _exec() -> dict[str, Any]:
+            with poller._lock:
+                return dashboard.dispatch_action(
+                    payload,
+                    bridge=server.bridge,
+                    http_port=port,
+                )
+
+        res = await anyio.to_thread.run_sync(_exec)
+        return JSONResponse(res)
+
     routes = [
         Route("/", index, methods=["GET"]),
         Route("/favicon.ico", favicon, methods=["GET"]),
@@ -446,6 +466,7 @@ def create_asgi_app(
         Route("/api/clients", api_clients, methods=["GET"]),
         Route("/api/service", api_service, methods=["GET"]),
         Route("/api/poll", api_poll, methods=["POST"]),
+        Route("/api/action", api_action, methods=["POST"]),
         Route("/api/traffic/clear", api_traffic_clear, methods=["POST"]),
         Route("/api/templates/refresh", api_templates_refresh, methods=["POST"]),
         Route("/api/service/poll-config", api_poll_config, methods=["POST"]),
@@ -468,6 +489,10 @@ def run_foreground(
     import socket
 
     import uvicorn
+
+    from fl_mcp.app import _ensure_stdio
+
+    _ensure_stdio()
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)

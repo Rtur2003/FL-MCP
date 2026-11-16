@@ -46,18 +46,21 @@ claude mcp add fl-studio -- uvx --from "fl-mcp[audio]" fl-mcp
 
 Claude Desktop can instead install the `.mcpb` extension (`python packaging/build_mcpb.py` builds it); full release bundles (wheel, sdist, `.mcpb`, Claude Code plugin zip, standalone FL scripts bundle, `SHA256SUMS.txt`) are built via `python packaging/build_release.py` or automatically when a `v*` tag is pushed.
 
-### Background service, live monitor & traffic inspector
+
+### Studio desktop app, background service & live traffic inspector
 
 ```bash
+fl-mcp app                # launch FL-MCP Studio Desktop App (or run `fl-mcp-studio`)
+fl-mcp app --native       # open zero-dependency native tkinter desktop control panel
+fl-mcp app --install-shortcut   # create Start Menu / macOS .app / Linux .desktop launcher
 fl-mcp service start      # detached daemon: Studio UI + http://127.0.0.1:8765/mcp + SSE
 fl-mcp service status     # inspect running daemon PID, endpoints, autostart & log path
 fl-mcp service autostart enable   # optional login autostart (Registry / launchd / systemd)
-fl-mcp dashboard          # opens http://127.0.0.1:8765 in your browser
 fl-mcp traffic --follow   # stream live MIDI TX/RX frames and MCP calls in terminal
 fl-mcp templates          # list auto-discovered .flp project templates
 ```
 
-The detached service (`fl-mcp service`) runs quietly in the background without holding terminal windows open and hosts the Studio Dashboard UI, a gentle FL telemetry poller, and persistent Streamable-HTTP (`/mcp`) + SSE (`/sse`) MCP endpoints. The dashboard visualizes real-time incoming/outgoing MIDI CC frames and MCP tool calls (`~/.fl-mcp/traffic.jsonl`), Mixer peak meters, Channel Rack routing, Piano Roll canvas, 7-band audio spectrum/LUFS metrics, universal paths, and registered AI client status.
+`fl-mcp app` (and the GUI entrypoint `fl-mcp-studio`) launches the **FL-MCP Studio Desktop Application** in a chromeless OS window (Edge/Chrome `--app=` or `pywebview`, with a built-in `tkinter` fallback via `--native`) across Windows, macOS, and Linux (`x86_64` and `arm64`). It provides interactive DAW transport controls, Mixer & Channel Rack mute/solo buttons, live chord progression queuing/preview, 1-click song plan composition, 1-click FL script installation, 1-click AI client registration (HTTP & Stdio), and real-time MIDI CC / MCP traffic inspection (`~/.fl-mcp/traffic.jsonl`). Standalone native desktop app bundles are built via `python packaging/build_app.py`.
 
 ### Claude Code plugin
 
@@ -81,9 +84,9 @@ The plugin starts the server and adds five skills (**setup**, **produce**, **mix
 | `fl_ui` | drives FL's own interface from inside FL, no mouse: show and focus windows, press keys, walk the browser; `load` finds a plugin or sample by name, loads it onto a mixer track or as a new channel, and checks that it appeared |
 | `fl_status` | FL version, project, tempo, state; `probe` lists API features, `log` lists script errors + MIDI TX/RX traffic telemetry |
 | `fl_transport` | play, pause, stop, record, loop mode, metronome, tempo, position (bar), save, undo |
-| `fl_set` | name, color, volume, pan, mute, solo, routing (`fx`, `send`/`level`), select on a channel, mixer track, pattern or playlist track |
-| `fl_steps` | step sequencer of a channel: `on`/`off`/`clear` lists, or compact velocity `grid` (`z.x.|o...`) with `swing`; returns active steps + visual strip |
-| `fl_notes` | queue piano roll notes (`apply=true` runs the script immediately when desktop control is on) and read the piano roll back |
+| `fl_set` | name, color, volume, pan, mute, solo, stereo separation (`stereo`), disk record arm (`arm`), routing (`fx`, `send`/`level`), select on a channel, mixer track, pattern or playlist track |
+| `fl_steps` | step sequencer of a channel: `on`/`off`/`clear` lists, or compact velocity `grid` (`z.x. | o...`) with`swing`; returns active steps + visual strip |
+| `fl_notes` | queue piano roll notes or named chord progressions (`chords="Am7@0:4, Fmaj7@4:4"`), delete notes (`delete`), clear queue/roll (`clear`), audition live (`preview=true`), and read the piano roll back |
 | `fl_call` | raw FL scripting API, batched (`modules`: transport mixer channels patterns playlist plugins ui general arrangement) |
 | `fl_api` | API reference for `fl_call`: signatures and `midi` constants; works without FL |
 | `fl_desk` | *opt-in* (`fl-mcp desktop stealth\|polite\|foreground\|on`). Non-intrusive screen capture (`PrintWindow`), background `PostMessage` keys, clicks, and macros that run the piano roll script, export audio, open and save projects |
