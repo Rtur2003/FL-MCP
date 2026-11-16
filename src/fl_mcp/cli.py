@@ -347,8 +347,7 @@ def _setup(args: argparse.Namespace) -> int:
 
 
 def _service(args: argparse.Namespace) -> int:
-    import webbrowser
-
+    from fl_mcp import app as studio_app
     from fl_mcp import service_daemon
 
     action = args.action
@@ -373,7 +372,9 @@ def _service(args: argparse.Namespace) -> int:
         tag = "already running" if st.get("already_running") else "started"
         print(f"service {tag} (pid={st['pid']}) | UI: {st['url']} | MCP: {st['mcp_url']}")
         if getattr(args, "open", False):
-            webbrowser.open(st["url"])
+            studio_app.open_studio_window(
+                str(st["url"]), host=args.host, port=int(st.get("port") or args.port)
+            )
         return 0
     if action == "restart":
         try:
