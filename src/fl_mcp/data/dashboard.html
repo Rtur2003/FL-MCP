@@ -1023,14 +1023,6 @@
     <section class="panel-section" id="panel-roll" role="tabpanel" aria-labelledby="tab-roll" hidden>
       <div class="grid-2">
         <div class="card">
-          <h2>Live Piano Roll Inbox / State <span class="meta-note" id="rollMeta"></span></h2><canvas id="rollCanvas"
-            aria-label="Piano roll note velocity preview"></canvas>
-        </div>
-        <div class="card">
-          <h2>Latest Produced Song Plan <span class="meta-note" id="planMeta"></span></h2>
-          <div id="planBox" class="empty">No song plan generated yet.</div>
-        </div>
-        <div class="card">
           <h2 id="rollHeading">Live Piano Roll Inbox / State <span class="meta-note" id="rollMeta"></span></h2>
           <form id="chordForm" class="inline-form" aria-labelledby="rollHeading">
             <div class="field-inline" style="flex:1;min-width:210px">
@@ -1055,14 +1047,14 @@
                 <option value="techno">Techno</option>
                 <option value="trance">Trance</option>
                 <option value="dnb">Drum &amp; Bass</option>
-                <option value="hiphop">Hip-Hop</option>
+                <option value="dubstep">Dubstep</option>
                 <option value="trap">Trap</option>
-                <option value="drill">Drill</option>
+                <option value="oriental_trap">Oriental Trap (Hicaz)</option>
+                <option value="boom_bap">Boom Bap</option>
                 <option value="lofi">Lo-Fi</option>
-                <option value="synthwave">Synthwave</option>
-                <option value="ambient">Ambient</option>
                 <option value="pop">Pop</option>
-                <option value="cinematic">Cinematic</option>
+                <option value="synthwave">Synthwave</option>
+                <option value="reggaeton">Reggaeton</option>
               </select>
             </div>
             <div class="field-inline">
@@ -1103,7 +1095,6 @@
           <div class="toolbar" id="serviceControls" style="margin-top: 12px; margin-bottom: 0;"></div>
         </div>
         <div class="card">
-          <h2>System Layer Health</h2>
           <h2>System Layer Health &amp; Quick Actions</h2>
           <ul class="checklist" id="doctorList"></ul>
           <div class="toolbar" style="margin-top: 12px; margin-bottom: 0;">
@@ -1122,7 +1113,6 @@
           <ul class="kv-list" id="pathsList"></ul>
         </div>
         <div class="card">
-          <h2>AI Client Registrations</h2>
           <h2>
             <span>AI Client Registrations</span>
             <button type="button" class="compact primary" id="connectAllClientsBtn">Connect All (HTTP)</button>
@@ -1130,13 +1120,6 @@
           <div class="table-wrap" style="max-height: 310px;">
             <table>
               <caption class="visually-hidden">Detected AI MCP clients and registration status</caption>
-              <thead>
-                <tr>
-                  <th scope="col">Client</th>
-                  <th scope="col">Status</th>
-                  <th scope="col">CLI Quick Setup</th>
-                </tr>
-              </thead>
               <thead>
                 <tr>
                   <th scope="col">Client</th>
@@ -1360,9 +1343,6 @@
           }
         }
         const barCls = isClip ? "bar clip" : "bar";
-        const flags = (mute ? '<span class="flag m">M</span>' : "")
-          + (solo ? '<span class="flag s">S</span>' : "")
-          + (fxCount ? `<span class="flag">${fxCount}FX</span>` : "");
         const muteBtn = `<button type="button" class="flag-btn m" data-set-kind="mixer" data-set-index="${i}" data-set-prop="mute" data-set-val="${mute ? 0 : 1}" aria-pressed="${mute ? "true" : "false"}">M<span class="visually-hidden">ute mixer track ${i} ${esc(name)}</span></button>`;
         const soloBtn = `<button type="button" class="flag-btn s" data-set-kind="mixer" data-set-index="${i}" data-set-prop="solo" data-set-val="${solo ? 0 : 1}" aria-pressed="${solo ? "true" : "false"}">S<span class="visually-hidden">olo mixer track ${i} ${esc(name)}</span></button>`;
         const fxTag = fxCount ? `<span class="flag">${esc(fxCount)}</span>` : "";
@@ -1370,7 +1350,6 @@
       <div class="idx">${i === 0 ? "MASTER" : "TRK " + i}</div>
       <div class="name" title="${esc(name)}">${esc(name)}</div>
       <div class="meter" title="${esc(pkLabel || "Level")}"><div class="${barCls}" style="height:${lPct}%"></div><div class="${barCls}" style="height:${rPct}%"></div></div>
-      <div class="flags"><span class="mono">${pkLabel || `${Math.round((vol || 0) * 100)}%`}</span>${flags}</div>
       <div class="flags"><span class="mono">${pkLabel || `${Math.round((vol || 0) * 100)}%`}</span>${muteBtn}${soloBtn}${fxTag}</div>
     </div>`;
       }).join("") : '<div class="empty">Poll FL Studio or list mixer tracks to view live level meters.</div>';
@@ -1393,7 +1372,6 @@
       <div class="dot" style="background:${hex}"></div>
       <div><strong style="font-size:0.8rem">${esc(name)}</strong><div class="meta-note">Ch ${i}${kindNote}${flag}</div></div>
       <div>${stepsHtml}</div>
-      <div class="mono meta-note">Trk ${fx ?? "--"}</div>
       <div style="display:flex;align-items:center;gap:4px">${chMuteBtn}${chSoloBtn}<span class="mono meta-note">Trk ${fx ?? "--"}</span></div>
     </div>`;
       }).join("") : '<div class="empty">Channel Rack data will appear once polled.</div>';
@@ -1617,7 +1595,6 @@
         return `<tr>
       <td><strong>${esc(c.name)}</strong><span class="meta-note mono client-path" title="${esc(c.path || c.hint)}">${esc(c.path || c.hint)}</span></td>
       <td>${statusBadge}</td>
-      <td><button type="button" class="compact copy-btn" data-copy="${esc(cliCmd)}" data-label="${esc(c.name)} command">Copy HTTP Setup</button></td>
       <td>
         <div style="display:flex;gap:6px;flex-wrap:wrap">
           <button type="button" class="compact primary" data-install-client="${esc(c.id)}" data-transport="http">Connect HTTP<span class="visually-hidden"> for ${esc(c.name)}</span></button>
