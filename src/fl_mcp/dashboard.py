@@ -14,7 +14,6 @@ import importlib.resources
 import json
 import math
 import os
-import platform
 import sys
 import threading
 import time
@@ -109,9 +108,7 @@ def doctor_info() -> dict[str, Any]:
     return info
 
 
-def poll_fl_once(
-    bridge_factory: Any = Bridge, *, bridge: Any | None = None
-) -> dict[str, Any]:
+def poll_fl_once(bridge_factory: Any = Bridge, *, bridge: Any | None = None) -> dict[str, Any]:
     """Connect or reuse a shared bridge, snapshot live FL Studio state, and update snapshot.json."""
     owns = bridge is None
     b = bridge_factory() if owns else bridge

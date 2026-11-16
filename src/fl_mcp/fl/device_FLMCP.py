@@ -402,6 +402,10 @@ _SETTERS = {
         "select": lambda i, v: (
             mixer.setTrackNumber(i, midi.curfxScrollToMakeVisible) if v else None
         ),
+        "stereo": lambda i, v: mixer.setTrackStereoSep(i, _num(v, -1, 1, "stereo")),
+        "arm": lambda i, v: _flip(mixer.isTrackArmed(i), v, lambda: mixer.armTrack(i)),
+        "polarity": lambda i, v: mixer.revTrackPolarity(i, bool(v)),
+        "swap": lambda i, v: mixer.swapTrackChannels(i, bool(v)),
     },
     "pattern": {
         "name": lambda i, v: patterns.setPatternName(i, str(v)),
@@ -452,7 +456,11 @@ def _op_set(r):
     for name, value in props.items():
         spec[name](i, value)
     cols, row = _ROWS[k]
-    return dict(zip(cols, row(i)))
+    out = dict(zip(cols, row(i)))
+    if k == "mixer":
+        out["stereo"] = _r(_try(mixer.getTrackStereoSep, i))
+        out["arm"] = bool(_try(mixer.isTrackArmed, i))
+    return out
 
 
 # ---------------------------------------------------------------- transport / status
@@ -495,6 +503,8 @@ def _op_status(r):
             "n_ch": _try(channels.channelCount, True),
             "n_pat": _try(patterns.patternCount),
             "ppq": _try(general.getRecPPQ),
+            "len_bars": _try(transport.getSongLength, midi.SONGLENGTH_BARS),
+            "len_ms": _try(transport.getSongLength, midi.SONGLENGTH_MS),
         }
     )
     return d

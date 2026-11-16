@@ -142,3 +142,89 @@ def voice_lead(prev: list[int] | None, pitches: list[int], lo: int, hi: int) -> 
     if best is None:  # range too tight: fall back to the plain voicing
         return sorted(pitches)
     return best
+
+
+_CHORD_INTERVALS: dict[str, tuple[int, ...]] = {
+    "": (0, 4, 7),
+    "maj": (0, 4, 7),
+    "m": (0, 3, 7),
+    "min": (0, 3, 7),
+    "dim": (0, 3, 6),
+    "aug": (0, 4, 8),
+    "sus2": (0, 2, 7),
+    "sus4": (0, 5, 7),
+    "5": (0, 7),
+    "6": (0, 4, 7, 9),
+    "m6": (0, 3, 7, 9),
+    "7": (0, 4, 7, 10),
+    "maj7": (0, 4, 7, 11),
+    "m7": (0, 3, 7, 10),
+    "m7b5": (0, 3, 6, 10),
+    "dim7": (0, 3, 6, 9),
+    "add9": (0, 4, 7, 14),
+    "madd9": (0, 3, 7, 14),
+    "9": (0, 4, 7, 10, 14),
+    "maj9": (0, 4, 7, 11, 14),
+    "m9": (0, 3, 7, 10, 14),
+}
+_NAMED_CHORD = re.compile(r"^([A-Ga-g][#b♯♭]?)(.*?)$")
+
+
+def _norm_quality(raw_q: str) -> str:
+    q = raw_q.strip()
+    if q.startswith("min") and q not in _CHORD_INTERVALS:
+        q = "m" + q[3:]
+    return q
+
+
+def parse_named_chord(name: str, default_octave: int = 4) -> list[int]:
+    """Parse chord name like 'Am7', 'Cmaj7', 'G7', 'F#3m9', 'Bbdim' into MIDI pitches."""
+    m = _NAMED_CHORD.match(name.strip())
+    if not m:
+        raise ValueError(f"unknown chord '{name}'")
+    root_s, tail = m.groups()
+    pc = pc_of(root_s)
+    tail_s = _norm_quality(tail)
+    octave = default_octave
+    if tail_s in _CHORD_INTERVALS:
+        q_norm = tail_s
+    elif tail.strip() and tail.strip()[0] in "012345678":
+        octave = int(tail.strip()[0])
+        q_norm = _norm_quality(tail.strip()[1:])
+    else:
+        q_norm = tail_s
+    intervals = _CHORD_INTERVALS.get(q_norm)
+    if intervals is None:
+        raise ValueError(
+            f"unsupported chord quality '{tail}' in '{name}'; "
+            f"supported: {', '.join(k or 'maj' for k in _CHORD_INTERVALS)}"
+        )
+    base = (octave + 1) * 12 + pc
+    return [p for p in (base + iv for iv in intervals) if 0 <= p <= 127]
+
+
+def chords_to_notes(spec: str) -> list[list[float]]:
+    """Expand 'Am7@0:4, Dm7@4:2, G7@6:2@95' (or 'Cmaj7, Am7, F, G') into note rows."""
+    rows: list[list[float]] = []
+    cursor = 0.0
+    for raw in filter(None, (p.strip() for p in re.split(r"[,;]+", spec))):
+        parts = raw.split("@")
+        chord_name = parts[0].strip()
+        start = cursor
+        length = 2.0
+        vel = 100
+        if len(parts) >= 2 and parts[1].strip():
+            timing = parts[1].strip().split(":")
+            start = float(timing[0])
+            if len(timing) >= 2 and timing[1].strip():
+                length = float(timing[1])
+        if len(parts) >= 3 and parts[2].strip():
+            vel = int(float(parts[2].strip()))
+        if start < 0 or length <= 0 or not 1 <= vel <= 127:
+            raise ValueError(f"invalid chord timing/velocity in '{raw}'")
+        for pitch in parse_named_chord(chord_name):
+            rows.append([pitch, round(start, 4), round(length, 4), vel])
+        cursor = start + length
+    if not rows:
+        raise ValueError("chords string is empty")
+    return rows

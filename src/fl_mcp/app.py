@@ -301,8 +301,20 @@ def _run_native_tk(url: str, *, host: str, port: int, runtime: dict[str, Any]) -
     muted = "#98a6c0"
     accent = "#ff7a2f"
     green = "#3ddc97"
+    ui_font = (
+        "Segoe UI"
+        if runtime["os"] == "windows"
+        else ("Helvetica Neue" if runtime["os"] == "macos" else "DejaVu Sans")
+    )
+    mono_font = (
+        "Consolas"
+        if runtime["os"] == "windows"
+        else ("Menlo" if runtime["os"] == "macos" else "DejaVu Sans Mono")
+    )
 
-    header = tk.Frame(root, bg=elev, padx=18, pady=14, highlightthickness=1, highlightbackground="#2a3448")
+    header = tk.Frame(
+        root, bg=elev, padx=18, pady=14, highlightthickness=1, highlightbackground="#2a3448"
+    )
     header.pack(fill="x")
     if emblem is not None:
         img_lbl = tk.Label(header, image=emblem, bg=elev)
@@ -312,12 +324,12 @@ def _run_native_tk(url: str, *, host: str, port: int, runtime: dict[str, Any]) -
     title_box = tk.Frame(header, bg=elev)
     title_box.pack(side="left", fill="both", expand=True)
     tk.Label(
-        title_box, text="FL-MCP Studio", font=("Segoe UI", 14, "bold"), fg=fg, bg=elev, anchor="w"
+        title_box, text="FL-MCP Studio", font=(ui_font, 14, "bold"), fg=fg, bg=elev, anchor="w"
     ).pack(fill="x")
     tk.Label(
         title_box,
         text=f"v{__version__} · {runtime['os']} ({runtime['arch']}) · Native Desktop App",
-        font=("Segoe UI", 9),
+        font=(ui_font, 9),
         fg=muted,
         bg=elev,
         anchor="w",
@@ -330,11 +342,13 @@ def _run_native_tk(url: str, *, host: str, port: int, runtime: dict[str, Any]) -
     cards = tk.Frame(root, bg=bg, padx=18, pady=12)
     cards.pack(fill="x")
     for var, fg_color in ((status_var, green), (service_var, fg), (metrics_var, muted)):
-        box = tk.Frame(cards, bg=panel, padx=12, pady=8, highlightthickness=1, highlightbackground="#2a3448")
-        box.pack(fill="x", pady=4)
-        tk.Label(box, textvariable=var, fg=fg_color, bg=panel, font=("Consolas", 10), anchor="w").pack(
-            fill="x"
+        box = tk.Frame(
+            cards, bg=panel, padx=12, pady=8, highlightthickness=1, highlightbackground="#2a3448"
         )
+        box.pack(fill="x", pady=4)
+        tk.Label(
+            box, textvariable=var, fg=fg_color, bg=panel, font=(mono_font, 10), anchor="w"
+        ).pack(fill="x")
 
     btn_row = tk.Frame(root, bg=bg, padx=18, pady=4)
     btn_row.pack(fill="x")
@@ -398,7 +412,7 @@ def _run_native_tk(url: str, *, host: str, port: int, runtime: dict[str, Any]) -
             relief="flat",
             padx=11,
             pady=6,
-            font=("Segoe UI", 9, "bold"),
+            font=(ui_font, 9, "bold"),
             cursor="hand2",
         ).pack(side="left", padx=(0, 8))
 
@@ -407,7 +421,7 @@ def _run_native_tk(url: str, *, host: str, port: int, runtime: dict[str, Any]) -
         bg="#080b10",
         fg=fg,
         insertbackground=fg,
-        font=("Consolas", 9),
+        font=(mono_font, 9),
         relief="flat",
         padx=10,
         pady=8,

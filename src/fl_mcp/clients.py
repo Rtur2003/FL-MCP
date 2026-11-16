@@ -35,7 +35,9 @@ def resolve_uvx() -> str:
     return "uvx"
 
 
-def command(source: str = "pypi", audio: bool = True, *, resolve: bool = False) -> tuple[str, list[str]]:
+def command(
+    source: str = "pypi", audio: bool = True, *, resolve: bool = False
+) -> tuple[str, list[str]]:
     """The command and arguments that start the server."""
     if source not in SOURCES:
         raise ValueError(f"source must be one of {', '.join(SOURCES)}")
@@ -333,9 +335,7 @@ def client_statuses(project: Path | None = None) -> list[dict[str, Any]]:
                                 has_url = True
                                 break
                         entry = (
-                            ({"url": "http"} if has_url else {"match": True})
-                            if found_sec
-                            else None
+                            ({"url": "http"} if has_url else {"match": True}) if found_sec else None
                         )
                 else:
                     data = json.loads(raw)

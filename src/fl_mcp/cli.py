@@ -575,7 +575,9 @@ def main(argv: list[str] | None = None) -> None:
         help="desktop window runtime",
     )
     app_p.add_argument("--native", action="store_true", help="use built-in tkinter panel")
-    app_p.add_argument("--browser", action="store_true", help="open in browser instead of app shell")
+    app_p.add_argument(
+        "--browser", action="store_true", help="open in browser instead of app shell"
+    )
     app_p.add_argument("--foreground", action="store_true", help="keep server inside app process")
     app_p.add_argument("--status", action="store_true", help="inspect OS, arch & desktop runtime")
     app_p.add_argument("--json", action="store_true", help="output JSON")
@@ -587,7 +589,9 @@ def main(argv: list[str] | None = None) -> None:
     dash = sub.add_parser("dashboard", help="open Studio desktop app (or headless server)")
     dash.add_argument("--port", type=int, default=8765, help="HTTP port on 127.0.0.1 (0 = random)")
     dash.add_argument("--no-open", action="store_true", help="do not open window automatically")
-    dash.add_argument("--browser", action="store_true", help="force browser tab instead of app window")
+    dash.add_argument(
+        "--browser", action="store_true", help="force browser tab instead of app window"
+    )
     dash.add_argument("--poll", action="store_true", help="poll FL Studio once on startup")
     traf = sub.add_parser("traffic", help="show or tail incoming/outgoing MIDI & MCP traffic")
     traf.add_argument("--limit", type=int, default=30, help="recent events to show (0 = all)")

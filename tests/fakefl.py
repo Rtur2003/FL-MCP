@@ -149,6 +149,10 @@ class FakeFL:
             "mute": 0,
             "solo": 0,
             "color": 0,
+            "sep": 0.0,
+            "arm": False,
+            "polarity": False,
+            "swap": False,
             "routes": set(routes or ()),
             "levels": {},
             "slots": {},
@@ -222,6 +226,13 @@ class FakeFL:
     def transport_getSongPosHint(self):
         bar, rest = divmod(self.ticks, self.ppq * 4)
         return f"{bar + 1}:{rest // (self.ppq // 4) + 1:02d}:{rest % (self.ppq // 4):02d}"
+
+    def transport_getSongLength(self, mode):
+        if mode == midi.SONGLENGTH_BARS:
+            return 16
+        if mode == midi.SONGLENGTH_MS:
+            return 32000
+        return 16 * self.ppq * 4
 
     def general_getVersion(self):
         return 37
@@ -508,6 +519,30 @@ class FakeFL:
 
     def mixer_setTrackPan(self, index, pan, pickupMode):
         self.tracks[index]["pan"] = pan
+
+    def mixer_getTrackStereoSep(self, index):
+        return self.tracks[index]["sep"]
+
+    def mixer_setTrackStereoSep(self, index, pan, pickupMode=0):
+        self.tracks[index]["sep"] = max(-1.0, min(1.0, float(pan)))
+
+    def mixer_isTrackArmed(self, index):
+        return bool(self.tracks[index]["arm"])
+
+    def mixer_armTrack(self, index):
+        self.tracks[index]["arm"] = not self.tracks[index]["arm"]
+
+    def mixer_isTrackRevPolarity(self, index):
+        return bool(self.tracks[index]["polarity"])
+
+    def mixer_revTrackPolarity(self, index, value=False):
+        self.tracks[index]["polarity"] = bool(value)
+
+    def mixer_isTrackSwapChannels(self, index):
+        return bool(self.tracks[index]["swap"])
+
+    def mixer_swapTrackChannels(self, index, value=False):
+        self.tracks[index]["swap"] = bool(value)
 
     def mixer_isTrackMuted(self, index):
         return bool(self.tracks[index]["mute"])

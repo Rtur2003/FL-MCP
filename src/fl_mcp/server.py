@@ -40,7 +40,7 @@ from fl_mcp import (
 )
 from fl_mcp.bridge import Bridge, FLError
 from fl_mcp.commerce import Gate, LicenseError, Spend
-from fl_mcp.music import GENRES, compose
+from fl_mcp.music import GENRES, compose, theory
 from fl_mcp.paths import data_dir, notes_dir
 
 INSTRUCTIONS = (
@@ -178,15 +178,15 @@ async def fl_set(
     pan: Annotated[float | None, Field(description="-1 left .. 1 right")] = None,
     mute: bool | None = None,
     solo: bool | None = None,
-    fx: Annotated[int | None, Field(description="channel: target mixer track")] = None,
-    send: Annotated[int | None, Field(description="mixer: route to track N")] = None,
-    level: Annotated[float | None, Field(description="send level 0-1; -1 removes the send")] = None,
+    fx: Annotated[int | None, Field(description="channel mixer track")] = None,
+    send: Annotated[int | None, Field(description="mixer route track")] = None,
+    level: Annotated[float | None, Field(description="send 0-1, -1 unroute")] = None,
+    stereo: Annotated[float | None, Field(description="mixer sep -1..1")] = None,
+    arm: Annotated[bool | None, Field(description="mixer rec arm")] = None,
     select: bool | None = None,
 ) -> str:
-    """Change only the given properties of a channel, mixer track, pattern or playlist track.
-    channel: name color volume pan mute solo fx select. mixer: name color volume pan mute solo
-    send level select. pattern: name color select. playlist (track): name color mute solo select.
-    Returns the updated row."""
+    """Change properties on a channel, mixer track, pattern or playlist track:
+    name, color, volume, pan, mute, solo, select; channel fx; mixer send/level/stereo/arm."""
     given = dict(
         name=name,
         color=color,
@@ -197,6 +197,8 @@ async def fl_set(
         fx=fx,
         send=send,
         level=level,
+        stereo=stereo,
+        arm=arm,
         select=select,
     )
     props = {k: v for k, v in given.items() if v is not None}
@@ -290,23 +292,49 @@ def _read_json(path: Any) -> Any:
         return None
 
 
+def _delete_spec(row: list[float]) -> list[float]:
+    if len(row) not in (1, 2, 3):
+        raise ToolError("delete entries are [midi_note] or [midi_note, start_beat, length_beats?]")
+    pitch = row[0]
+    if not (0 <= pitch <= 127 and float(pitch).is_integer()):
+        raise ToolError(f"midi_note must be 0-127, got {pitch}")
+    out: list[float] = [int(pitch)]
+    if len(row) >= 2:
+        if row[1] < 0:
+            raise ToolError(f"start must be >= 0, got {row[1]}")
+        out.append(round(float(row[1]), 4))
+    if len(row) == 3:
+        if row[2] <= 0:
+            raise ToolError(f"length must be > 0, got {row[2]}")
+        out.append(round(float(row[2]), 4))
+    return out
+
+
 async def fl_notes(
     notes: Annotated[
         list[list[float]] | None,
-        Field(
-            description="rows [midi_note, start_beat, length_beats, velocity 1-127 (100)]; "
-            "a 4/4 bar is 4 beats"
-        ),
+        Field(description="[midi_note, start_beat, length_beats, vel?]; 4/4 bar=4"),
     ] = None,
-    replace: Annotated[bool, Field(description="clear the existing notes first")] = False,
-    channel: Annotated[int, Field(ge=-1, description="channel to edit, -1 = current")] = -1,
-    pattern: Annotated[int, Field(ge=0, description="pattern to edit, 0 = current")] = 0,
-    read: Annotated[bool, Field(description="return the last script export")] = False,
-    apply: Annotated[bool, Field(description="apply via desktop script immediately")] = False,
+    chords: Annotated[str | None, Field(description="'Am7@0:4, G7@4:4'")] = None,
+    delete: Annotated[
+        list[list[float]] | None, Field(description="[midi] or [midi,start] remove")
+    ] = None,
+    clear: Literal["roll", "queue"] | None = None,
+    replace: Annotated[bool, Field(description="clear existing notes first")] = False,
+    channel: Annotated[int, Field(ge=-1, description="channel, -1=current")] = -1,
+    pattern: Annotated[int, Field(ge=0, description="pattern, 0=current")] = 0,
+    read: Annotated[bool, Field(description="read exported notes/queue")] = False,
+    apply: Annotated[bool, Field(description="run desktop script now")] = False,
+    preview: Annotated[bool, Field(description="trigger live MIDI preview")] = False,
 ) -> str:
-    """Piano roll notes: queues notes and opens the piano roll. Set apply=true when desktop
-    control is on to apply immediately, or run Tools > Scripting > FL MCP. read=true confirms."""
+    """Piano roll & live notes: queue/apply notes or chords, delete specific notes, clear roll
+    or queue, read state.json, or preview live via MIDI note."""
     folder = notes_dir()
+    if clear == "queue":
+        inbox = folder / "inbox.json"
+        existed = inbox.exists()
+        inbox.unlink(missing_ok=True)
+        return _out({"cleared_queue": existed})
     if read:
         try:
             state = _read_json(folder / "state.json")
@@ -331,21 +359,49 @@ async def fl_notes(
                 and queued.get("serial") == state["serial"],
                 "age_s": round(time.time() - state["ts"]),
                 "truncated": len(shown) < state["count"],
+                "queued": {
+                    "count": len(queued.get("notes") or []),
+                    "delete_count": len(queued.get("delete") or []),
+                    "replace": bool(queued.get("replace")),
+                    "serial": queued.get("serial"),
+                },
                 "notes": shown,
             }
         )
-    if not notes:
-        raise ToolError("pass notes to queue, or read=true")
-    if len(notes) > 1000:
-        raise ToolError("at most 1000 notes per call")
+    rows = [_note(n) for n in (notes or [])]
+    if chords:
+        try:
+            rows.extend(theory.chords_to_notes(chords))
+        except ValueError as exc:
+            raise ToolError(str(exc)) from None
+    del_rows = [_delete_spec(d) for d in (delete or [])]
+    replace_flag = bool(replace or clear == "roll")
+    if preview:
+        if not rows:
+            raise ToolError("preview needs notes or chords")
+        target_ch = channel if channel >= 0 else (await _fl({"o": "status"}))["ch"]
+        played = rows[:16]
+        for pitch, _start, _len, vel in played:
+            await _fl({"o": "note", "c": target_ch, "n": int(pitch), "v": int(vel)})
+        await anyio.sleep(0.25)
+        for pitch, _start, _len, _vel in played:
+            await _fl({"o": "note", "c": target_ch, "n": int(pitch), "v": 0})
+        return _out({"previewed": len(played), "channel": target_ch})
+    if not rows and not del_rows and not replace_flag:
+        raise ToolError("pass notes, chords, delete, clear, or read=true")
+    if len(rows) > 1000 or len(del_rows) > 500:
+        raise ToolError("at most 1000 notes and 500 deletes per call")
     if apply and not desk.enabled():
         raise ToolError("apply=true needs desktop control (`fl-mcp desktop on`)")
-    rows = [_note(n) for n in notes]
     roll = await _fl({"o": "roll", "c": channel, "p": pattern})
-    _write_json(
-        folder / "inbox.json",
-        {"serial": secrets.randbelow(2**31), "replace": replace, "notes": rows},
-    )
+    payload: dict[str, Any] = {
+        "serial": secrets.randbelow(2**31),
+        "replace": replace_flag,
+        "notes": rows,
+    }
+    if del_rows:
+        payload["delete"] = del_rows
+    _write_json(folder / "inbox.json", payload)
     if apply:
         try:
             await _fl({"o": "ui", "a": "win", "w": "roll", "v": "focus"})
@@ -355,6 +411,7 @@ async def fl_notes(
         return _out(
             {
                 "queued": len(rows),
+                "deleted": len(del_rows),
                 "channel": roll["ch"],
                 "pattern": roll["pat"],
                 "applied": bool(macro_res.get("applied")),
@@ -364,6 +421,8 @@ async def fl_notes(
     return _out(
         {
             "queued": len(rows),
+            "deleted": len(del_rows),
+            "cleared": replace_flag,
             "channel": roll["ch"],
             "pattern": roll["pat"],
             "next": "Call fl_desk macro=script to apply them."

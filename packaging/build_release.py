@@ -354,6 +354,8 @@ def extract_release_notes(version: str = __version__) -> str:
         header += section + "\n\n"
     header += (
         "## Release Assets\n\n"
+        f"- `fl-mcp-studio-{version}-<os>-<arch>.zip|.tar.gz`: Standalone Desktop App "
+        "(Windows x64/ARM64, macOS Apple Silicon/Intel, Linux x64/ARM64 — zero Python required)\n"
         f"- `fl-mcp-{version}.mcpb`: Claude Desktop extension bundle\n"
         f"- `fl_mcp-{version}-py3-none-any.whl` / `fl_mcp-{version}.tar.gz`: Python package\n"
         f"- `fl-studio-claude-plugin-{version}.zip`: Claude Code plugin & marketplace\n"
