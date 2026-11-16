@@ -229,7 +229,7 @@ def test_build_app_linux_tar_has_no_duplicate_members(monkeypatch, tmp_path):
     build_app = _load_pkg_mod("build_app")
 
     def fake_run(cmd, **kwargs):
-        dist_arg = next(a.split("=", 1)[1] for a in cmd if a.startswith("--distpath="))
+        dist_arg = cmd[cmd.index("--distpath") + 1]
         bundle = Path(dist_arg) / "fl-mcp-studio"
         (bundle / "_internal").mkdir(parents=True, exist_ok=True)
         (bundle / "fl-mcp-studio").write_text("#!/bin/sh\n", encoding="utf-8")
@@ -247,6 +247,7 @@ def test_build_app_linux_tar_has_no_duplicate_members(monkeypatch, tmp_path):
 
 
 def test_interactive_studio_action_endpoint(fl, monkeypatch, tmp_path):
+    monkeypatch.delenv("FL_MCP_DESKTOP", raising=False)
     monkeypatch.setenv("FL_MCP_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("FL_MCP_FL_USER_DIR", str(tmp_path / "fl_user"))
     monkeypatch.setattr(server, "bridge", fl.bridge)
