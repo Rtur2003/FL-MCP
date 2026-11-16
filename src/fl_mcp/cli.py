@@ -560,12 +560,34 @@ def main(argv: list[str] | None = None) -> None:
     svc.add_argument(
         "--no-poll", action="store_true", help="disable automatic background FL polling"
     )
-    svc.add_argument("--open", action="store_true", help="open Studio UI after starting service")
+    svc.add_argument("--open", action="store_true", help="open Studio desktop app after starting")
     svc.add_argument("--json", action="store_true", help="output JSON for status")
     svc.add_argument("--lines", type=int, default=40, help="log tail lines")
-    dash = sub.add_parser("dashboard", help="open live web studio visualizer & traffic monitor")
+    app_p = sub.add_parser("app", help="open FL-MCP Studio as a native desktop application window")
+    app_p.add_argument("--host", default="127.0.0.1")
+    app_p.add_argument("--port", type=int, default=8765)
+    app_p.add_argument("--poll-interval", type=float, default=5.0)
+    app_p.add_argument("--no-poll", action="store_true", help="disable background FL polling")
+    app_p.add_argument(
+        "--backend",
+        choices=["auto", "webview", "app-window", "native", "browser"],
+        default="auto",
+        help="desktop window runtime",
+    )
+    app_p.add_argument("--native", action="store_true", help="use built-in tkinter panel")
+    app_p.add_argument("--browser", action="store_true", help="open in browser instead of app shell")
+    app_p.add_argument("--foreground", action="store_true", help="keep server inside app process")
+    app_p.add_argument("--status", action="store_true", help="inspect OS, arch & desktop runtime")
+    app_p.add_argument("--json", action="store_true", help="output JSON")
+    app_p.add_argument(
+        "--install-shortcut",
+        action="store_true",
+        help="register OS Start Menu / Applications / .desktop launcher",
+    )
+    dash = sub.add_parser("dashboard", help="open Studio desktop app (or headless server)")
     dash.add_argument("--port", type=int, default=8765, help="HTTP port on 127.0.0.1 (0 = random)")
-    dash.add_argument("--no-open", action="store_true", help="do not launch browser automatically")
+    dash.add_argument("--no-open", action="store_true", help="do not open window automatically")
+    dash.add_argument("--browser", action="store_true", help="force browser tab instead of app window")
     dash.add_argument("--poll", action="store_true", help="poll FL Studio once on startup")
     traf = sub.add_parser("traffic", help="show or tail incoming/outgoing MIDI & MCP traffic")
     traf.add_argument("--limit", type=int, default=30, help="recent events to show (0 = all)")
@@ -603,7 +625,40 @@ def main(argv: list[str] | None = None) -> None:
         from fl_mcp.dashboard import serve_dashboard
 
         raise SystemExit(
-            serve_dashboard(port=args.port, open_browser=not args.no_open, poll_first=args.poll)
+            serve_dashboard(
+                port=args.port,
+                open_browser=not args.no_open,
+                poll_first=args.poll,
+                backend="browser" if getattr(args, "browser", False) else "auto",
+            )
+        )
+    elif args.cmd == "app":
+        from fl_mcp import app as studio_app
+
+        if args.status:
+            info = studio_app.detect_runtime()
+            if args.json:
+                print(json.dumps(info, indent=2))
+            else:
+                print(
+                    f"{info['os']} ({info['arch']}) | backend={info['default_backend']} | "
+                    f"runtime={info['app_window'] or ('tkinter' if info['tkinter'] else 'browser')}"
+                )
+            raise SystemExit(0)
+        if args.install_shortcut:
+            res = studio_app.install_app_shortcut()
+            print(json.dumps(res, indent=2) if args.json else f"Installed: {res['path']}")
+            raise SystemExit(0)
+        backend = "native" if args.native else ("browser" if args.browser else args.backend)
+        raise SystemExit(
+            studio_app.launch_app(
+                host=args.host,
+                port=args.port,
+                poll=not args.no_poll,
+                poll_interval=args.poll_interval,
+                backend=backend,
+                embedded=args.foreground,
+            )
         )
     elif args.cmd == "traffic":
         raise SystemExit(_traffic(args))
