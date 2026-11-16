@@ -220,6 +220,8 @@ def open_chromeless_window(
         return None
     profile_dir = paths.data_dir() / "app-profile"
     profile_dir.mkdir(parents=True, exist_ok=True)
+    with contextlib.suppress(OSError):
+        (profile_dir / "First Run").touch(exist_ok=True)
     cmd = [
         str(binary),
         f"--app={_app_url(url)}",
@@ -228,7 +230,8 @@ def open_chromeless_window(
         "--class=FL-MCP-Studio",
         "--no-first-run",
         "--no-default-browser-check",
-        "--disable-features=ExtensionsToolbarMenu",
+        "--disable-sync",
+        "--disable-features=ExtensionsToolbarMenu,Translate",
     ]
     proc = _detached_spawn(cmd)
     if wait:
@@ -395,9 +398,25 @@ def _run_native_tk(url: str, *, host: str, port: int, runtime: dict[str, Any]) -
         except Exception as exc:
             messagebox.showerror("App Shortcut", str(exc))
 
+    def connect_all_clients() -> None:
+        try:
+            from fl_mcp import clients
+
+            results = clients.install_all(
+                source="local", transport="http", http_url=f"http://{host}:{port}/mcp"
+            )
+            messagebox.showinfo(
+                "AI Clients Connected",
+                "Registered HTTP MCP endpoint for:\n"
+                + "\n".join(f"• {r['label']}: {r['config_path']}" for r in results),
+            )
+        except Exception as exc:
+            messagebox.showerror("AI Clients", str(exc))
+
     btn_specs = (
         ("Poll FL Now", poll_now, True),
         ("Copy MCP URL", copy_endpoint, False),
+        ("Connect AI Clients", connect_all_clients, False),
         ("Install FL Scripts", run_install_scripts, False),
         ("Add App Shortcut", create_shortcut, False),
         ("Open Full Console", open_studio, False),
@@ -720,15 +739,32 @@ def launch_app(
     return 0
 
 
+def _ensure_stdio() -> None:
+    """Bind None stdout/stderr in windowed GUI builds so print/uvicorn never crash."""
+    if sys.stdout is not None and sys.stderr is not None:
+        return
+    try:
+        lf = paths.logs_dir() / "studio-app.log"
+        lf.parent.mkdir(parents=True, exist_ok=True)
+        stream = open(lf, "a", encoding="utf-8")
+    except OSError:
+        stream = open(os.devnull, "w", encoding="utf-8")
+    if sys.stdout is None:
+        sys.stdout = stream
+    if sys.stderr is None:
+        sys.stderr = stream
+
+
 def main(argv: list[str] | None = None) -> None:
     """Desktop App entrypoint supporting frozen ``--mcp`` / ``--cli`` dispatch."""
     raw = list(sys.argv[1:] if argv is None else argv)
     if raw and raw[0] in ("--mcp", "--stdio"):
-        from fl_mcp.server import main as server_main
+        from fl_mcp.server import serve as server_main
 
         sys.argv = [sys.argv[0], *raw[1:]]
         server_main()
         return
+    _ensure_stdio()
     if raw and raw[0] == "--cli":
         from fl_mcp.cli import main as cli_main
 
