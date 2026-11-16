@@ -34,11 +34,27 @@ def _run():
     if queue:
         if queue.get("replace"):
             score.clearNotes(True)
+        for spec in queue.get("delete") or []:
+            pitch = int(spec[0])
+            has_t = len(spec) >= 2 and spec[1] is not None
+            has_l = len(spec) >= 3 and spec[2] is not None
+            t_ticks = int(round(float(spec[1]) * ppq)) if has_t else 0
+            l_ticks = int(round(float(spec[2]) * ppq)) if has_l else 0
+            tol = max(1, int(round(ppq * 0.05)))
+            for idx in range(score.noteCount - 1, -1, -1):
+                n = score.getNote(idx)
+                if n.number != pitch:
+                    continue
+                if has_t and abs(n.time - t_ticks) > tol:
+                    continue
+                if has_l and abs(n.length - l_ticks) > tol:
+                    continue
+                score.deleteNote(idx)
         have = set()
         for i in range(score.noteCount):
             n = score.getNote(i)
             have.add((n.number, n.time, n.length))
-        for pitch, start, length, velocity in queue["notes"]:
+        for pitch, start, length, velocity in queue.get("notes") or []:
             key = (int(pitch), int(round(start * ppq)), max(1, int(round(length * ppq))))
             if key in have:
                 continue
@@ -54,5 +70,7 @@ def _run():
                       int(round(n.velocity * 127))])
     state = {"ts": time.time(), "ppq": ppq, "count": score.noteCount,
              "serial": queue.get("serial") if queue else None, "notes": notes}
-    with open(STATE, "w", encoding="utf-8") as f:
+    tmp = STATE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(state, f, separators=(",", ":"))
+    os.replace(tmp, STATE)

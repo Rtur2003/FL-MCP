@@ -21,8 +21,11 @@ import plugins
 import transport
 import ui
 
-VERSION = 5
+VERSION = 6
 PROTO = 1
+
+_REC_PLUG_MUTE = getattr(midi, "REC_Plug_Mute", 536878848)
+_REC_PLUG_MIX = getattr(midi, "REC_Plug_MixLevel", 536878849)
 
 _IN, _OUT = 14, 15
 _BEGIN, _DATA, _SUM_A, _SUM_B = 102, 103, 104, 105
@@ -399,6 +402,10 @@ _SETTERS = {
         "select": lambda i, v: (
             mixer.setTrackNumber(i, midi.curfxScrollToMakeVisible) if v else None
         ),
+        "stereo": lambda i, v: mixer.setTrackStereoSep(i, _num(v, -1, 1, "stereo")),
+        "arm": lambda i, v: _flip(mixer.isTrackArmed(i), v, lambda: mixer.armTrack(i)),
+        "polarity": lambda i, v: mixer.revTrackPolarity(i, bool(v)),
+        "swap": lambda i, v: mixer.swapTrackChannels(i, bool(v)),
     },
     "pattern": {
         "name": lambda i, v: patterns.setPatternName(i, str(v)),
@@ -449,7 +456,11 @@ def _op_set(r):
     for name, value in props.items():
         spec[name](i, value)
     cols, row = _ROWS[k]
-    return dict(zip(cols, row(i)))
+    out = dict(zip(cols, row(i)))
+    if k == "mixer":
+        out["stereo"] = _r(_try(mixer.getTrackStereoSep, i))
+        out["arm"] = bool(_try(mixer.isTrackArmed, i))
+    return out
 
 
 # ---------------------------------------------------------------- transport / status
@@ -492,6 +503,8 @@ def _op_status(r):
             "n_ch": _try(channels.channelCount, True),
             "n_pat": _try(patterns.patternCount),
             "ppq": _try(general.getRecPPQ),
+            "len_bars": _try(transport.getSongLength, midi.SONGLENGTH_BARS),
+            "len_ms": _try(transport.getSongLength, midi.SONGLENGTH_MS),
         }
     )
     return d
@@ -663,27 +676,45 @@ def _plug_ref(r):
     return i, slot, glob
 
 
+def _tokens(text):
+    out, buf = [], []
+    for ch in str(text or "").lower():
+        if ch.isalnum():
+            buf.append(ch)
+        elif buf:
+            out.append("".join(buf))
+            buf = []
+    if buf:
+        out.append("".join(buf))
+    return out
+
+
 def _find_param(i, slot, glob, ref):
-    """A parameter index from an index or a name (exact, then prefix, then substring)."""
+    """A parameter index from an index or a name (exact, prefix, substring, then tokens)."""
     count = plugins.getParamCount(i, slot, glob)
     if isinstance(ref, int) or str(ref).strip().isdigit():
         return _idx(int(ref), 0, count - 1, "param")
     want = _key(ref)
+    toks = _tokens(ref)
     if not want:
         raise ValueError("param needs an index or a name")
-    exact, starts, within = [], [], []
+    exact, starts, within, tok_all = [], [], [], []
+    named = []
     for k in range(count):
         name = plugins.getParamName(k, i, slot, glob)
         key = _key(name)
         if not key:
             continue
+        named.append((k, name, key))
         if key == want:
             exact.append(k)
         elif key.startswith(want):
             starts.append(k)
         elif want in key:
             within.append(k)
-    for group in (exact, starts, within):
+        elif len(toks) > 1 and all(t in key for t in toks):
+            tok_all.append(k)
+    for group in (exact, starts, within, tok_all):
         if len(group) == 1:
             return group[0]
         if group:
@@ -691,6 +722,13 @@ def _find_param(i, slot, glob, ref):
                 "%d %s" % (k, plugins.getParamName(k, i, slot, glob)) for k in group[:8]
             )
             raise ValueError("'%s' matches several parameters: %s" % (ref, names))
+    close = ["%d %s" % (k, name) for k, name, key in named if toks and any(t in key for t in toks)][
+        :6
+    ]
+    if not close:
+        close = ["%d %s" % (k, name) for k, name, _ in named[:6]]
+    if close:
+        raise ValueError("no parameter named '%s'; try: %s" % (ref, ", ".join(close)))
     raise ValueError("no parameter named '%s'; list them with find" % ref)
 
 
@@ -773,8 +811,122 @@ def _solve_param(i, slot, glob, p, want, unit):
     return abs(v_best - want) <= tol * 2
 
 
+def _plug_eid(i, slot, offset):
+    pid = _try(mixer.getTrackPluginId, i, slot)
+    return None if pid is None or pid < 0 else pid + offset
+
+
+def _slot_mix_get(i, slot):
+    eid = _plug_eid(i, slot, _REC_PLUG_MIX)
+    if eid is None:
+        return 1.0
+    v = _try(device.getLinkedValue, eid)
+    if v is not None and 0.0 <= v <= 1.0:
+        return float(v)
+    raw = _try(general.processRECEvent, eid, 0, midi.REC_GetValue)
+    if raw is None or raw < 0:
+        return 1.0
+    if raw > 12800:
+        return max(0.0, min(1.0, raw / float(midi.FromMIDI_Max)))
+    return max(0.0, min(1.0, raw / 12800.0))
+
+
+def _slot_mix_set(i, slot, val):
+    eid = _plug_eid(i, slot, _REC_PLUG_MIX)
+    if eid is None:
+        raise ValueError("cannot address mixer slot mix")
+    general.processRECEvent(
+        eid,
+        int(round(val * midi.FromMIDI_Max)),
+        midi.REC_MIDIController | midi.REC_UpdateControl,
+    )
+
+
+def _slot_mute_get(i, slot):
+    eid = _plug_eid(i, slot, _REC_PLUG_MUTE)
+    if eid is None:
+        return False
+    v = _try(device.getLinkedValue, eid)
+    if v is not None and 0.0 <= v <= 1.0:
+        return v < 0.5
+    raw = _try(general.processRECEvent, eid, 0, midi.REC_GetValue)
+    return False if raw is None or raw < 0 else not bool(raw)
+
+
+def _slot_mute_set(i, slot, muted):
+    eid = _plug_eid(i, slot, _REC_PLUG_MUTE)
+    if eid is None:
+        raise ValueError("cannot address mixer slot mute")
+    general.processRECEvent(eid, 0 if muted else 1, midi.REC_SetAll)
+
+
+def _parse_toggle(item, on_words, off_words, default=None):
+    if item.get("v") is not None:
+        return bool(_num(item["v"], 0, 1, "value") >= 0.5)
+    if item.get("r") is not None:
+        s = str(item["r"]).strip().lower()
+        if s in on_words:
+            return True
+        if s in off_words:
+            return False
+        raise ValueError("expected one of %s / %s, got '%s'" % (on_words[0], off_words[0], s))
+    if default is not None:
+        return default
+    raise ValueError("give value (0 or 1) or real")
+
+
+def _set_wrapper(i, slot, glob, key, item):
+    if key == "fl:focus":
+        on = _parse_toggle(
+            item, ("1", "true", "on", "yes", "focus"), ("0", "false", "off", "no"), True
+        )
+        if on:
+            if glob:
+                channels.focusEditor(i, True)
+            else:
+                mixer.focusEditor(i, slot)
+        return [-1, "fl:focus", 1.0 if on else 0.0, "Focused" if on else "Off", 1]
+    if glob:
+        raise ValueError("%s applies to mixer effect slots only" % key)
+    if key == "fl:mix":
+        if item.get("r") is not None:
+            want, unit = _target(item["r"], item.get("u"))
+            if unit not in ("", "%"):
+                raise ValueError("fl:mix expects 0-1 or %")
+            val = _num(want / 100.0 if unit == "%" else want, 0, 1, "fl:mix")
+        elif item.get("v") is not None:
+            val = _num(item["v"], 0, 1, "fl:mix")
+        else:
+            raise ValueError("give value (0-1) or real ('50%%') for fl:mix")
+        _slot_mix_set(i, slot, val)
+        got = _slot_mix_get(i, slot)
+        return [-1, "fl:mix", _r(got), "%d%%" % round(got * 100), 1]
+    if key == "fl:mute":
+        mute = _parse_toggle(
+            item,
+            ("1", "true", "on", "yes", "mute", "muted", "bypass"),
+            ("0", "false", "off", "no", "unmute", "active"),
+        )
+        _slot_mute_set(i, slot, mute)
+        got = _slot_mute_get(i, slot)
+        return [-2, "fl:mute", 1.0 if got else 0.0, "Muted" if got else "Active", 1]
+    if key == "fl:slots":
+        enable = _parse_toggle(
+            item,
+            ("1", "true", "on", "yes", "enable", "enabled"),
+            ("0", "false", "off", "no", "disable", "disabled"),
+        )
+        mixer.enableTrackSlots(i, enable)
+        got = bool(mixer.isTrackSlotsEnabled(i))
+        return [-3, "fl:slots", 1.0 if got else 0.0, "On" if got else "Off", 1]
+    raise ValueError("unknown wrapper control '%s'; use fl:mix, fl:mute, fl:slots, fl:focus" % key)
+
+
 def _set_one(i, slot, glob, item):
-    p = _find_param(i, slot, glob, item.get("p"))
+    ref = item.get("p")
+    if isinstance(ref, str) and ref.strip().lower().startswith("fl:"):
+        return _set_wrapper(i, slot, glob, ref.strip().lower(), item)
+    p = _find_param(i, slot, glob, ref)
     ok = True
     if item.get("r") is not None:
         want, unit = _target(item["r"], item.get("u"))
@@ -825,6 +977,113 @@ def _op_preset(i, slot, glob, r):
     return {"preset": _current_preset(i, slot, glob), "count": total, "moved": steps}
 
 
+def _named_series(i, slot, glob, flag, cap):
+    rows = []
+    for k in range(cap):
+        name = _try(plugins.getName, i, slot, flag, k, glob)
+        if not name:
+            break
+        rows.append([k, name])
+    return rows
+
+
+def _note_names(i, slot, glob, limit):
+    rows = []
+    for note in range(128):
+        name = _try(plugins.getName, i, slot, midi.FPN_Semitone, note, glob)
+        if name:
+            rows.append([note, name])
+            if len(rows) >= limit:
+                break
+    return rows
+
+
+def _track_slots_io(trk):
+    rows = []
+    for s in range(10):
+        if plugins.isValid(trk, s, False):
+            rows.append(
+                [
+                    s,
+                    plugins.getPluginName(trk, s, True, False),
+                    int(_slot_mute_get(trk, s)),
+                    _r(_slot_mix_get(trk, s)),
+                ]
+            )
+    return rows
+
+
+def _track_sends(trk, n_trk):
+    out = []
+    for d in range(n_trk):
+        if d != trk and _try(mixer.getRouteSendActive, trk, d):
+            lvl = _try(mixer.getRouteToLevel, trk, d)
+            out.append([d, mixer.getTrackName(d), _r(1.0 if lvl is None else lvl)])
+            if len(out) >= 32:
+                break
+    return out
+
+
+def _plug_io(i, slot, glob):
+    n_trk = mixer.trackCount() - 1
+    out = {
+        "kind": "channel" if glob else "mixer",
+        "params": plugins.getParamCount(i, slot, glob),
+        "presets": plugins.getPresetCount(i, slot, glob),
+        "preset": _try(_current_preset, i, slot, glob),
+        "out_ctrls": _named_series(i, slot, glob, midi.FPN_OutCtrl, 32),
+        "out_voices": _named_series(i, slot, glob, midi.FPN_OutVoice, 16),
+        "notes": _note_names(i, slot, glob, 48),
+    }
+    if glob:
+        trk = _try(channels.getTargetFxTrack, i, True)
+        if trk is None:
+            trk = 0
+        out.update(
+            {
+                "channel": i,
+                "channel_name": channels.getChannelName(i, True),
+                "channel_type": channels.getChannelType(i, True),
+                "midi_in_port": _try(channels.getChannelMidiInPort, i, True),
+                "activity": _r(_try(channels.getActivityLevel, i, True) or 0.0),
+                "target_track": trk,
+                "target_track_name": _try(mixer.getTrackName, trk),
+                "track_slots_enabled": _try(mixer.isTrackSlotsEnabled, trk),
+                "fx_slots": _track_slots_io(trk),
+                "sends": _track_sends(trk, n_trk),
+            }
+        )
+    else:
+        in_chans = [
+            [c, channels.getChannelName(c, True)]
+            for c in range(channels.channelCount(True))
+            if _try(channels.getTargetFxTrack, c, True) == i
+        ][:32]
+        in_trks = []
+        for s in range(n_trk):
+            if s != i and _try(mixer.getRouteSendActive, s, i):
+                lvl = _try(mixer.getRouteToLevel, s, i)
+                in_trks.append([s, mixer.getTrackName(s), _r(1.0 if lvl is None else lvl)])
+                if len(in_trks) >= 32:
+                    break
+        out.update(
+            {
+                "track": i,
+                "track_name": mixer.getTrackName(i),
+                "slot": slot,
+                "muted": _slot_mute_get(i, slot),
+                "mix": _r(_slot_mix_get(i, slot)),
+                "track_slots_enabled": _try(mixer.isTrackSlotsEnabled, i),
+                "automation_enabled": _try(mixer.isTrackAutomationEnabled, i, slot),
+                "in_channels": in_chans,
+                "in_tracks": in_trks,
+                "fx_slots": _track_slots_io(i),
+                "sends": _track_sends(i, n_trk),
+            }
+        )
+    return out
+
+
 def _op_param(r):
     i, slot, glob = _plug_ref(r)
     act = r.get("a") or ("many" if r.get("set") else "set" if r.get("p") is not None else "list")
@@ -840,6 +1099,8 @@ def _op_param(r):
                 "preset": _try(_current_preset, i, slot, glob),
             }
         )
+    elif act == "io":
+        out.update(_plug_io(i, slot, glob))
     elif act == "set":
         out["param"] = _set_one(i, slot, glob, r)
     elif act == "many":
@@ -872,14 +1133,17 @@ def _op_param(r):
         find = _key(r.get("f"))
         limit = _idx(r.get("n") or 40, 1, 120, "limit")
         count = plugins.getParamCount(i, slot, glob)
-        rows = []
+        rows, nxt = [], None
         for k in range(int(r.get("st") or 0), count):
             name = plugins.getParamName(k, i, slot, glob)
             if name and (not find or find in _key(name)):
-                rows.append(_param_row(i, slot, glob, k))
                 if len(rows) >= limit:
+                    nxt = k
                     break
-        out.update({"count": count, "cols": ["i", "name", "val", "text"], "rows": rows})
+                rows.append(_param_row(i, slot, glob, k))
+        out.update(
+            {"count": count, "cols": ["i", "name", "val", "text"], "rows": rows, "next": nxt}
+        )
     else:
         raise ValueError("unknown action")
     return out

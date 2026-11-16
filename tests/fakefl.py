@@ -118,6 +118,11 @@ class FakeFL:
         self.in_popup, self.popup_mode, self.pending = False, False, 0
         self.presets = {("c", 2, -1): ["Init", "Dystopian lead", "Soft pad", "Sub bass"]}
         self.preset_at = {("c", 2, -1): 0}
+        self.slot_ctrl = {}
+        self.out_ctrls = {}
+        self.out_voices = {}
+        self.semitones = {}
+        self.focused_editor = None
 
     @staticmethod
     def _chan(name, kind, plugin=""):
@@ -144,9 +149,14 @@ class FakeFL:
             "mute": 0,
             "solo": 0,
             "color": 0,
+            "sep": 0.0,
+            "arm": False,
+            "polarity": False,
+            "swap": False,
             "routes": set(routes or ()),
             "levels": {},
             "slots": {},
+            "slots_enabled": True,
         }
 
     def add_master_limiter(self, gain=0.5, ceiling=0.9, name="Fruity Limiter"):
@@ -217,6 +227,13 @@ class FakeFL:
         bar, rest = divmod(self.ticks, self.ppq * 4)
         return f"{bar + 1}:{rest // (self.ppq // 4) + 1:02d}:{rest % (self.ppq // 4):02d}"
 
+    def transport_getSongLength(self, mode):
+        if mode == midi.SONGLENGTH_BARS:
+            return 16
+        if mode == midi.SONGLENGTH_MS:
+            return 32000
+        return 16 * self.ppq * 4
+
     def general_getVersion(self):
         return 37
 
@@ -229,10 +246,41 @@ class FakeFL:
     def general_getRecPPB(self):
         return self.ppq * 4
 
+    @staticmethod
+    def _rec_plug_slot(eventId):
+        off = eventId - 536878848  # REC_Plug_Mute (536878848), REC_Plug_MixLevel (536878849)
+        prop = off & 0xFFFF
+        if off >= 0 and prop in (0, 1):
+            slot_base = off >> 16
+            return slot_base >> 6, slot_base & 0x3F, prop
+        return None
+
     def general_processRECEvent(self, eventId, value, flags):
         self.rec_events.append((eventId, value, flags))
         if eventId == midi.REC_Tempo:
             self.bpm = value / 1000
+            return 0
+        slot_ref = self._rec_plug_slot(eventId)
+        if slot_ref is not None:
+            trk, slt, prop = slot_ref
+            st = self.slot_ctrl.setdefault((trk, slt), {"muted": False, "mix": 1.0, "auto": True})
+            if flags == midi.REC_GetValue:
+                if prop == 0:
+                    return 0 if st["muted"] else 1
+                return int(round(st["mix"] * midi.FromMIDI_Max))
+            if prop == 0:
+                val = (
+                    (value >= midi.FromMIDI_Max / 2) if (flags & midi.REC_FromMIDI) else bool(value)
+                )
+                st["muted"] = not val
+            else:
+                v = (
+                    (value / float(midi.FromMIDI_Max))
+                    if (flags & midi.REC_FromMIDI)
+                    else float(value)
+                )
+                st["mix"] = max(0.0, min(1.0, v))
+            return 0
         return 0
 
     def general_undo(self):
@@ -418,6 +466,24 @@ class FakeFL:
         if self.out_hook:
             self.out_hook(message)
 
+    def device_getLinkedValue(self, eventID):
+        slot_ref = self._rec_plug_slot(eventID)
+        if slot_ref is None:
+            return -1.0
+        trk, slt, prop = slot_ref
+        st = self.slot_ctrl.get((trk, slt), {"muted": False, "mix": 1.0})
+        return (0.0 if st["muted"] else 1.0) if prop == 0 else float(st["mix"])
+
+    def device_getLinkedValueString(self, eventID):
+        slot_ref = self._rec_plug_slot(eventID)
+        if slot_ref is None:
+            return ""
+        trk, slt, prop = slot_ref
+        st = self.slot_ctrl.get((trk, slt), {"muted": False, "mix": 1.0})
+        if prop == 0:
+            return "Off" if st["muted"] else "On"
+        return f"{round(st['mix'] * 100)}%"
+
     # ---- mixer
 
     def mixer_getCurrentTempo(self, asInt):
@@ -454,6 +520,30 @@ class FakeFL:
     def mixer_setTrackPan(self, index, pan, pickupMode):
         self.tracks[index]["pan"] = pan
 
+    def mixer_getTrackStereoSep(self, index):
+        return self.tracks[index]["sep"]
+
+    def mixer_setTrackStereoSep(self, index, pan, pickupMode=0):
+        self.tracks[index]["sep"] = max(-1.0, min(1.0, float(pan)))
+
+    def mixer_isTrackArmed(self, index):
+        return bool(self.tracks[index]["arm"])
+
+    def mixer_armTrack(self, index):
+        self.tracks[index]["arm"] = not self.tracks[index]["arm"]
+
+    def mixer_isTrackRevPolarity(self, index):
+        return bool(self.tracks[index]["polarity"])
+
+    def mixer_revTrackPolarity(self, index, value=False):
+        self.tracks[index]["polarity"] = bool(value)
+
+    def mixer_isTrackSwapChannels(self, index):
+        return bool(self.tracks[index]["swap"])
+
+    def mixer_swapTrackChannels(self, index, value=False):
+        self.tracks[index]["swap"] = bool(value)
+
     def mixer_isTrackMuted(self, index):
         return bool(self.tracks[index]["mute"])
 
@@ -481,6 +571,31 @@ class FakeFL:
     def mixer_setRouteToLevel(self, index, destIndex, level):
         assert destIndex in self.tracks[index]["routes"], "route must exist before its level"
         self.tracks[index]["levels"][destIndex] = level
+
+    def mixer_getRouteToLevel(self, index, destIndex):
+        return float(
+            self.tracks[index]["levels"].get(
+                destIndex, 1.0 if destIndex in self.tracks[index]["routes"] else 0.0
+            )
+        )
+
+    def mixer_getTrackPluginId(self, index, plugIndex):
+        return ((index << 6) + plugIndex) << 16
+
+    def mixer_isTrackSlotsEnabled(self, index):
+        return bool(self.tracks[index]["slots_enabled"])
+
+    def mixer_enableTrackSlots(self, index, value):
+        self.tracks[index]["slots_enabled"] = bool(value)
+
+    def mixer_isTrackAutomationEnabled(self, index, plugIndex):
+        if plugIndex not in self.tracks[index]["slots"]:
+            return False
+        return bool(self.slot_ctrl.get((index, plugIndex), {}).get("auto", True))
+
+    def mixer_focusEditor(self, index, plugIndex):
+        assert plugIndex in self.tracks[index]["slots"], "plugin slot empty"
+        self.focused_editor = ("m", index, plugIndex)
 
     # ---- channels
 
@@ -536,6 +651,16 @@ class FakeFL:
 
     def channels_setTargetFxTrack(self, channelIndex, mixerIndex, useGlobalIndex):
         self._ch(channelIndex, useGlobalIndex)["fx"] = mixerIndex
+
+    def channels_getChannelMidiInPort(self, index, useGlobalIndex):
+        return int(self._ch(index, useGlobalIndex).get("midi_in", -2))
+
+    def channels_getActivityLevel(self, index, useGlobalIndex):
+        return float(self._ch(index, useGlobalIndex).get("activity", 0.0))
+
+    def channels_focusEditor(self, index, useGlobalIndex):
+        self._ch(index, useGlobalIndex)
+        self.focused_editor = ("c", index, -1)
 
     def channels_selectOneChannel(self, index, useGlobalIndex):
         self._ch(index, useGlobalIndex)
@@ -730,6 +855,16 @@ class FakeFL:
             return names[k] if 0 <= k < len(names) else ""
         if flag == midi.FPN_Param:
             return self.plugins_getParamName(paramIndex, index, slotIndex, useGlobalIndex)
+        if flag == midi.FPN_ParamValue:
+            return self.plugins_getParamValueString(paramIndex, index, slotIndex, useGlobalIndex)
+        if flag == midi.FPN_OutCtrl:
+            items = self.out_ctrls.get(key, ())
+            return items[paramIndex] if 0 <= paramIndex < len(items) else ""
+        if flag == midi.FPN_OutVoice:
+            items = self.out_voices.get(key, ())
+            return items[paramIndex] if 0 <= paramIndex < len(items) else ""
+        if flag == midi.FPN_Semitone:
+            return self.semitones.get(key, {}).get(paramIndex, "")
         return ""
 
     def plugins_nextPreset(self, index, slotIndex, useGlobalIndex):

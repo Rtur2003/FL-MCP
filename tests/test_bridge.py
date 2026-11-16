@@ -263,3 +263,25 @@ def test_environment_configuration(monkeypatch):
 def test_invalid_timeout_does_not_crash_startup(monkeypatch):
     monkeypatch.setenv("FL_MCP_TIMEOUT", "soon")
     assert Bridge().timeout == 2.5
+
+
+def test_rx_frames_match_cc_stream_and_large_rx_triggers_cooldown(fl, tmp_path, monkeypatch):
+    from fl_mcp import telemetry
+
+    monkeypatch.setenv("FL_MCP_DIR", str(tmp_path))
+    fl.call({"o": "status"})
+    events = telemetry.read_traffic(limit=10)["events"]
+    assert events[-1]["rx_frames"] == events[-1]["rx_bytes"] + 3
+    assert fl.bridge._cooldown_until == 0.0
+
+    fl.fake.pats = {
+        i: {"name": f"Pattern_{i:02d}_LongName", "color": 0, "len": 16} for i in range(1, 30)
+    }
+    fl.call({"o": "list", "k": "patterns", "s": 1, "n": 50, "a": 1})
+    assert fl.bridge._cooldown_until > 0
+
+    slept: list[float] = []
+    monkeypatch.setattr(b.time, "sleep", slept.append)
+    assert fl.call({"o": "status"})["bpm"] == 140.0
+    assert len(slept) == 1 and 0 < slept[0] <= 0.06
+    assert fl.bridge._cooldown_until == 0.0

@@ -34,6 +34,9 @@ class Score:
     def getNote(self, index):
         return self.notes[index]
 
+    def deleteNote(self, index):
+        self.notes.pop(index)
+
     def clearNotes(self, all=False):
         assert all is True
         self.notes.clear()
@@ -126,3 +129,22 @@ def test_default_folder_when_not_templated(roll, monkeypatch, tmp_path):
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
     module = roll.load("@DIR@")
     assert module.DIR == str(tmp_path / ".fl-mcp")
+
+
+def test_selective_delete_and_empty_replace_clear(roll):
+    roll.queue([[60, 0, 1, 100], [60, 2, 1, 100], [64, 0, 1, 100]])
+    module = roll.load()
+    module.apply(None)
+    assert roll.score.noteCount == 3
+
+    (roll.dir / "inbox.json").write_text(
+        json.dumps({"serial": 9, "replace": False, "delete": [[60, 2]], "notes": []}),
+        encoding="utf-8",
+    )
+    module.apply(None)
+    assert [(n.number, n.time) for n in roll.score.notes] == [(60, 0), (64, 0)]
+
+    roll.queue([], replace=True, serial=10)
+    module.apply(None)
+    assert roll.score.noteCount == 0
+    assert roll.score.cleared == 1

@@ -183,8 +183,12 @@ def test_unknown_guides_are_refused():
 async def test_the_guides_are_mcp_resources():
     async with Client(server.mcp) as client:
         listed = (await client.list_resources()).resources
-        assert [str(r.uri) for r in listed] == [guides.uri(k) for k in guides.TOPICS]
-        assert all(r.mime_type == "text/markdown" for r in listed)
+        guide_res = [r for r in listed if str(r.uri).startswith("fl://guide/")]
+        live_res = [r for r in listed if str(r.uri).startswith("fl://live/")]
+        assert [str(r.uri) for r in guide_res] == [guides.uri(k) for k in guides.TOPICS]
+        assert all(r.mime_type == "text/markdown" for r in guide_res)
+        assert {str(r.uri) for r in live_res} == {"fl://live/traffic", "fl://live/studio"}
+        assert all(r.mime_type == "application/json" for r in live_res)
         read = await client.read_resource("fl://guide/mix")
     assert read.contents[0].text == guides.body("mix")
 

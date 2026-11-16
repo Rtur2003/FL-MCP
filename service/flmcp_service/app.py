@@ -31,12 +31,14 @@ class Settings:
     @classmethod
     def from_env(cls) -> "Settings":
         pairs = (
-            p.split("=", 1) for p in os.environ.get("FLMCP_WEBHOOK_SECRETS", "").split(",") if p
+            p.split("=", 1)
+            for p in os.environ.get("FLMCP_WEBHOOK_SECRETS", "").split(",")
+            if "=" in p
         )
         return cls(
             db=os.environ.get("FLMCP_DB", "flmcp.db"),
             admin_token=os.environ.get("FLMCP_ADMIN_TOKEN", ""),
-            webhook_secrets={k.strip(): v.strip() for k, v in pairs},
+            webhook_secrets={k.strip(): v.strip() for k, v in pairs if k.strip()},
             config=os.environ.get("FLMCP_CONFIG") or None,
             topup_url=os.environ.get("FLMCP_TOPUP_URL", ""),
         )
@@ -157,7 +159,13 @@ def create_app(settings: Settings | None = None, clock: Callable[[], float] = ti
         secret = s.webhook_secrets.get(provider)
         if secret is None:
             raise ApiError(404, "unknown_provider", "no such provider")
-        if int(request.headers.get("content-length") or 0) > MAX_WEBHOOK:
+        try:
+            content_length = int(request.headers.get("content-length") or 0)
+        except ValueError:
+            raise ApiError(400, "bad_request", "invalid content-length header") from None
+        if content_length < 0:
+            raise ApiError(400, "bad_request", "invalid content-length header")
+        if content_length > MAX_WEBHOOK:
             raise ApiError(413, "too_large", "event too large")
         body = await request.body()
         if len(body) > MAX_WEBHOOK:

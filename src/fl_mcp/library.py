@@ -9,6 +9,7 @@ not win. FL's plugin database folder tells which plugins are installed."""
 import json
 import os
 import random
+import threading
 import time
 import wave
 from array import array
@@ -291,31 +292,82 @@ def plugin_dirs() -> list[Path]:
     return [base] if base.is_dir() else []
 
 
-def _plugins() -> list[dict[str, str]]:
-    out = []
+def _classify_plugin_path(f: Path, base: Path, default_kind: str = "other") -> dict[str, Any]:
+    rel = [p.lower() for p in f.relative_to(base).parts[:-1]]
+    kind = (
+        "effect"
+        if any("effect" in p for p in rel)
+        else "generator"
+        if any("generator" in p for p in rel)
+        else default_kind
+    )
+    fmt = next((p.upper() for p in rel if p in ("vst", "vst3", "au", "fruity", "clap")), "")
+    return {"name": f.stem, "kind": kind, "format": fmt, "installed": int("installed" in rel)}
+
+
+def _scan_plugins_and_presets() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    out: list[dict[str, Any]] = []
+    presets: list[dict[str, Any]] = []
+    seen_presets: set[str] = set()
     for base in plugin_dirs():
         for f in base.rglob("*"):
-            if f.suffix.lower() not in (".nfo", ".fst"):
+            suf = f.suffix.lower()
+            if suf not in (".nfo", ".fst"):
                 continue
-            rel = [p.lower() for p in f.relative_to(base).parts[:-1]]
-            kind = (
-                "effect"
-                if any("effect" in p for p in rel)
-                else "generator"
-                if any("generator" in p for p in rel)
-                else "other"
-            )
-            fmt = next((p.upper() for p in rel if p in ("vst", "vst3", "au", "fruity", "clap")), "")
-            out.append(
-                {"name": f.stem, "kind": kind, "format": fmt, "installed": int("installed" in rel)}
-            )
+            entry = _classify_plugin_path(f, base)
+            out.append(entry)
+            if suf == ".fst":
+                fp = str(f)
+                key = fp.lower()
+                if key not in seen_presets:
+                    seen_presets.add(key)
+                    presets.append({**entry, "path": fp})
+    user_presets = paths.fl_user_dir() / "Presets" / "Plugin presets"
+    if user_presets.is_dir():
+        for f in user_presets.rglob("*.fst"):
+            fp = str(f)
+            key = fp.lower()
+            if key not in seen_presets:
+                seen_presets.add(key)
+                presets.append({**_classify_plugin_path(f, user_presets, "preset"), "path": fp})
     seen, uniq = set(), []
     for p in out:
         key = (p["name"].lower(), p["kind"])
         if key not in seen:
             seen.add(key)
             uniq.append(p)
-    return sorted(uniq, key=lambda p: p["name"].lower())
+    return (
+        sorted(uniq, key=lambda p: p["name"].lower()),
+        sorted(presets, key=lambda p: (-p["installed"], p["name"].lower())),
+    )
+
+
+def _plugins() -> list[dict[str, Any]]:
+    return _scan_plugins_and_presets()[0]
+
+
+def _soundfont_roots(samples: list[Path]) -> list[Path]:
+    extra = paths.fl_user_dir() / "Presets" / "SoundFonts"
+    seen = {r.resolve() for r in samples}
+    out = list(samples)
+    if extra.is_dir() and extra.resolve() not in seen:
+        out.append(extra)
+    return out
+
+
+def _scan_soundfonts_on_disk(
+    roots: list[Path] | None = None,
+) -> list[dict[str, str]]:
+    sf2_map: dict[str, dict[str, str]] = {}
+    for root in _soundfont_roots(roots if roots is not None else sample_roots()):
+        for dirpath, _dirs, names in os.walk(root):
+            for n in names:
+                p = Path(dirpath) / n
+                if p.suffix.lower() == ".sf2":
+                    sf2_map.setdefault(
+                        str(p).lower(), {"p": str(p), "name": p.stem, "k": pack_of(p, root)}
+                    )
+    return sorted(sf2_map.values(), key=lambda s: s["name"].lower())
 
 
 def index_path() -> Path:
@@ -324,25 +376,34 @@ def index_path() -> Path:
 
 def scan(budget: float = 60.0) -> dict[str, Any]:
     """Walk the sample folders and the plugin database; save and summarise the index."""
-    started, files, truncated = time.monotonic(), [], False
+    started, files, sf2_map, truncated = time.monotonic(), [], {}, False
     roots = sample_roots()
-    for root in roots:
+    for idx, root in enumerate(_soundfont_roots(roots)):
+        collect_samples = idx < len(roots)
         for dirpath, _dirs, names in os.walk(root):
             for n in names:
                 p = Path(dirpath) / n
-                if p.suffix.lower() in SAMPLE_EXT:
+                suf = p.suffix.lower()
+                if collect_samples and suf in SAMPLE_EXT:
                     files.append({"p": str(p), "r": classify_name(p), "k": pack_of(p, root)})
+                elif suf == ".sf2":
+                    sf2_map.setdefault(
+                        str(p).lower(), {"p": str(p), "name": p.stem, "k": pack_of(p, root)}
+                    )
             if len(files) >= MAX_FILES or time.monotonic() - started > budget:
                 truncated = True
                 break
         if truncated:
             break
+    plugins, presets = _scan_plugins_and_presets()
     index = {
         "v": 1,
         "at": int(time.time()),
         "roots": [str(r) for r in roots],
         "samples": files,
-        "plugins": _plugins(),
+        "soundfonts": sorted(sf2_map.values(), key=lambda s: s["name"].lower()),
+        "plugins": plugins,
+        "presets": presets,
         "truncated": truncated,
     }
     path = index_path()
@@ -370,8 +431,10 @@ def summary(index: dict[str, Any]) -> dict[str, Any]:
     return {
         "roots": index["roots"],
         "samples": len(index["samples"]),
+        "soundfonts": len(index.get("soundfonts", [])),
         "by_role": dict(sorted(roles.items(), key=lambda kv: -kv[1])),
         "plugins": kinds,
+        "presets": len(index.get("presets", [])),
         "truncated": index.get("truncated", False),
         "hint": "" if index["roots"] else "no sample folder found: set FL_MCP_SAMPLES to yours",
     }
@@ -379,7 +442,8 @@ def summary(index: dict[str, Any]) -> dict[str, Any]:
 
 def _features_cache() -> dict[str, Any]:
     try:
-        return json.loads((paths.data_dir() / "library_features.json").read_text(encoding="utf-8"))
+        raw = json.loads((paths.data_dir() / "library_features.json").read_text(encoding="utf-8"))
+        return raw if isinstance(raw, dict) else {}
     except (OSError, ValueError):
         return {}
 
@@ -392,7 +456,7 @@ def features(path: str, cache: dict[str, Any]) -> dict[str, Any] | None:
         return None
     key = f"{st.st_size}:{int(st.st_mtime)}"
     hit = cache.get(path)
-    if hit and hit.get("k") == key:
+    if isinstance(hit, dict) and hit.get("k") == key:
         return hit.get("f")
     f = analyze(p)
     cache[path] = {"k": key, "f": f}
@@ -402,7 +466,12 @@ def features(path: str, cache: dict[str, Any]) -> dict[str, Any] | None:
 def _save_cache(cache: dict[str, Any]) -> None:
     target = paths.data_dir() / "library_features.json"
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps(cache, separators=(",", ":")), encoding="utf-8")
+    tmp = target.with_name(f"{target.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    try:
+        tmp.write_text(json.dumps(cache, separators=(",", ":")), encoding="utf-8")
+        os.replace(tmp, target)
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 def find(
@@ -474,3 +543,60 @@ def list_plugins(query: str | None = None, kind: str | None = None, limit: int =
         if (not q or q in p["name"].lower()) and (not kind or p["kind"] == kind)
     ]
     return rows[:limit]
+
+
+def list_presets(query: str | None = None, kind: str | None = None, limit: int = 40) -> list[dict]:
+    """List indexed `.fst` presets (scanning plugin folders on demand if index lacks them)."""
+    try:
+        rows = load().get("presets")
+    except ValueError:
+        rows = None
+    if rows is None:
+        rows = _scan_plugins_and_presets()[1]
+    q = (query or "").lower()
+    out = [p for p in rows if (not q or q in p["name"].lower()) and (not kind or p["kind"] == kind)]
+    return out[:limit]
+
+
+def find_preset(query: str, kind: str | None = None) -> Path | None:
+    """Resolve a plugin or preset name to a `.fst` file path (exact stem match first)."""
+    q = query.strip().lower()
+    if q.endswith(".fst"):
+        q = q[:-4]
+    if not q:
+        return None
+    candidates = [
+        p for p in list_presets(query=None, kind=kind, limit=5000) if Path(p["path"]).is_file()
+    ]
+    exact = [p for p in candidates if p["name"].lower() == q]
+    pool = exact or [p for p in candidates if q in p["name"].lower()]
+    if not pool:
+        return None
+    pool.sort(key=lambda p: (p["kind"] != "generator", -int(p.get("installed", 0)), len(p["name"])))
+    return Path(pool[0]["path"])
+
+
+def list_soundfonts(query: str | None = None, limit: int = 40) -> list[dict[str, str]]:
+    """List `.sf2` SoundFonts (from the index, or scanning disk if not indexed yet)."""
+    try:
+        rows = load().get("soundfonts")
+    except ValueError:
+        rows = None
+    if rows is None:
+        rows = _scan_soundfonts_on_disk()
+    q = (query or "").lower()
+    out = [s for s in rows if not q or q in s["name"].lower() or q in s["k"].lower()]
+    return out[:limit]
+
+
+def find_soundfont(query: str) -> Path | None:
+    """Resolve a SoundFont name or `.sf2` filename to a file path on disk."""
+    q = query.strip().lower()
+    if q.endswith(".sf2"):
+        q = q[:-4]
+    if not q:
+        return None
+    candidates = [s for s in list_soundfonts(limit=5000) if Path(s["p"]).is_file()]
+    exact = [s for s in candidates if s["name"].lower() == q]
+    pool = exact or [s for s in candidates if q in s["name"].lower()]
+    return Path(pool[0]["p"]) if pool else None

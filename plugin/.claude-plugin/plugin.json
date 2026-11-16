@@ -1,7 +1,7 @@
 {
   "name": "fl-studio",
   "displayName": "FL Studio",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "description": "Control FL Studio from Claude: produce tracks fast, mix and master with measurements, drive any plugin in real units, and do what the scripting API cannot.",
   "author": {
     "name": "Hasan Arthur Altuntaş",
@@ -30,7 +30,7 @@
     "desktop": {
       "type": "boolean",
       "title": "Desktop control",
-      "description": "Let the model see FL Studio's screen and press its keys (only while an FL window is in front). Off by default.",
+      "description": "Enable non-intrusive background/polite FL Studio screen and shortcut control (`fl_desk`). Off by default.",
       "default": false
     },
     "port": {

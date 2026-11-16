@@ -6,21 +6,68 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    name: ${{ matrix.label }} (Python ${{ matrix.python }})
+    runs-on: ${{ matrix.runner }}
     strategy:
+      fail-fast: false
       matrix:
-        python: ["3.10", "3.11", "3.12"]
+        include:
+          - label: linux-x86_64
+            runner: ubuntu-latest
+            python: "3.10"
+          - label: linux-x86_64
+            runner: ubuntu-latest
+            python: "3.11"
+          - label: linux-x86_64
+            runner: ubuntu-latest
+            python: "3.12"
+          - label: linux-arm64
+            runner: ubuntu-24.04-arm
+            python: "3.12"
+          - label: windows-x86_64
+            runner: windows-latest
+            python: "3.12"
+          - label: windows-arm64
+            runner: windows-11-arm
+            python: "3.12"
+          - label: macos-arm64
+            runner: macos-latest
+            python: "3.12"
+          - label: macos-x86_64
+            runner: macos-15-intel
+            python: "3.12"
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install Linux audio & Tk headers
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libjack-dev python3-tk
+
+      - name: Setup MSVC ARM64 toolchain
+        if: matrix.label == 'windows-arm64'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: arm64
+
       - uses: astral-sh/setup-uv@v5
-      - run: uv venv --python ${{ matrix.python }}
-      - run: uv pip install -e ".[dev]"
-      - run: .venv/bin/ruff check .
-      - run: .venv/bin/ruff format --check .
-      - run: .venv/bin/python scripts/build_plugin.py --check
-      - run: .venv/bin/pytest
-      - run: .venv/bin/python packaging/build_mcpb.py --out dist
-        if: matrix.python != '3.10'
+
+      - name: Create virtual environment and install dependencies
+        run: |
+          uv venv --python ${{ matrix.python }}
+          uv pip install -e ".[dev]"
+
+      - name: Check lint, plugin sync, and run tests
+        run: |
+          uv run --no-sync ruff check .
+          uv run --no-sync ruff format --check .
+          uv run --no-sync python scripts/build_plugin.py --check
+          uv run --no-sync pytest
+
+      - name: Build .mcpb Desktop Extension
+        if: matrix.label == 'linux-x86_64' && matrix.python != '3.10'
+        run: uv run --no-sync python packaging/build_mcpb.py --out dist
 
   plugin:
     runs-on: ubuntu-latest

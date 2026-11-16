@@ -254,3 +254,21 @@ def test_setup_without_fl_data_says_so(monkeypatch, tmp_path, capsys):
     out = capsys.readouterr().out
     assert info.value.code == 0 and "[!!] scripts" in out and "[ok] midi port" in out
     assert "FL Studio answers" in out
+
+
+def test_desktop_cli_supports_stealth_polite_foreground(tmp_path, monkeypatch, capsys):
+    from fl_mcp import desk
+
+    monkeypatch.setenv("FL_MCP_DIR", str(tmp_path))
+    monkeypatch.delenv("FL_MCP_DESKTOP", raising=False)
+    for target in ("stealth", "polite", "foreground"):
+        with pytest.raises(SystemExit) as e:
+            cli.main(["desktop", target])
+        assert e.value.code == 0
+        out = capsys.readouterr().out
+        assert f"Desktop control is on (mode={target})" in out
+        assert desk.mode() == target
+    with pytest.raises(SystemExit) as e_off:
+        cli.main(["desktop", "off"])
+    assert e_off.value.code == 0
+    assert desk.mode() == "off"

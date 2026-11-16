@@ -60,8 +60,18 @@ class Backend:
         """A PNG of the rectangle, shrunk to at most max_width wide: (png, width, height)."""
         raise NotImplementedError
 
+    def capture_window(
+        self, win: Win, max_width: int, *, allow_unminimize: bool = False
+    ) -> tuple[bytes, int, int] | None:
+        """Capture `win` directly without bringing it to the front; None if unavailable."""
+        return None
+
     def key(self, combo: Combo) -> None:
         raise NotImplementedError
+
+    def post_key(self, win: Win, combo: Combo) -> bool:
+        """Send a key combo directly to `win` without focus; False if unsupported."""
+        return False
 
     def type(self, text: str) -> None:
         raise NotImplementedError
@@ -77,28 +87,72 @@ class Backend:
     ) -> None:
         raise NotImplementedError
 
+    def idle_seconds(self) -> float | None:
+        """Seconds since the user's last mouse/keyboard input, or None if unknown."""
+        return None
+
+    def restore_window(self, win: Win) -> bool:
+        """Return focus to `win` after a temporary polite action."""
+        return self.focus(win) if win else False
+
+    def send_to_back(self, win: Win) -> None:
+        """Place `win` at the bottom of the Z-order without activating it."""
+        return None
+
 
 # ---- switch
 
 TRUE = ("1", "true", "yes", "on")
+MODES = ("stealth", "polite", "foreground")
+DEFAULT_ON_MODE = "polite"
 
 
 def flag_file() -> Path:
     return data_dir() / "desktop.on"
 
 
-def enabled() -> bool:
-    env = os.environ.get("FL_MCP_DESKTOP", "").strip()
-    if env:  # a client that passes an empty value means "not set"
-        return env.lower() in TRUE
-    return flag_file().is_file()
-
-
-def set_enabled(on: bool) -> Path:
+def mode() -> str:
+    """Active desktop control mode: 'off', 'stealth', 'polite', or 'foreground'."""
+    env = os.environ.get("FL_MCP_DESKTOP", "").strip().lower()
+    if env:
+        if env in MODES:
+            return env
+        if env in TRUE:
+            override = os.environ.get("FL_MCP_DESK_MODE", "").strip().lower()
+            return override if override in MODES else DEFAULT_ON_MODE
+        return "off"
     path = flag_file()
+    if not path.is_file():
+        return "off"
+    try:
+        raw = path.read_text(encoding="utf-8").strip().lower()
+    except OSError:
+        return DEFAULT_ON_MODE
+    return raw if raw in MODES else DEFAULT_ON_MODE
+
+
+def enabled() -> bool:
+    return mode() != "off"
+
+
+def set_enabled(on: bool | str) -> Path:
+    path = flag_file()
+    if isinstance(on, str):
+        val = on.strip().lower()
+        if val == "off":
+            path.unlink(missing_ok=True)
+            return path
+        if val not in (*MODES, "on"):
+            raise DeskError(
+                f"desktop mode must be off, on, stealth, polite, or foreground (got {on!r})"
+            )
+        chosen = DEFAULT_ON_MODE if val == "on" else val
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"{chosen}\n", encoding="utf-8")
+        return path
     if on:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("on\n", encoding="utf-8")
+        path.write_text(f"{DEFAULT_ON_MODE}\n", encoding="utf-8")
     else:
         path.unlink(missing_ok=True)
     return path
@@ -175,10 +229,44 @@ class Desk:
         sleep: Callable[[float], None] = time.sleep,
         clock: Callable[[], float] = time.monotonic,
         platform: str | None = None,
+        mode: str | None = None,
     ) -> None:
         self.backend, self.sleep, self.clock = backend, sleep, clock
         self.platform = platform or sys.platform
+        self._mode_override = mode
         self.last: Shot | None = None
+
+    def active_mode(self) -> str:
+        """Effective mode for this Desk instance ('stealth', 'polite', or 'foreground')."""
+        if self._mode_override is not None:
+            return self._mode_override
+        cur = mode()
+        return cur if cur in MODES else DEFAULT_ON_MODE
+
+    def _wait_if_user_active(self, idle_threshold: float = 1.2, max_wait: float = 3.0) -> None:
+        """In polite mode, wait briefly if the user is actively typing/moving the mouse."""
+        if self.active_mode() != "polite":
+            return
+        idle = self.backend.idle_seconds()
+        if idle is None or idle >= idle_threshold:
+            return
+        deadline = self.clock() + max_wait
+        while self.clock() < deadline:
+            self.sleep(0.25)
+            idle = self.backend.idle_seconds()
+            if idle is None or idle >= idle_threshold:
+                return
+        raise DeskError(
+            f"user is actively typing or using the mouse (idle {idle:.1f} s); wait a moment or "
+            "switch desktop mode to 'foreground'"
+        )
+
+    def _restore_if_polite(self, prev: Win | None) -> None:
+        if self.active_mode() == "polite" and prev is not None and not self.is_fl(prev):
+            try:
+                self.backend.restore_window(prev)
+            except Exception:
+                pass
 
     # -- windows
 
@@ -205,6 +293,11 @@ class Desk:
         main = self.find_fl()
         if main is None:
             raise DeskError("FL Studio is not running: no FL window was found")
+        if self.active_mode() == "stealth":
+            raise DeskError(
+                "desktop mode is 'stealth' (no focus steal allowed): use 'polite' or 'foreground'"
+            )
+        self._wait_if_user_active()
         self.backend.focus(main)
         front = self.backend.foreground()
         if front is None or not self.is_fl(front):
@@ -224,6 +317,8 @@ class Desk:
         front = self.backend.foreground()
         return {
             "backend": self.backend.name,
+            "mode": self.active_mode(),
+            "idle_s": self.backend.idle_seconds(),
             "fl": None
             if main is None
             else {"title": main.title, "rect": list(main.rect), "process": main.process},
@@ -238,23 +333,54 @@ class Desk:
     # -- seeing
 
     def shot(self, full: bool = False, max_width: int = MAX_WIDTH) -> tuple[bytes, dict[str, Any]]:
-        """A PNG of all of FL Studio's windows (dialogs too) or, with full, the whole screen."""
+        """Capture FL Studio (PrintWindow in stealth/polite when possible, else front)."""
         sx, sy, sw, sh = self.backend.screen()
+        background = False
         if full:
             rect, title = (sx, sy, sw, sh), "screen"
+            png, w2, h2 = self.backend.capture(rect, max_width)
         else:
-            self.focus_fl()  # nothing else may cover it; refuses when FL is not there
-            mine = [w for w in self.backend.windows() if self.is_fl(w) and min(w.rect[2:]) >= 60]
-            if not mine:
-                raise DeskError("FL Studio has no visible window to capture")
-            x0 = max(min(w.rect[0] for w in mine), sx)
-            y0 = max(min(w.rect[1] for w in mine), sy)
-            x1 = min(max(w.rect[0] + w.rect[2] for w in mine), sx + sw)
-            y1 = min(max(w.rect[1] + w.rect[3] for w in mine), sy + sh)
-            rect, title = (x0, y0, x1 - x0, y1 - y0), f"{len(mine)} FL windows"
-        png, w2, h2 = self.backend.capture(rect, max_width)
+            main = self.find_fl()
+            if main is None:
+                raise DeskError("FL Studio is not running: no FL window was found")
+            cur_mode = self.active_mode()
+            front = self.backend.foreground()
+            captured = None
+            if cur_mode in ("stealth", "polite") or (front and self.is_fl(front)):
+                captured = self.backend.capture_window(
+                    main, max_width, allow_unminimize=(cur_mode != "stealth")
+                )
+            if captured is not None:
+                png, w2, h2 = captured
+                rect, title, background = main.rect, main.title, True
+            else:
+                if cur_mode == "stealth":
+                    raise DeskError(
+                        "FL Studio cannot be captured in the background right now (minimized or "
+                        "occluded): unminimize FL once or switch to 'polite' mode"
+                    )
+                try:
+                    self.focus_fl()  # nothing else may cover it; refuses when FL is not there
+                    mine = [
+                        w for w in self.backend.windows() if self.is_fl(w) and min(w.rect[2:]) >= 60
+                    ]
+                    if not mine:
+                        raise DeskError("FL Studio has no visible window to capture")
+                    x0 = max(min(w.rect[0] for w in mine), sx)
+                    y0 = max(min(w.rect[1] for w in mine), sy)
+                    x1 = min(max(w.rect[0] + w.rect[2] for w in mine), sx + sw)
+                    y1 = min(max(w.rect[1] + w.rect[3] for w in mine), sy + sh)
+                    rect, title = (x0, y0, x1 - x0, y1 - y0), f"{len(mine)} FL windows"
+                    png, w2, h2 = self.backend.capture(rect, max_width)
+                finally:
+                    self._restore_if_polite(front)
         self.last = Shot((rect[0], rect[1]), w2 / rect[2], (w2, h2))
-        return png, {"of": title, "size": [w2, h2], "scale": round(self.last.scale, 3)}
+        return png, {
+            "of": title,
+            "size": [w2, h2],
+            "scale": round(self.last.scale, 3),
+            "background": background,
+        }
 
     def to_screen(self, x: int, y: int) -> tuple[int, int]:
         if self.last is None:
@@ -320,8 +446,21 @@ class Desk:
         self.focus_fl()
         self.backend.type(text)
 
+    def _poll_script_state(
+        self, folder: Path, queued: Any, before: Any, timeout: float
+    ) -> float | None:
+        start = self.clock()
+        while self.clock() - start < timeout:
+            self.sleep(0.25)
+            state = _json(folder / "state.json") or {}
+            if (queued is not None and state.get("serial") == queued) or (
+                queued is None and state.get("ts", 0) > before
+            ):
+                return round(self.clock() - start, 1)
+        return None
+
     def script(self, folder: Path | None = None, timeout: float = 5.0) -> dict[str, Any]:
-        """Run the piano roll script again (FL's 'run last script' shortcut) and see if it took."""
+        """Run the piano roll script cleanly: tries background PostMessage before focusing FL."""
         folder = folder or notes_dir()
         queued = (_json(folder / "inbox.json") or {}).get("serial")
         before = (_json(folder / "state.json") or {}).get("ts", 0)
@@ -333,25 +472,43 @@ class Desk:
             ),
             None,
         )
-        if roll is not None:
-            self._failsafe()
-            self.backend.focus(roll)
-            self.sleep(0.05)
-        self._keys("mod+alt+y")
-        start = self.clock()
-        while self.clock() - start < timeout:
-            self.sleep(0.25)
-            state = _json(folder / "state.json") or {}
-            if (queued is not None and state.get("serial") == queued) or (
-                queued is None and state.get("ts", 0) > before
-            ):
-                return {"applied": True, "waited_s": round(self.clock() - start, 1)}
-        return {
-            "applied": False,
-            "note": "the script did not run. In FL's piano roll open Tools > Scripting > "
-            "FL MCP once (FL then repeats it with this shortcut), or check "
-            "the screenshot for a dialog that is waiting",
-        }
+        target = roll or self.find_fl()
+        cur_mode = self.active_mode()
+        combo = parse_combo("mod+alt+y", self.platform)
+        if cur_mode in ("stealth", "polite") and target is not None:
+            if self.backend.post_key(target, combo):
+                wait_bg = timeout if cur_mode == "stealth" else min(timeout, 1.5)
+                waited = self._poll_script_state(folder, queued, before, wait_bg)
+                if waited is not None:
+                    return {"applied": True, "waited_s": waited, "background": True}
+        if cur_mode == "stealth":
+            if target is None:
+                raise DeskError("FL Studio is not running: no FL window was found")
+            return {
+                "applied": False,
+                "background": True,
+                "note": "background script shortcut was not accepted in stealth mode: open Tools > "
+                "Scripting > FL MCP once, or switch desktop mode to 'polite'",
+            }
+        prev = self.backend.foreground()
+        try:
+            if roll is not None:
+                self._failsafe()
+                self._wait_if_user_active()
+                self.backend.focus(roll)
+                self.sleep(0.05)
+            self._keys("mod+alt+y")
+            waited = self._poll_script_state(folder, queued, before, timeout)
+            if waited is not None:
+                return {"applied": True, "waited_s": waited, "background": False}
+            return {
+                "applied": False,
+                "note": "the script did not run. In FL's piano roll open Tools > Scripting > "
+                "FL MCP once (FL then repeats it with this shortcut), or check "
+                "the screenshot for a dialog that is waiting",
+            }
+        finally:
+            self._restore_if_polite(prev)
 
     def export(self, path: Path, fmt: str = "wav", timeout: float = 900.0) -> dict[str, Any]:
         """File > Export through FL's own dialogs, then wait for the file to be complete."""
@@ -363,49 +520,74 @@ class Desk:
         if path.exists():
             raise DeskError(f"{path} already exists: choose another name")
         path.parent.mkdir(parents=True, exist_ok=True)
-        self._keys("mod+r" if fmt == "wav" else "mod+shift+r")
-        self.sleep(1.5)
-        self._text(str(path))
-        self.sleep(0.2)
-        self._keys("enter")
-        self.sleep(1.5)
-        self._keys("enter")  # the render options dialog's Start button
-        start, size, stable = self.clock(), -1, 0
-        while self.clock() - start < timeout:
-            self.sleep(1.0)
-            rendering = any(
-                self.is_fl(w) and w.title.startswith("Rendering to") for w in self.backend.windows()
+        prev = self.backend.foreground()
+        restored = False
+        try:
+            self._keys("mod+r" if fmt == "wav" else "mod+shift+r")
+            self.sleep(1.5)
+            self._text(str(path))
+            self.sleep(0.2)
+            self._keys("enter")
+            self.sleep(1.5)
+            self._keys("enter")  # the render options dialog's Start button
+            # Hand focus back immediately once rendering begins in FL.
+            self._restore_if_polite(prev)
+            restored = True
+            start, size, stable = self.clock(), -1, 0
+            while self.clock() - start < timeout:
+                self.sleep(1.0)
+                rendering = any(
+                    self.is_fl(w) and w.title.startswith("Rendering to")
+                    for w in self.backend.windows()
+                )
+                if not rendering and path.is_file():
+                    now = path.stat().st_size
+                    stable = stable + 1 if now == size and now > 0 else 0
+                    size = now
+                    if stable >= 2:
+                        return {
+                            "audio": str(path),
+                            "fmt": fmt,
+                            "seconds": round(self.clock() - start),
+                        }
+            raise DeskError(
+                f"no finished {fmt} appeared at {path} within {timeout:.0f} s: look at the "
+                "screenshot, a dialog may be waiting (FL's export dialogs differ between versions)"
             )
-            if not rendering and path.is_file():
-                now = path.stat().st_size
-                stable = stable + 1 if now == size and now > 0 else 0
-                size = now
-                if stable >= 2:
-                    return {"audio": str(path), "fmt": fmt, "seconds": round(self.clock() - start)}
-        raise DeskError(
-            f"no finished {fmt} appeared at {path} within {timeout:.0f} s: look at the "
-            "screenshot, a dialog may be waiting (FL's export dialogs differ between versions)"
-        )
+        finally:
+            if not restored:
+                self._restore_if_polite(prev)
 
     def open_project(self, path: Path) -> dict[str, Any]:
         path = path.expanduser().resolve()
         if path.suffix.lower() != ".flp" or not path.is_file():
             raise DeskError(f"not an existing .flp project: {path}")
-        self._keys("mod+o")
-        self.sleep(1.2)
-        self._text(str(path))
-        self.sleep(0.2)
-        self._keys("enter")
-        self.sleep(2.5)
-        return {
-            "opened": str(path),
-            "note": "if FL asks to save the current project, answer it in the screenshot",
-        }
+        prev = self.backend.foreground()
+        try:
+            self._keys("mod+o")
+            self.sleep(1.2)
+            self._text(str(path))
+            self.sleep(0.2)
+            self._keys("enter")
+            self.sleep(2.5)
+            return {
+                "opened": str(path),
+                "note": "if FL asks to save the current project, answer it in the screenshot",
+            }
+        finally:
+            self._restore_if_polite(prev)
 
     def save(self) -> dict[str, Any]:
-        self._keys("mod+s")
-        self.sleep(1.0)
-        return {"saved": True, "note": "an untitled project opens a Save As dialog: see the shot"}
+        prev = self.backend.foreground()
+        try:
+            self._keys("mod+s")
+            self.sleep(1.0)
+            return {
+                "saved": True,
+                "note": "an untitled project opens a Save As dialog: see the shot",
+            }
+        finally:
+            self._restore_if_polite(prev)
 
 
 # ---- shared instance

@@ -7,7 +7,7 @@ One request becomes a playable, varied, in-key arrangement in FL Studio; then it
 1. `fl_status`, `fl_list kind=channels`: is a project open, what exists?
 2. `fl_produce action=make genre=<g> mood=<m> length=short`: builds the plan (sections, drums, bass, chords, pad, lead, arp, mix targets), writes the drum patterns into the Channel Rack channels it can match by name (kick, clap, hat, bass...) with tempo, markers, EQ and pan, and exports one MIDI file with every part. Tell the user the plan in two lines (key, tempo, sections).
 3. Melody and harmony: drag the MIDI file into FL (each track becomes a channel and sections become markers), or send one part: `fl_produce action=queue pattern=<name> role=lead`, then apply it (below).
-4. A finished project instead: `fl_produce action=make genre=<g> template=<any saved .flp> sounds=auto` writes a new .flp (the template is never modified) with every pattern, the playlist and sample channels from one pack that `fl_library` picked. Open it: `fl_desk macro=open path=...` when desktop control is on, else ask the user to open it.
+4. A finished project instead: `fl_produce action=make genre=<g> template=<any saved .flp> sounds=auto` writes a new .flp (the template is never modified) with every pattern, the playlist, updated arrangement `end` markers, and sample/preset channels (`.wav`/`.ogg`/`.fst`/`.sf2` files, or indexed preset/SoundFont names resolved via `fl_library`). `action=inspect` checks any `.flp` structure and arrangement (`verify`) or inspects a `.fst` preset. Open it: `fl_desk macro=open path=...` when desktop control is on (`polite`/`foreground`), else ask the user to open it or render via `fl_audio action=render project=...`.
 5. Mix and measure: see the mix guide.
 
 `seed` repeats a song exactly, a new seed gives another take. `energy` 0.4 is sparse, 1.0 dense. `roles=kick,bass,lead` builds only those parts. `action=show pattern=<name> role=<r>` reads notes back before sending. `action=genres` lists genres.
@@ -18,9 +18,9 @@ One request becomes a playable, varied, in-key arrangement in FL Studio; then it
 
 ## Notes into the piano roll
 
-FL's API cannot write notes, so `fl_notes` queues them: `notes=[[midi, start_beat, length_beats, velocity], ...]` for the selected channel and pattern (`channel`, `pattern` to choose, `replace=true` to clear first), and opens the piano roll. Apply with `fl_desk macro=script` (desktop on) or ask the user to run Tools > Scripting > FL MCP in the piano roll and press Accept. Confirm with `fl_notes read=true`: `applied` must be true. MIDI 60 is C4 (FL labels it C5). A 4/4 bar is 4 beats; at most 1000 notes per call.
+FL's API cannot write notes, so `fl_notes` queues them: `notes=[[midi, start_beat, length_beats, velocity], ...]` for the selected channel and pattern (`channel`, `pattern` to choose, `replace=true` to clear first), and opens the piano roll. Pass `apply=true` (when desktop control is on) or `fl_desk macro=script` to run Tools > Scripting > FL MCP right away, or ask the user to run it once and press Accept. Confirm with `fl_notes read=true`: `applied` must be true. MIDI 60 is C4 (FL labels it C5). A 4/4 bar is 4 beats; at most 1000 notes per call.
 
-Drums can also be written directly: `fl_steps channel=<i> on=[0,4,8,12] velocity=100` (16 steps per bar, 0-based).
+Drums can also be written directly with `fl_steps channel=<i> on=[0,4,8,12] velocity=100` (16 steps per bar, 0-based) or a compact velocity string: `fl_steps channel=<i> grid="z...x...|z.o.x.z." swing=20` (`.` off, `1-9`/`a-z` velocity, `|` bar separators ignored). For full `.flp` builds without hunting for file paths, pass `template=auto` (or `action=inspect template=list` to see discovered templates).
 
 ## Make it musical and not repetitive
 

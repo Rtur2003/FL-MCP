@@ -54,6 +54,7 @@ def manifest() -> dict:
         "version": __version__,
         "description": "Control FL Studio and produce music fast, from any AI assistant.",
         "long_description": LONG,
+        "icon": "icon.png",
         "author": {"name": "Hasan Arthur Altuntaş"},
         "repository": {"type": "git", "url": "https://github.com/Rtur2003/FL-MCP"},
         "homepage": "https://github.com/Rtur2003/FL-MCP",
@@ -68,6 +69,7 @@ def manifest() -> dict:
                 "env": {
                     "FL_MCP_LICENSE": "${user_config.license_key}",
                     "FL_MCP_DESKTOP": "${user_config.desktop}",
+                    "FL_MCP_PORT": "${user_config.port}",
                 },
             },
         },
@@ -84,9 +86,16 @@ def manifest() -> dict:
             "desktop": {
                 "type": "boolean",
                 "title": "Desktop control",
-                "description": "Let the model see FL Studio's screen and press its keys (only "
-                "while an FL window is in front). Off by default.",
+                "description": "Enable non-intrusive background/polite FL Studio screen and "
+                "shortcut control (`fl_desk`). Off by default.",
                 "default": False,
+            },
+            "port": {
+                "type": "string",
+                "title": "MIDI port name",
+                "description": "loopMIDI or IAC Driver port name configured in FL Studio.",
+                "default": "FL MCP",
+                "required": False,
             },
         },
         "compatibility": {"platforms": ["darwin", "win32"]},
@@ -117,6 +126,7 @@ def build(out: Path, service: str = "") -> Path:
     target = out / f"fl-mcp-{__version__}.mcpb"
     files: dict[str, bytes] = {
         "manifest.json": json.dumps(manifest(), indent=2, ensure_ascii=False).encode() + b"\n",
+        "icon.png": (ROOT / "src" / "fl_mcp" / "assets" / "icon-256.png").read_bytes(),
         "pyproject.toml": bundle_pyproject().encode(),
         "LICENSE": (ROOT / "LICENSE").read_bytes(),
         "src/server.py": (ROOT / "packaging" / "server.py").read_bytes(),

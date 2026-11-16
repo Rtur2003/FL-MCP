@@ -517,3 +517,106 @@ def test_fl2025_event_172_80_byte_playlist_and_16bit_routing(tmp_path):
     built = Flp.parse(out.read_bytes())
     assert len(built.playlist_items()) == 2 + len(plan.clips)
     assert built.inserts_in_use() == {3, 4, 5}
+
+
+def _make_fst(
+    plugin: str = "3x Osc", name: str = "Warm Lead", sf2_path: str | None = None
+) -> bytes:
+    ev = [
+        Event(201, txt(plugin)),
+        Event(212, bytes(52)),
+        Event(203, txt(name)),
+        Event(128, bytes([0x10, 0x80, 0xFF, 0x00])),
+    ]
+    if sf2_path is not None:
+        raw_path = sf2_path.encode("utf-8")
+        blob = bytes(56) + flp._encode_varint(len(raw_path)) + raw_path + b"\x00\x00\x01\x02"
+        ev.append(Event(213, blob))
+    else:
+        ev.append(Event(213, b"\x01\x02\x03\x04"))
+    body = b"".join(e.encode() for e in ev)
+    return (
+        b"FLhd"
+        + struct.pack("<IHHH", 6, flp.FST_FORMAT, 1, 96)
+        + b"FLdt"
+        + struct.pack("<I", len(body))
+        + body
+    )
+
+
+def test_read_fst_add_plugin_and_soundfont_patching(tmp_path):
+    fst_osc = tmp_path / "3x Osc.fst"
+    fst_osc.write_bytes(_make_fst("3x Osc", "Lead Patch"))
+    fst_sf2 = tmp_path / "SoundFont Player.fst"
+    fst_sf2.write_bytes(_make_fst("SoundFont Player", "SF2 Patch", "/old/piano.sf2"))
+
+    info_osc = flp.read_fst(fst_osc)
+    assert info_osc["plugin"] == "3x Osc" and info_osc["name"] == "Lead Patch"
+    info_sf2 = flp.read_fst(fst_sf2)
+    assert info_sf2["sf2"] == "/old/piano.sf2"
+
+    patched = flp.patch_soundfont_blob(info_sf2["params"], "/libs/strings_new.sf2")
+    assert flp.read_soundfont_blob_path(patched) == "/libs/strings_new.sf2"
+    assert patched.endswith(b"\x00\x00\x01\x02")
+
+    bad_file = tmp_path / "song.flp"
+    bad_file.write_bytes(template())
+    with pytest.raises(FlpError, match=r"expected \.fst format 48"):
+        flp.read_fst(bad_file)
+
+    proj = Flp.parse(template())
+    osc_iid = proj.add_plugin_from_fst(fst_osc, name="Synth", insert=4, color=(20, 40, 200))
+    sf_iid = proj.add_plugin_from_fst(fst_sf2, name="Strings", insert=5, sf2_path="/libs/pad.sf2")
+    proj.set_soundfont(sf_iid, "/libs/cello.sf2", name="Cello")
+
+    reparsed = Flp.parse(proj.dumps())
+    ver = reparsed.verify()
+    by_iid = {p["iid"]: p for p in ver["plugins"]}
+    assert by_iid[osc_iid]["plugin"] == "3x Osc" and by_iid[osc_iid]["insert"] == 4
+    assert by_iid[sf_iid]["plugin"] == "SoundFont Player"
+    assert by_iid[sf_iid]["sf2"] == "/libs/cello.sf2" and by_iid[sf_iid]["name"] == "Cello"
+
+
+def test_markers_verify_and_build_with_fst_and_sf2(tmp_path, monkeypatch):
+    from fl_mcp import produce
+
+    fst_osc = tmp_path / "3x Osc.fst"
+    fst_osc.write_bytes(_make_fst("3x Osc", "Lead"))
+    fst_sf2 = tmp_path / "SoundFont Player.fst"
+    fst_sf2.write_bytes(_make_fst("SoundFont Player", "SF2", "/old/bass.sf2"))
+    monkeypatch.setattr(flp, "_find_soundfont_fst", lambda: fst_sf2)
+
+    proj = Flp.parse(template(clips=1, sampler=True))
+    proj.set_end_marker(96, create=True)
+    # Truncated 'end' marker + unrouted channel triggers verify warnings
+    bad_ver = proj.verify()
+    assert bad_ver["ok"] is False
+    assert any("'end' marker at tick 96 cuts off" in w for w in bad_ver["warnings"])
+    assert any("route to Master" in w for w in bad_ver["warnings"])
+
+    src = tmp_path / "template.flp"
+    src.write_bytes(proj.dumps())
+    plan = compose("house", seed=3, length="sketch", roles=("kick", "bass", "lead"))
+    out = tmp_path / "built.flp"
+    report = build(
+        src,
+        plan,
+        out,
+        sounds={"kick": "/s/kick.wav", "bass": "/sf2/sub.sf2", "lead": str(fst_osc)},
+    )
+    assert set(report["created"]) == {"kick", "bass", "lead"}
+
+    inspected = produce.inspect_flp(out)
+    ver = inspected["verify"]
+    assert ver["ok"] is True and ver["warnings"] == []
+    items = Flp.parse(out.read_bytes()).playlist_items()
+    end_needed = max(it["position"] + it["length"] for it in items)
+    assert ver["end_marker_ticks"] == end_needed
+    assert any(p.get("sf2") == "/sf2/sub.sf2" for p in ver["plugins"])
+
+    # Empty playlist & empty patterns report clear warnings
+    empty_proj = Flp.parse(template(clips=0))
+    empty_proj.put_pattern(1, [], "Empty")
+    empty_ver = empty_proj.verify()
+    assert any("no arrangement clips" in w for w in empty_ver["warnings"])
+    assert any("0 notes" in w for w in empty_ver["warnings"])

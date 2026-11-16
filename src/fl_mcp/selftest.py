@@ -125,7 +125,20 @@ class Run:
         try:
             now = self.call({"o": "set", "k": "mixer", "i": index, "p": {"volume": probe}})
             if not _near(now["vol"], probe, 0.02):
-                raise RuntimeError(f"wrote {probe}, FL reports {now['vol']}")
+                # FL Studio 2025 commits active/routed mixer edits on the next UI/mixer tick
+                # (~15-50 ms); re-read briefly before declaring a write mismatch.
+                for _ in range(6):
+                    time.sleep(0.05)
+                    rows = self.call({"o": "list", "k": "mixer", "s": index, "n": 1, "a": 1}).get(
+                        "rows", []
+                    )
+                    if rows and _near(rows[0][2], probe, 0.02):
+                        now = {"vol": rows[0][2]}
+                        break
+            if not _near(now["vol"], probe, 0.02):
+                raise RuntimeError(
+                    f"wrote {probe}, FL reports {now['vol']} (track may be bound to automation)"
+                )
         finally:
             self.call({"o": "set", "k": "mixer", "i": index, "p": {"volume": before}})
         return f"track {index} volume {before} -> {probe} -> {before}"

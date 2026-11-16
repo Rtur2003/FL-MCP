@@ -1,0 +1,1206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>FL-MCP Studio — Live Bridge, Service &amp; DAW Telemetry</title>
+<meta name="theme-color" content="#0b0e14">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" type="image/x-icon" href="/assets/icon.ico">
+<link rel="icon" type="image/png" href="/assets/favicon.png">
+<link rel="preload" as="image" href="/assets/icon-128.png" fetchpriority="high">
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #0b0e14;
+    --bg-elev: #111622;
+    --panel: #151b28;
+    --panel-alt: #1a2130;
+    --border: #2a3448;
+    --border-strong: #3c4964;
+    --text: #eef2fa;
+    --muted: #98a6c0;
+    --accent: #ff7a2f;
+    --accent-soft: #ffb074;
+    --accent-tint: rgba(255, 122, 47, 0.14);
+    --green: #3ddc97;
+    --red: #ff6b6b;
+    --amber: #f5b942;
+    --cyan: #57c7ff;
+    --violet: #a78bfa;
+    --scrollbar-track: #0e131d;
+    --scrollbar-thumb: #3c4964;
+    scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+    font-family: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
+  }
+
+  @supports not (scrollbar-color: auto) {
+    ::-webkit-scrollbar { width: 10px; height: 10px; }
+    ::-webkit-scrollbar-track { background: var(--scrollbar-track); }
+    ::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: 6px; }
+  }
+
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100%;
+    overscroll-behavior: none;
+  }
+  .studio-header, .tabs, .kpi .lbl, button, .strip {
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  .visually-hidden:where(:not(:focus-within, :active)) {
+    position: absolute !important;
+    clip-path: inset(50%) !important;
+    overflow: hidden !important;
+    width: 1px !important;
+    height: 1px !important;
+    margin: -1px !important;
+    padding: 0 !important;
+    border: 0 !important;
+    white-space: nowrap !important;
+  }
+
+  .skip-link:focus-visible {
+    position: fixed;
+    top: 12px;
+    left: 12px;
+    z-index: 100;
+    background: var(--accent);
+    color: #0b0e14;
+    font-weight: 700;
+    padding: 8px 14px;
+    border-radius: 8px;
+    text-decoration: none;
+  }
+
+  :where(button, [role="tab"], input, select, a):focus-visible {
+    outline: 2px solid var(--accent-soft);
+    outline-offset: 2px;
+  }
+
+  /* Studio atmospheric header shell */
+  .studio-header {
+    position: relative;
+    overflow: hidden;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-elev);
+  }
+  .hero-backdrop {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 0;
+  }
+  .hero-backdrop img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    object-position: center 42%;
+    opacity: 0.42;
+    display: block;
+  }
+  .hero-backdrop::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background:
+      radial-gradient(ellipse 70% 100% at 15% 50%, rgba(255, 122, 47, 0.08), transparent 65%),
+      linear-gradient(180deg, rgba(11, 14, 20, 0.46) 0%, rgba(11, 14, 20, 0.90) 82%, var(--bg) 100%);
+  }
+
+  .header-inner {
+    position: relative;
+    z-index: 1;
+    max-width: 1460px;
+    margin: 0 auto;
+    padding: 16px 24px;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+  }
+
+  .brand { display: flex; align-items: center; gap: 14px; }
+  .brand-emblem {
+    width: 46px;
+    height: 46px;
+    aspect-ratio: 1 / 1;
+    border-radius: 11px;
+    border: 1px solid var(--border-strong);
+    background: #10151f;
+    box-shadow: 0 4px 18px rgba(0, 0, 0, 0.55);
+    display: block;
+    flex: none;
+  }
+  .brand h1 {
+    margin: 0;
+    font-size: 1.05rem;
+    font-weight: 700;
+    letter-spacing: 0.01em;
+    line-height: 1.2;
+  }
+  .brand-sub {
+    margin: 2px 0 0;
+    font-size: 0.78rem;
+    color: var(--muted);
+  }
+
+  .header-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    min-block-size: 30px;
+    padding: 4px 11px;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    font-weight: 500;
+    border: 1px solid var(--border-strong);
+    background: rgba(21, 27, 40, 0.88);
+    color: var(--text);
+  }
+  .pill.ok { border-color: rgba(61, 220, 151, 0.45); color: #8af0bf; }
+  .pill.warn { border-color: rgba(245, 185, 66, 0.45); color: #fbd27b; }
+  .pill.bad { border-color: rgba(255, 107, 107, 0.45); color: #ffa6a6; }
+
+  .state-glyph {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex: none;
+    background: currentColor;
+  }
+  .pill.bad .state-glyph { border-radius: 2px; transform: rotate(45deg); }
+  .pill.warn .state-glyph { border-radius: 2px; }
+
+  button, select {
+    font-family: inherit;
+    font-size: 0.78rem;
+    font-weight: 600;
+    min-block-size: 34px;
+    padding: 6px 13px;
+    border-radius: 8px;
+    border: 1px solid var(--border-strong);
+    background: var(--panel);
+    color: var(--text);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    transition: background-color 0.12s ease, border-color 0.12s ease;
+  }
+  button:hover, select:hover { background: var(--panel-alt); border-color: #556686; }
+  button.primary {
+    background: var(--accent);
+    border-color: #ff9457;
+    color: #0b0e14;
+  }
+  button.primary:hover { background: #ff8c4a; }
+  button.danger { color: #ffb3b3; border-color: rgba(255, 107, 107, 0.45); }
+  button.compact { min-block-size: 28px; padding: 3px 9px; font-size: 0.72rem; }
+  button svg { width: 14px; height: 14px; flex: none; }
+
+  .workspace {
+    max-width: 1460px;
+    margin: 0 auto;
+    padding: 20px 24px 44px;
+  }
+
+  .kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(175px, 1fr));
+    gap: 12px;
+    margin-bottom: 18px;
+  }
+  .kpi {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 13px 15px;
+  }
+  .kpi .lbl {
+    font-size: 0.72rem;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+  .kpi .val {
+    font-size: 1.38rem;
+    font-weight: 700;
+    margin-top: 4px;
+    font-variant-numeric: tabular-nums;
+  }
+  .kpi .sub {
+    font-size: 0.74rem;
+    color: var(--muted);
+    margin-top: 3px;
+  }
+
+  .tabs {
+    display: flex;
+    gap: 6px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 18px;
+    flex-wrap: wrap;
+  }
+  .tab {
+    background: transparent;
+    border: 0;
+    border-bottom: 2px solid transparent;
+    border-radius: 8px 8px 0 0;
+    color: var(--muted);
+    font-size: 0.84rem;
+    font-weight: 600;
+    padding: 9px 14px;
+    min-block-size: 38px;
+  }
+  .tab:hover { color: var(--text); background: rgba(255, 255, 255, 0.03); }
+  .tab[aria-selected="true"] {
+    color: var(--accent-soft);
+    border-bottom-color: var(--accent);
+    background: rgba(255, 122, 47, 0.07);
+  }
+
+  .panel-section[hidden] { display: none; }
+  .panel-section {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 440px;
+  }
+  @supports not (content-visibility: auto) {
+    .panel-section { contain: layout style paint; }
+  }
+
+  .grid-2 { display: grid; grid-template-columns: 1.35fr 1fr; gap: 16px; }
+  .grid-equal { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+  @media (max-width: 960px) { .grid-2, .grid-equal { grid-template-columns: 1fr; } }
+
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px 18px;
+    min-width: 0;
+  }
+  .card + .card { margin-top: 16px; }
+  .card h2 {
+    margin: 0 0 12px;
+    font-size: 0.86rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  .card h2 .meta-note {
+    font-size: 0.74rem;
+    color: var(--muted);
+    text-transform: none;
+    letter-spacing: 0;
+    font-weight: 500;
+  }
+
+  .toolbar {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    align-items: center;
+    margin-bottom: 12px;
+  }
+  input[type="search"] {
+    min-block-size: 34px;
+    background: var(--bg);
+    border: 1px solid var(--border-strong);
+    color: var(--text);
+    border-radius: 8px;
+    padding: 6px 11px;
+    font-size: 0.8rem;
+    flex: 0 1 255px;
+    min-width: 245px;
+  }
+  .client-path {
+    display: block;
+    max-width: 235px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .table-wrap { overflow-x: auto; max-height: 520px; border: 1px solid var(--border); border-radius: 8px; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.79rem; }
+  th, td {
+    text-align: left;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+  }
+  th {
+    position: sticky;
+    top: 0;
+    background: var(--bg-elev);
+    color: var(--muted);
+    font-weight: 600;
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    z-index: 1;
+  }
+  td.wrap { white-space: normal; word-break: break-word; max-width: 420px; }
+  .mono { font-family: "JetBrains Mono", "Cascadia Mono", Consolas, monospace; font-size: 0.75rem; }
+
+  .badge {
+    display: inline-block;
+    padding: 2px 7px;
+    border-radius: 5px;
+    font-size: 0.7rem;
+    font-weight: 700;
+    border: 1px solid transparent;
+  }
+  .badge.tx { background: rgba(87, 199, 255, 0.14); color: var(--cyan); border-color: rgba(87, 199, 255, 0.3); }
+  .badge.mcp { background: rgba(167, 139, 250, 0.14); color: var(--violet); border-color: rgba(167, 139, 250, 0.3); }
+  .badge.ok { background: rgba(61, 220, 151, 0.14); color: var(--green); border-color: rgba(61, 220, 151, 0.3); }
+  .badge.err { background: rgba(255, 107, 107, 0.15); color: #ffa4a4; border-color: rgba(255, 107, 107, 0.35); }
+  .badge.dim { background: rgba(152, 166, 192, 0.12); color: var(--muted); border-color: var(--border); }
+
+  /* Mixer meter bank */
+  .mixer {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(92px, 1fr));
+    gap: 10px;
+  }
+  .strip {
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 10px 8px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+  }
+  .strip .idx { font-size: 0.68rem; color: var(--muted); }
+  .strip .name {
+    font-size: 0.76rem;
+    font-weight: 600;
+    text-align: center;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .meter {
+    width: 24px;
+    height: 112px;
+    background: #080b10;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    position: relative;
+    overflow: hidden;
+    display: flex;
+    align-items: flex-end;
+    gap: 2px;
+    padding: 2px;
+  }
+  .meter .bar {
+    flex: 1;
+    background: linear-gradient(180deg, #ff5e5e 0%, #f5b942 28%, #3ddc97 100%);
+    border-radius: 3px;
+    min-height: 2px;
+    transition: height 0.16s ease;
+  }
+  .meter .bar.clip { background: linear-gradient(180deg, #ff5c7c, #ff8f4c); }
+  .advice-tip { color: #f6b93b; font-size: 0.78rem; line-height: 1.4; }
+  .strip .flags { display: flex; gap: 4px; font-size: 0.68rem; }
+  .strip .flag { padding: 1px 5px; border-radius: 4px; background: #20283a; color: var(--muted); }
+  .strip .flag.m { background: rgba(255, 107, 107, 0.2); color: #ffa4a4; }
+  .strip .flag.s { background: rgba(245, 185, 66, 0.2); color: var(--amber); }
+
+  .rack { display: flex; flex-direction: column; gap: 8px; }
+  .ch {
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    padding: 9px 12px;
+    display: grid;
+    grid-template-columns: 6px 140px 1fr auto;
+    align-items: center;
+    gap: 10px;
+  }
+  @media (max-width: 640px) { .ch { grid-template-columns: 6px 1fr; } }
+  .ch .dot { height: 26px; border-radius: 4px; }
+  .step-grid { display: grid; grid-template-columns: repeat(16, minmax(10px, 1fr)); gap: 3px; }
+  .step { height: 15px; border-radius: 3px; background: #1d2536; }
+  .step:nth-child(4n + 1) { outline: 1px solid #303d56; }
+  .step.on { background: var(--accent); }
+
+  canvas#rollCanvas {
+    width: 100%;
+    height: 270px;
+    background: #080b10;
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    display: block;
+  }
+
+  .bands {
+    display: grid;
+    grid-template-columns: repeat(7, minmax(0, 1fr));
+    gap: 8px;
+    align-items: end;
+    height: 170px;
+    padding: 12px 10px;
+    background: #080b10;
+    border: 1px solid var(--border);
+    border-radius: 9px;
+  }
+  .band { display: flex; flex-direction: column; align-items: center; height: 100%; justify-content: flex-end; gap: 5px; }
+  .band .bbar {
+    width: 100%;
+    max-width: 44px;
+    background: linear-gradient(180deg, var(--accent), var(--cyan));
+    border-radius: 5px 5px 0 0;
+    transition: height 0.2s ease;
+  }
+  .band .blbl { font-size: 0.7rem; color: var(--muted); }
+
+  .checklist, .kv-list { list-style: none; padding: 0; margin: 0; }
+  .checklist li, .kv-list li {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border);
+    gap: 12px;
+    font-size: 0.8rem;
+  }
+  .kv-list li:last-child, .checklist li:last-child { border-bottom: 0; }
+  .kv-val {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    max-width: 68%;
+  }
+  .kv-val code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  .tpl-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; }
+  .tpl {
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px;
+  }
+  .tpl .tname { font-weight: 600; font-size: 0.84rem; margin-bottom: 4px; }
+  .tpl .tmeta { font-size: 0.74rem; color: var(--muted); }
+  .empty { color: var(--muted); font-size: 0.82rem; padding: 14px 0; }
+
+  @media (forced-colors: active) {
+    .pill, .card, .kpi, button, .strip, .ch, .tpl { border: 1px solid ButtonBorder; }
+    .tab[aria-selected="true"] { border-bottom: 3px solid Highlight; }
+  }
+</style>
+</head>
+<body>
+<a href="#main-content" class="skip-link visually-hidden">Skip to studio workspace</a>
+<div id="liveAnnounce" class="visually-hidden" aria-live="polite"></div>
+
+<header class="studio-header">
+  <div class="hero-backdrop" aria-hidden="true">
+    <img src="/assets/studio-backdrop.webp" alt="" width="1440" height="420" loading="eager" fetchpriority="low">
+  </div>
+  <div class="header-inner">
+    <div class="brand">
+      <img
+        src="/assets/icon-64.png"
+        srcset="/assets/icon-64.png 1x, /assets/icon-128.png 2x"
+        alt=""
+        width="46"
+        height="46"
+        loading="eager"
+        fetchpriority="high"
+        decoding="sync"
+        class="brand-emblem"
+      >
+      <div>
+        <h1>FL-MCP Studio</h1>
+        <p class="brand-sub" id="subLine">Universal DAW Bridge, Background Service &amp; Audio Monitor</p>
+      </div>
+    </div>
+    <div class="header-right">
+      <span class="pill" id="flBadge"><span class="state-glyph" aria-hidden="true"></span><span>FL Studio: Idle</span></span>
+      <span class="pill" id="svcBadge"><span class="state-glyph" aria-hidden="true"></span><span>Service: Foreground UI</span></span>
+      <span class="pill" id="deskBadge"><span class="state-glyph" aria-hidden="true"></span><span>Desktop: Off</span></span>
+      <button type="button" class="primary" id="pollBtn">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6"/></svg>
+        <span>Poll FL Now</span>
+      </button>
+      <button type="button" id="autoBtn" aria-pressed="true">UI Refresh: On</button>
+    </div>
+  </div>
+</header>
+
+<main id="main-content" tabindex="-1" class="workspace">
+  <section class="kpi-grid" aria-label="Live telemetry summary">
+    <div class="kpi"><div class="lbl">Tempo &amp; Position</div><div class="val" id="kTempo">--</div><div class="sub" id="kSong">No live project polled yet</div></div>
+    <div class="kpi"><div class="lbl">MIDI Calls</div><div class="val" id="kMidi">0</div><div class="sub" id="kMidiSub">0 errors · 0 retries</div></div>
+    <div class="kpi"><div class="lbl">MIDI Throughput</div><div class="val" id="kBytes">0 B</div><div class="sub" id="kLat">avg 0 ms · p95 0 ms</div></div>
+    <div class="kpi"><div class="lbl">MCP Tool Calls</div><div class="val" id="kMcp">0</div><div class="sub" id="kMcpSub">0 errors</div></div>
+    <div class="kpi"><div class="lbl">Integrated Loudness</div><div class="val" id="kLufs">-- LUFS</div><div class="sub" id="kPeak">True Peak: -- dBTP</div></div>
+  </section>
+
+  <div class="tabs" role="tablist" aria-label="Studio workspace views">
+    <button type="button" class="tab" role="tab" id="tab-traffic" aria-selected="true" aria-controls="panel-traffic" tabindex="0">Traffic &amp; Bridge</button>
+    <button type="button" class="tab" role="tab" id="tab-mixer" aria-selected="false" aria-controls="panel-mixer" tabindex="-1">Mixer &amp; Channel Rack</button>
+    <button type="button" class="tab" role="tab" id="tab-roll" aria-selected="false" aria-controls="panel-roll" tabindex="-1">Piano Roll &amp; Plans</button>
+    <button type="button" class="tab" role="tab" id="tab-audio" aria-selected="false" aria-controls="panel-audio" tabindex="-1">Audio Analysis</button>
+    <button type="button" class="tab" role="tab" id="tab-setup" aria-selected="false" aria-controls="panel-setup" tabindex="-1">Service, Paths &amp; Setup</button>
+  </div>
+
+  <section class="panel-section" id="panel-traffic" role="tabpanel" aria-labelledby="tab-traffic">
+    <div class="card">
+      <h2>
+        <span>Incoming / Outgoing Traffic Feed</span>
+        <span class="meta-note" id="logInfo">Showing recent events</span>
+      </h2>
+      <div class="toolbar">
+        <label for="fKind" class="visually-hidden">Filter stream type</label>
+        <select id="fKind">
+          <option value="">All Streams (MIDI + MCP)</option>
+          <option value="midi">MIDI TX/RX Frames Only</option>
+          <option value="mcp">MCP Tool Calls Only</option>
+        </select>
+        <label for="fText" class="visually-hidden">Filter events by text</label>
+        <input id="fText" type="search" placeholder="Filter tool, op, payload, error...">
+        <button type="button" id="errOnlyBtn" aria-pressed="false">Errors Only: Off</button>
+        <button type="button" class="danger" id="clearTrafficBtn">Clear Log</button>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <caption class="visually-hidden">Incoming and outgoing MIDI bridge and MCP tool traffic</caption>
+          <thead><tr><th scope="col">Time</th><th scope="col">Stream</th><th scope="col">Operation / Tool</th><th scope="col">Status</th><th scope="col">Bytes</th><th scope="col">Latency</th><th scope="col">Payload / Summary</th></tr></thead>
+          <tbody id="trafficBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel-section" id="panel-mixer" role="tabpanel" aria-labelledby="tab-mixer" hidden>
+    <div class="grid-2">
+      <div class="card"><h2>Mixer Peak Meters &amp; Strips <span class="meta-note" id="mixMeta"></span></h2><div class="mixer" id="mixerGrid"></div></div>
+      <div class="card"><h2>Channel Rack &amp; Step Grid <span class="meta-note" id="chMeta"></span></h2><div class="rack" id="rackList"></div></div>
+    </div>
+  </section>
+
+  <section class="panel-section" id="panel-roll" role="tabpanel" aria-labelledby="tab-roll" hidden>
+    <div class="grid-2">
+      <div class="card"><h2>Live Piano Roll Inbox / State <span class="meta-note" id="rollMeta"></span></h2><canvas id="rollCanvas" aria-label="Piano roll note velocity preview"></canvas></div>
+      <div class="card"><h2>Latest Produced Song Plan <span class="meta-note" id="planMeta"></span></h2><div id="planBox" class="empty">No song plan generated yet.</div></div>
+    </div>
+  </section>
+
+  <section class="panel-section" id="panel-audio" role="tabpanel" aria-labelledby="tab-audio" hidden>
+    <div class="grid-2">
+      <div class="card"><h2>7-Band Spectrum Share (%) <span class="meta-note" id="audioMeta"></span></h2><div class="bands" id="bandsBox"></div></div>
+      <div class="card"><h2>Loudness, Dynamics &amp; Stereo Report</h2><ul class="checklist" id="audioStats"></ul></div>
+    </div>
+  </section>
+
+  <section class="panel-section" id="panel-setup" role="tabpanel" aria-labelledby="tab-setup" hidden>
+    <div class="grid-equal">
+      <div class="card">
+        <h2>Background Service &amp; MCP Endpoints</h2>
+        <ul class="kv-list" id="serviceList"></ul>
+        <div class="toolbar" id="serviceControls" style="margin-top: 12px; margin-bottom: 0;"></div>
+      </div>
+      <div class="card">
+        <h2>System Layer Health</h2>
+        <ul class="checklist" id="doctorList"></ul>
+      </div>
+    </div>
+    <div class="grid-equal" style="margin-top: 16px;">
+      <div class="card">
+        <h2>Resolved Universal Paths</h2>
+        <ul class="kv-list" id="pathsList"></ul>
+      </div>
+      <div class="card">
+        <h2>AI Client Registrations</h2>
+        <div class="table-wrap" style="max-height: 310px;">
+          <table>
+            <caption class="visually-hidden">Detected AI MCP clients and registration status</caption>
+            <thead><tr><th scope="col">Client</th><th scope="col">Status</th><th scope="col">CLI Quick Setup</th></tr></thead>
+            <tbody id="clientsBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Discovered .flp Templates <button type="button" class="compact" id="refreshTplBtn">Rescan Folders</button></h2>
+      <div class="tpl-grid" id="tplGrid"></div>
+    </div>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let autoRefresh = true;
+let errOnly = false;
+let latest = null;
+let lastTrafficSig = "";
+const NOTES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;" }[c]));
+const fmtBytes = (b) => b >= 1048576 ? `${(b / 1048576).toFixed(2)} MB` : b >= 1024 ? `${(b / 1024).toFixed(1)} KB` : `${b | 0} B`;
+const fmtTime = (ts) => new Date((ts || 0) * 1000).toLocaleTimeString([], { hour12: false });
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+const noteName = (n) => NOTES[n % 12] + (Math.floor(n / 12) - 1);
+
+function announce(msg) {
+  const el = $("liveAnnounce");
+  el.textContent = "";
+  requestAnimationFrame(() => { el.textContent = msg; });
+}
+
+function setPill(el, cls, label) {
+  el.className = "pill " + cls;
+  el.lastElementChild.textContent = label;
+}
+
+const tabs = [...document.querySelectorAll('[role="tab"]')];
+function activateTab(btn, focus = false) {
+  for (const t of tabs) {
+    const selected = t === btn;
+    t.setAttribute("aria-selected", selected ? "true" : "false");
+    t.tabIndex = selected ? 0 : -1;
+    const panel = $(t.getAttribute("aria-controls"));
+    if (panel) panel.hidden = !selected;
+  }
+  if (focus) btn.focus();
+  if (btn.id === "tab-roll" && latest) drawRoll(latest);
+}
+
+for (const t of tabs) {
+  t.addEventListener("click", () => activateTab(t));
+  t.addEventListener("keydown", (e) => {
+    const i = tabs.indexOf(t);
+    let next = -1;
+    if (e.key === "ArrowRight") next = (i + 1) % tabs.length;
+    else if (e.key === "ArrowLeft") next = (i - 1 + tabs.length) % tabs.length;
+    else if (e.key === "Home") next = 0;
+    else if (e.key === "End") next = tabs.length - 1;
+    if (next >= 0) {
+      e.preventDefault();
+      activateTab(tabs[next], true);
+    }
+  });
+}
+
+async function copyTextReturn(text, label) {
+  try {
+    await navigator.clipboard.writeText(text);
+    announce(`${label} copied to clipboard.`);
+    return true;
+  } catch {
+    announce(`Unable to copy ${label}.`);
+    return false;
+  }
+}
+
+function render(data) {
+  latest = data;
+  const st = data.traffic?.stats || {};
+  const studio = data.studio || {};
+  const doc = data.doctor || {};
+  const svc = data.service || {};
+  const status = studio.status || null;
+
+  const osTag = data.meta?.platform && data.meta?.arch
+    ? `${data.meta.platform} (${data.meta.arch})`
+    : "Desktop App";
+  const rtTag = data.meta?.app_runtime || "app";
+  $("subLine").textContent = `fl-mcp v${data.meta?.version || "?"} · ${osTag} · ${rtTag} · Port ${data.meta?.port || "FL MCP"}`;
+
+  if (status) {
+    setPill($("flBadge"), "ok", `FL Studio: ${status.fl || "Connected"}`);
+    const pat = status.pat ?? status.pattern ?? 1;
+    const isPlaying = Boolean(status.play ?? status.playing);
+    const recTag = status.rec ? " · Rec" : "";
+    $("kTempo").textContent = `${status.bpm ?? "--"} BPM`;
+    $("kSong").textContent = `${status.title || "Untitled"} · Pat ${pat} · ${isPlaying ? "Playing" : "Stopped"}${recTag}`;
+  } else {
+    setPill($("flBadge"), doc.midi_port_found ? "warn" : "bad", doc.midi_port_found ? "FL Studio: Waiting" : "FL Studio: No MIDI Port");
+    $("kTempo").textContent = "-- BPM";
+    $("kSong").textContent = "Click 'Poll FL Now' or call any MCP tool";
+  }
+
+  if (svc.running) {
+    setPill($("svcBadge"), "ok", `Service: PID ${svc.pid}`);
+  } else {
+    setPill($("svcBadge"), "warn", "Service: Foreground UI");
+  }
+
+  const mode = data.meta?.desktop_mode || "off";
+  setPill($("deskBadge"), mode === "off" ? "warn" : "ok", mode === "off" ? "Desktop: Off" : `Desktop: ${mode}`);
+
+  $("kMidi").textContent = String(st.midi_calls || 0);
+  $("kMidiSub").textContent = `${st.midi_errors || 0} errors · ${st.retries || 0} retries`;
+  $("kBytes").textContent = fmtBytes((st.tx_bytes || 0) + (st.rx_bytes || 0));
+  $("kLat").textContent = `avg ${st.avg_ms || 0} ms · p95 ${st.p95_ms || 0} ms`;
+  $("kMcp").textContent = String(st.mcp_calls || 0);
+  $("kMcpSub").textContent = `${st.mcp_errors || 0} errors`;
+
+  const au = studio.audio;
+  const lufsVal = au ? (au.lufs_i ?? au.integrated_lufs) : null;
+  if (au && lufsVal != null) {
+    $("kLufs").textContent = `${Number(lufsVal).toFixed(1)} LUFS`;
+    const tpVal = au.true_peak_db ?? au.true_peak_dbtp ?? au.peak_db ?? 0;
+    $("kPeak").textContent = `True Peak: ${Number(tpVal).toFixed(1)} dBTP`;
+  } else {
+    $("kLufs").textContent = "-- LUFS";
+    $("kPeak").textContent = "True Peak: -- dBTP";
+  }
+
+  renderTraffic(data.traffic?.events || []);
+  renderMixer(studio);
+  renderRollAndPlan(studio);
+  renderAudio(au);
+  renderSetup(doc, data.paths || doc.paths || {}, svc, data.clients || [], data.templates || []);
+}
+
+function renderTraffic(events) {
+  const kind = $("fKind").value;
+  const q = $("fText").value.trim().toLowerCase();
+  const filtered = events.filter((e) => {
+    if (kind && e.dir !== kind) return false;
+    if (errOnly && e.ok) return false;
+    if (q) {
+      const hay = `${e.op} ${e.req || ""} ${e.res || ""} ${e.error || ""}`.toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+  const sig = JSON.stringify(filtered.map((e) => [e.ts, e.dir, e.op, e.ok, e.attempts]));
+  $("logInfo").textContent = `${filtered.length} shown of ${events.length} recent events`;
+  if (sig === lastTrafficSig) return;
+  lastTrafficSig = sig;
+  const tbody = $("trafficBody");
+  if (!filtered.length) {
+    tbody.innerHTML = '<tr><td colspan="7" class="empty">No matching traffic events yet.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = filtered.map((e) => {
+    const isMidi = e.dir === "midi";
+    const bytes = isMidi ? `${e.tx_bytes || 0} -> ${e.rx_bytes || 0} B` : `${e.rx_bytes || 0} B out`;
+    const att = (e.attempts || 1) > 1 ? ` x${e.attempts}` : "";
+    const statusBadge = e.ok ? `<span class="badge ok">OK${att}</span>` : '<span class="badge err">ERR</span>';
+    const detail = e.error ? `Error: ${e.error}` : (e.req || e.res || "");
+    return `<tr>
+      <td class="mono">${fmtTime(e.ts)}</td>
+      <td><span class="badge ${isMidi ? "tx" : "mcp"}">${isMidi ? "MIDI TX/RX" : "MCP CALL"}</span></td>
+      <td class="mono">${esc(e.op)}</td>
+      <td>${statusBadge}</td>
+      <td class="mono">${bytes}</td>
+      <td class="mono">${e.ms || 0} ms</td>
+      <td class="wrap mono">${esc(detail)}</td>
+    </tr>`;
+  }).join("");
+}
+
+const CH_PALETTE = ["#ff7a2f", "#2bd4b5", "#5da0ff", "#f6b93b", "#d883ff", "#5ce085"];
+
+function dbToMeterPct(db) {
+  if (db == null || Number.isNaN(db) || db <= -60) return 3;
+  return clamp(((Number(db) + 60) / 60) * 100, 3, 100);
+}
+
+function renderMixer(studio) {
+  const mix = studio.mixer?.rows || [];
+  const pks = new Map((studio.peaks?.rows || []).map((r) => [r[0], r]));
+  const clips = new Set(studio.peaks?.clipping || []);
+  $("mixMeta").textContent = mix.length ? `${mix.length} active tracks` : "";
+  $("mixerGrid").innerHTML = mix.length ? mix.slice(0, 24).map((r) => {
+    const [i, name, vol, , mute, solo, fxCount] = r;
+    const pk = pks.get(i);
+    let lPct = clamp(((vol ?? 0.8) * 0.7) * 100, 3, 100);
+    let rPct = lPct;
+    let pkLabel = "";
+    let isClip = clips.has(i);
+    if (pk) {
+      if (typeof pk[1] === "string") {
+        const db = Number(pk[2]);
+        lPct = dbToMeterPct(db);
+        rPct = lPct;
+        pkLabel = Number.isFinite(db) && db > -90 ? `${db.toFixed(1)}dB` : "-inf";
+        if (db >= 0) isClip = true;
+      } else {
+        lPct = clamp((Number(pk[1]) || 0) * 100, 3, 100);
+        rPct = clamp((Number(pk[2]) || 0) * 100, 3, 100);
+      }
+    }
+    const barCls = isClip ? "bar clip" : "bar";
+    const flags = (mute ? '<span class="flag m">M</span>' : "")
+      + (solo ? '<span class="flag s">S</span>' : "")
+      + (fxCount ? `<span class="flag">${fxCount}FX</span>` : "");
+    return `<div class="strip">
+      <div class="idx">${i === 0 ? "MASTER" : "TRK " + i}</div>
+      <div class="name" title="${esc(name)}">${esc(name)}</div>
+      <div class="meter" title="${esc(pkLabel || "Level")}"><div class="${barCls}" style="height:${lPct}%"></div><div class="${barCls}" style="height:${rPct}%"></div></div>
+      <div class="flags"><span class="mono">${pkLabel || `${Math.round((vol || 0) * 100)}%`}</span>${flags}</div>
+    </div>`;
+  }).join("") : '<div class="empty">Poll FL Studio or list mixer tracks to view live level meters.</div>';
+
+  const chs = studio.channels?.rows || [];
+  const stepMap = new Map((studio.steps?.rows || []).map((s) => [s[0], s[1]]));
+  $("chMeta").textContent = chs.length ? `${chs.length} channels` : "";
+  $("rackList").innerHTML = chs.length ? chs.map((c) => {
+    const [i, name, chType, , , mute, solo, fx, plugin] = c;
+    const hex = CH_PALETTE[Math.abs(Number(i) || 0) % CH_PALETTE.length];
+    const bits = stepMap.get(i) || "";
+    const stepsHtml = bits
+      ? `<div class="step-grid">${[...bits.slice(0, 16)].map((b) => `<div class="step ${b === "1" ? "on" : ""}"></div>`).join("")}</div>`
+      : `<span class="meta-note">${esc(plugin || chType || "Channel")}</span>`;
+    const flag = mute ? " · Muted" : solo ? " · Solo" : "";
+    const kindNote = chType ? ` · ${esc(chType)}` : "";
+    return `<div class="ch">
+      <div class="dot" style="background:${hex}"></div>
+      <div><strong style="font-size:0.8rem">${esc(name)}</strong><div class="meta-note">Ch ${i}${kindNote}${flag}</div></div>
+      <div>${stepsHtml}</div>
+      <div class="mono meta-note">Trk ${fx ?? "--"}</div>
+    </div>`;
+  }).join("") : '<div class="empty">Channel Rack data will appear once polled.</div>';
+}
+
+function normNote(n) {
+  if (Array.isArray(n)) {
+    const rawV = Number(n[3] ?? 0.8);
+    return { p: Number(n[0] ?? 60), t: Number(n[1] ?? 0), d: Number(n[2] ?? 0.25), v: rawV > 1 ? rawV / 127 : rawV };
+  }
+  const rawV = Number(n?.v ?? 0.8);
+  return { p: Number(n?.p ?? 60), t: Number(n?.t ?? 0), d: Number(n?.d ?? 0.25), v: rawV > 1 ? rawV / 127 : rawV };
+}
+
+function renderRollAndPlan(studio) {
+  drawRoll(studio);
+  const plan = studio.latest_plan;
+  if (!plan) {
+    $("planMeta").textContent = "";
+    $("planBox").innerHTML = '<div class="empty">No song plan generated yet.</div>';
+    return;
+  }
+  $("planMeta").textContent = `${plan.genre || ""} · ${plan.key || ""} · ${plan.bpm || ""} BPM · ${plan.bars || "?"} bars`;
+  const secs = (plan.sections || []).map((s) => `<span class="badge tx">${esc(s.name)} (${s.bars} bars)</span>`).join(" ");
+  let partsHtml = "";
+  if (Array.isArray(plan.patterns)) {
+    partsHtml = plan.patterns.map((pt) => {
+      const partNames = (pt.parts || []).join(", ") || "empty";
+      return `<li><span class="mono">${esc(pt.name || "Pattern")} (${esc(pt.bars || "?")} bars)</span><span>${esc(partNames)}</span></li>`;
+    }).join("");
+  } else if (plan.patterns && typeof plan.patterns === "object") {
+    partsHtml = Object.entries(plan.patterns).map(([k, v]) => `<li><span class="mono">${esc(k)}</span><span>${v.notes} notes (${esc(v.mode)})</span></li>`).join("");
+  }
+  const rolesLine = Array.isArray(plan.roles) && plan.roles.length
+    ? `<div class="meta-note" style="margin-bottom:8px">Roles: ${esc(plan.roles.join(", "))}</div>` : "";
+  $("planBox").innerHTML = `<div style="margin-bottom:10px;display:flex;gap:6px;flex-wrap:wrap">${secs}</div>${rolesLine}<ul class="checklist">${partsHtml}</ul>`;
+}
+
+function drawRoll(studio) {
+  const cv = $("rollCanvas");
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const wCss = cv.clientWidth || 560;
+  const hCss = 270;
+  if (cv.width !== Math.round(wCss * dpr) || cv.height !== Math.round(hCss * dpr)) {
+    cv.width = Math.round(wCss * dpr);
+    cv.height = Math.round(hCss * dpr);
+  }
+  const ctx = cv.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.fillStyle = "#080b10";
+  ctx.fillRect(0, 0, wCss, hCss);
+
+  const inbox = studio.piano_inbox || {};
+  const pstate = studio.piano_state || {};
+  const rawNotes = (inbox.notes && inbox.notes.length) ? inbox.notes : (pstate.notes || []);
+  const notes = rawNotes.map(normNote);
+  const sourceTag = (inbox.notes && inbox.notes.length)
+    ? (pstate.applied ? "Applied" : (inbox.replace ? "Queued (Replace)" : "Queued"))
+    : (pstate.notes && pstate.notes.length ? "Applied" : "Empty");
+  $("rollMeta").textContent = notes.length
+    ? `${notes.length} notes (${sourceTag} · serial ${inbox.serial ?? pstate.serial ?? "--"})`
+    : "No queued piano roll notes";
+
+  if (!notes.length) {
+    ctx.fillStyle = "#98a6c0";
+    ctx.font = "13px system-ui, sans-serif";
+    ctx.fillText("Queued melody/chord notes appear here", 18, 42);
+    return;
+  }
+
+  const maxT = Math.max(4, ...notes.map((n) => n.t + Math.max(0.25, n.d)));
+  const pitches = notes.map((n) => n.p);
+  const minP = Math.min(...pitches) - 2;
+  const maxP = Math.max(...pitches) + 2;
+  const span = Math.max(12, maxP - minP + 1);
+  const padL = 42;
+  const padT = 10;
+  const plotW = wCss - padL - 10;
+  const plotH = hCss - padT - 16;
+
+  ctx.strokeStyle = "#1c2434";
+  ctx.lineWidth = 1;
+  for (let b = 0; b <= Math.ceil(maxT); b++) {
+    const x = padL + (b / maxT) * plotW;
+    ctx.beginPath();
+    ctx.moveTo(x, padT);
+    ctx.lineTo(x, padT + plotH);
+    ctx.stroke();
+    if (b % 2 === 0 && b < Math.ceil(maxT)) {
+      ctx.fillStyle = "#98a6c0";
+      ctx.font = "10px monospace";
+      ctx.fillText(String(b / 4 + 1), x + 2, hCss - 3);
+    }
+  }
+
+  ctx.fillStyle = "#98a6c0";
+  ctx.font = "10px monospace";
+  const rowH = Math.max(4, plotH / span);
+  for (let p = minP; p <= maxP; p++) {
+    if (p % 12 === 0 || p === minP || p === maxP) {
+      const y = padT + (maxP - p) * rowH + rowH * 0.75;
+      ctx.fillText(noteName(p), 6, y);
+    }
+  }
+
+  for (const n of notes) {
+    const x = padL + (n.t / maxT) * plotW;
+    const nw = Math.max(4, (Math.max(0.125, n.d) / maxT) * plotW - 1);
+    const y = padT + (maxP - n.p) * rowH;
+    const vel = clamp(n.v, 0.25, 1.0);
+    ctx.fillStyle = `rgba(255, 122, 47, ${0.42 + vel * 0.58})`;
+    ctx.fillRect(x, y, nw, Math.max(3, rowH - 1));
+  }
+}
+
+function renderAudio(au) {
+  if (!au) {
+    $("audioMeta").textContent = "";
+    $("bandsBox").innerHTML = '<div class="empty">Run fl_audio to populate spectrum telemetry.</div>';
+    $("audioStats").innerHTML = '<li class="empty">No measured render yet.</li>';
+    return;
+  }
+  $("audioMeta").textContent = au.file ? esc(au.file) : "Last report";
+  const keys = [["sub", "Sub"], ["bass", "Bass"], ["low_mid", "LowMid"], ["mid", "Mid"], ["high_mid", "HiMid"], ["high", "High"], ["air", "Air"]];
+  const bandsDb = au.bands_db;
+  let pcts;
+  let rawDbs = [];
+  if (bandsDb && typeof bandsDb === "object") {
+    rawDbs = keys.map(([k]) => Number(bandsDb[k] ?? -120));
+    const energy = rawDbs.map((db) => (db <= -119 ? 0 : Math.pow(10, clamp(db, -120, 0) / 10)));
+    const sumE = energy.reduce((acc, v) => acc + v, 0) || 1;
+    pcts = energy.map((v) => (v / sumE) * 100);
+  } else {
+    const b = au.bands || {};
+    const legacy = [["sub"], ["low"], ["lowmid"], ["mid"], ["presence"], ["high"], ["air"]];
+    pcts = legacy.map(([k], idx) => Number(b[keys[idx][0]]?.pct ?? b[k]?.pct ?? b[keys[idx][0]] ?? b[k] ?? 0));
+  }
+  const top = Math.max(25, ...pcts);
+  $("bandsBox").innerHTML = keys.map(([, lbl], idx) => {
+    const pct = clamp(pcts[idx], 0, 100);
+    const tip = rawDbs.length ? ` title="${rawDbs[idx].toFixed(1)} dB"` : "";
+    return `<div class="band"${tip}><span class="mono" style="font-size:0.7rem">${pct.toFixed(0)}%</span><div class="bbar" style="height:${(pct / top) * 116}px"></div><span class="blbl">${lbl}</span></div>`;
+  }).join("");
+  const lufsVal = au.lufs_i ?? au.integrated_lufs;
+  const tpVal = au.true_peak_db ?? au.true_peak_dbtp ?? au.peak_db;
+  const lraVal = au.lra ?? au.lra_lu;
+  const corrVal = au.stereo?.corr ?? au.correlation;
+  const items = [
+    ["Integrated Loudness", lufsVal != null ? `${Number(lufsVal).toFixed(1)} LUFS` : "--"],
+    ["True Peak Ceiling", tpVal != null ? `${Number(tpVal).toFixed(1)} dBTP` : "--"],
+    ["Crest / Dynamics", au.crest_db != null ? `${Number(au.crest_db).toFixed(1)} dB` : "--"],
+    ["Loudness Range (LRA)", lraVal != null ? `${Number(lraVal).toFixed(1)} LU` : "--"],
+    ["Stereo Correlation", corrVal != null ? Number(corrVal).toFixed(2) : "Mono"],
+  ];
+  const adviceHtml = Array.isArray(au.advice) && au.advice.length
+    ? au.advice.map((tip) => `<li class="advice-tip">${esc(tip)}</li>`).join("")
+    : "";
+  $("audioStats").innerHTML = items.map(([k, v]) => `<li><span>${k}</span><strong class="mono">${v}</strong></li>`).join("") + adviceHtml;
+}
+
+function kvRow(label, value, copyBtn = true) {
+  const text = String(value ?? "--");
+  const copyHtml = copyBtn && value
+    ? `<button type="button" class="compact copy-btn" data-copy="${esc(text)}" data-label="${esc(label)}">Copy</button>`
+    : "";
+  return `<li><span>${esc(label)}</span><div class="kv-val"><code class="mono" title="${esc(text)}">${esc(text)}</code>${copyHtml}</div></li>`;
+}
+
+function renderSetup(doc, pths, svc, clientRows, templates) {
+  const rows = [
+    ["MIDI Input / Output ('" + (doc.port_name || "FL MCP") + "')", doc.midi_port_found ? "Connected" : "Missing", doc.midi_port_found],
+    ["FL Controller Script", doc.fl_script_installed ? "Installed" : "Missing (run fl-mcp install)", doc.fl_script_installed],
+    ["Piano Roll Script", doc.piano_roll_script_installed ? "Installed" : "Missing (run fl-mcp install)", doc.piano_roll_script_installed],
+    ["Audio Analysis Extra", doc.audio_analysis ? "Ready (numpy/scipy/soundfile)" : "Optional extra missing", doc.audio_analysis],
+    ["Desktop Tier", doc.desktop_mode && doc.desktop_mode !== "off" ? `Active (${doc.desktop_mode})` : "Off (opt-in)", doc.desktop_enabled],
+  ];
+  $("doctorList").innerHTML = rows.map(([k, v, ok]) =>
+    `<li><span>${esc(k)}</span><span class="badge ${ok ? "ok" : "dim"}">${esc(v)}</span></li>`
+  ).join("");
+
+  const poller = svc.poller || {};
+  const isDaemon = "poller" in svc;
+  const pollState = isDaemon ? (poller.enabled ? `Active (${poller.interval_s}s)` : "Paused") : "Manual poll only";
+  $("serviceList").innerHTML = [
+    kvRow("Host Platform & Arch", `${latest?.meta?.platform || "--"} (${latest?.meta?.arch || "--"}) · ${latest?.meta?.app_runtime || "auto"}`, false),
+    kvRow("Service Process", svc.running ? `Running (PID ${svc.pid})` : "Not running in background — run `fl-mcp service start`", false),
+    kvRow("Streamable-HTTP MCP", svc.mcp_url || "http://127.0.0.1:8765/mcp", true),
+    kvRow("Legacy SSE MCP", svc.sse_url || "http://127.0.0.1:8765/sse", true),
+    kvRow("Background Poller", pollState, false),
+    kvRow("Login Autostart", svc.autostart?.enabled ? `Enabled (${svc.autostart.backend})` : "Off (`fl-mcp service autostart enable`)", false),
+  ].join("");
+
+  if (isDaemon) {
+    $("serviceControls").innerHTML = `
+      <button type="button" id="togglePollerBtn">${poller.enabled ? "Pause Background Poller" : "Resume Background Poller"}</button>
+      <button type="button" class="danger" id="stopServiceBtn">Stop Service</button>
+    `;
+  } else {
+    $("serviceControls").innerHTML = `<span class="meta-note">Started via <code class="mono">fl-mcp dashboard</code>. Use <code class="mono">fl-mcp service start</code> for persistent background mode.</span>`;
+  }
+
+  $("pathsList").innerHTML = [
+    kvRow("Data Dir", pths.data_dir || doc.data_dir, true),
+    kvRow("Notes Inbox Dir", pths.notes_dir || doc.notes_dir, true),
+    kvRow("FL User Data Dir", pths.fl_user_dir || doc.fl_user_dir, true),
+    kvRow("FL Install Dir", (pths.fl_install_dirs && pths.fl_install_dirs[0]) || "Auto-detecting on launch", true),
+  ].join("");
+
+  $("clientsBody").innerHTML = clientRows.length ? clientRows.map((c) => {
+    const statusBadge = c.error
+      ? `<span class="badge err" title="${esc(c.error)}">Parse Error</span>`
+      : c.configured
+        ? `<span class="badge ok">Configured (${esc(c.transport || "stdio")})</span>`
+        : '<span class="badge dim">Not Registered</span>';
+    const cliCmd = `fl-mcp config ${c.id} --transport http --write`;
+    return `<tr>
+      <td><strong>${esc(c.name)}</strong><span class="meta-note mono client-path" title="${esc(c.path || c.hint)}">${esc(c.path || c.hint)}</span></td>
+      <td>${statusBadge}</td>
+      <td><button type="button" class="compact copy-btn" data-copy="${esc(cliCmd)}" data-label="${esc(c.name)} command">Copy HTTP Setup</button></td>
+    </tr>`;
+  }).join("") : '<tr><td colspan="3" class="empty">Client discovery unavailable.</td></tr>';
+
+  $("tplGrid").innerHTML = templates.length ? templates.map((t) =>
+    `<div class="tpl"><div class="tname">${esc(t.name)}</div><div class="tmeta">${esc(t.tempo)} BPM · ${esc(t.channels)} ch · ${t.sampler_ready ? "Sampler Ready" : "MIDI Only"}</div><div class="tmeta mono" style="margin-top:4px;overflow:hidden;text-overflow:ellipsis">${esc(t.path)}</div></div>`
+  ).join("") : '<div class="empty">No .flp templates discovered. Set FL_MCP_TEMPLATES or save templates in FL Studio.</div>';
+}
+
+document.addEventListener("click", async (ev) => {
+  if (ev.target.closest(".copy-btn")) {
+    const copyBtn = ev.target.closest(".copy-btn");
+    const ok = await copyTextReturn(copyBtn.dataset.copy || "", copyBtn.dataset.label || "value");
+    if (ok) {
+      if (!copyBtn.dataset.orig) copyBtn.dataset.orig = copyBtn.textContent;
+      copyBtn.textContent = "Copied";
+      clearTimeout(copyBtn._tid);
+      copyBtn._tid = setTimeout(() => { copyBtn.textContent = copyBtn.dataset.orig || "Copy"; }, 1300);
+    }
+    return;
+  }
+  if (ev.target.closest("#togglePollerBtn")) {
+    const enabled = !(latest?.service?.poller?.enabled);
+    await fetch("/api/service/poll-config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled }),
+    });
+    announce(enabled ? "Background poller resumed." : "Background poller paused.");
+    await refresh();
+    return;
+  }
+  if (ev.target.closest("#stopServiceBtn")) {
+    await fetch("/api/service/stop", { method: "POST" });
+    setPill($("svcBadge"), "warn", "Service: Stopping...");
+    announce("Background service stopping.");
+  }
+});
+
+async function refresh() {
+  try {
+    const res = await fetch("/api/state", { cache: "no-store" });
+    if (res.ok) render(await res.json());
+  } catch {}
+}
+
+$("pollBtn").addEventListener("click", async () => {
+  const btn = $("pollBtn");
+  btn.disabled = true;
+  try {
+    const res = await fetch("/api/poll", { method: "POST" });
+    const body = res.ok ? await res.json().catch(() => ({})) : { ok: false, error: `HTTP ${res.status}` };
+    await refresh();
+    announce(body.ok === false ? `Poll failed: ${body.error || "FL Studio unavailable"}` : "FL Studio polled.");
+  } catch {
+    announce("Poll failed: unable to reach service.");
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+$("autoBtn").addEventListener("click", () => {
+  autoRefresh = !autoRefresh;
+  $("autoBtn").textContent = `UI Refresh: ${autoRefresh ? "On" : "Off"}`;
+  $("autoBtn").setAttribute("aria-pressed", autoRefresh ? "true" : "false");
+});
+
+$("errOnlyBtn").addEventListener("click", () => {
+  errOnly = !errOnly;
+  $("errOnlyBtn").textContent = `Errors Only: ${errOnly ? "On" : "Off"}`;
+  $("errOnlyBtn").setAttribute("aria-pressed", errOnly ? "true" : "false");
+  if (latest) renderTraffic(latest.traffic?.events || []);
+});
+
+$("clearTrafficBtn").addEventListener("click", async () => {
+  await fetch("/api/traffic/clear", { method: "POST" });
+  lastTrafficSig = "";
+  await refresh();
+  announce("Traffic log cleared.");
+});
+
+$("refreshTplBtn").addEventListener("click", async () => {
+  await fetch("/api/templates/refresh", { method: "POST" });
+  await refresh();
+  announce("Templates rescanned.");
+});
+
+$("fKind").addEventListener("change", () => latest && renderTraffic(latest.traffic?.events || []));
+$("fText").addEventListener("input", () => latest && renderTraffic(latest.traffic?.events || []));
+
+document.addEventListener("keydown", (e) => {
+  if (e.altKey && !e.ctrlKey && !e.metaKey && e.key >= "1" && e.key <= "5") {
+    const idx = Number(e.key) - 1;
+    if (tabs[idx]) {
+      e.preventDefault();
+      activateTab(tabs[idx], true);
+    }
+  }
+});
+
+refresh();
+setInterval(() => { if (autoRefresh && document.visibilityState === "visible") refresh(); }, 1800);
+</script>
+</body>
+</html>

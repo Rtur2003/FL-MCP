@@ -288,3 +288,14 @@ def test_auto_fills_only_the_drum_roles_the_template_lacks(packs, tmp_path):
     )
     assert "kick" not in got and "bass" not in got
     assert all(Path(p).is_file() for p in got.values())
+
+
+def test_non_dict_features_cache_is_rebuilt_cleanly(packs):
+    data_dir = packs.parent / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    cache_file = data_dir / "library_features.json"
+    cache_file.write_text("[]", encoding="utf-8")
+    library.scan()
+    found = library.find(role="kick", limit=2)
+    assert len(found) >= 1
+    assert isinstance(json.loads(cache_file.read_text(encoding="utf-8")), dict)

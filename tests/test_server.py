@@ -291,6 +291,26 @@ async def test_notes_read_back(wired):
     state["serial"] = serial + 1
     (wired.dir / "state.json").write_text(json.dumps(state))
     assert (await run("fl_notes", {"read": True}))["applied"] is False
+    (wired.dir / "inbox.json").write_text("[1, 2, 3]")
+    assert (await run("fl_notes", {"read": True}))["applied"] is False
+    (wired.dir / "inbox.json").write_text("{bad json")
+    assert (await run("fl_notes", {"read": True}))["applied"] is False
+
+
+async def test_set_settles_deferred_mixer_readback(wired, monkeypatch):
+    orig = wired.call
+    stale = {"done": False}
+
+    def deferred_call(req):
+        out = orig(req)
+        if req.get("o") == "set" and req.get("k") == "mixer" and not stale["done"]:
+            stale["done"] = True
+            return {**out, "vol": 0.8}
+        return out
+
+    monkeypatch.setattr(wired, "call", deferred_call)
+    row = await run("fl_set", {"kind": "mixer", "index": 1, "volume": 0.55})
+    assert row["vol"] == pytest.approx(0.55, abs=0.01)
 
 
 async def test_fl_errors_reach_the_model_with_guidance(wired):
@@ -585,8 +605,31 @@ async def test_fl_audio_master_brings_the_mix_to_the_target(screen, wired, tmp_p
     assert out["limiter"]["final_gain_db"] == pytest.approx(-18.0, abs=1.0)
 
 
-async def test_command_line_render_refuses_while_fl_is_open(wired, tmp_path):
+async def test_parallel_hidden_render_works_while_fl_is_open(wired, mixdown, monkeypatch, tmp_path):
     flp = tmp_path / "song.flp"
     flp.write_bytes(b"FLhd")
+    seen: list[tuple[str, str, bool, bool]] = []
+
+    def fake_render(project, fmt, *, always_copy=False, isolate=False):
+        seen.append((str(project), fmt, always_copy, isolate))
+        return {
+            "audio": str(mixdown),
+            "fmt": fmt,
+            "seconds": 1.0,
+            "copied": True,
+            "isolated_desktop": True,
+        }
+
+    monkeypatch.setattr(server.render, "find_fl", lambda: Path("C:/FL/FL64.exe"))
+    monkeypatch.setattr(server.render, "render", fake_render)
+    out = await run("fl_audio", {"action": "render", "project": str(flp), "fmt": "wav"})
+    assert seen == [(str(flp), "wav", True, True)]
+    assert out["render"]["parallel"] is True and out["render"]["isolated_desktop"] is True
+
+
+async def test_command_line_render_refuses_when_parallel_unavailable(wired, monkeypatch, tmp_path):
+    flp = tmp_path / "song.flp"
+    flp.write_bytes(b"FLhd")
+    monkeypatch.setattr(server.render, "find_fl", lambda: None)
     error = await run("fl_audio", {"action": "render", "project": str(flp)}, expect_error=True)
     assert "FL Studio is open" in error and "fl_desk" in error

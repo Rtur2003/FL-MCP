@@ -5,7 +5,7 @@ import json
 import pytest
 
 from fl_mcp import selftest
-from fl_mcp.bridge import FLError
+from fl_mcp.bridge import SCRIPT_VERSION, FLError
 
 
 @pytest.fixture
@@ -28,7 +28,7 @@ def test_everything_the_fake_offers_passes_and_the_rest_is_skipped_with_a_reason
     assert not failed, failed
     for name in ("link", "status", "features", "lists", "mixer write", "tempo write", "windows"):
         assert checks[name]["status"] == "ok", (name, checks[name])
-    assert "script v5" in checks["link"]["detail"]
+    assert f"script v{SCRIPT_VERSION}" in checks["link"]["detail"]
     assert report["summary"]["fail"] == 0 and report["summary"]["ok"] >= 7
     assert (
         checks["desktop"]["status"] == "skip" and "fl-mcp desktop on" in checks["desktop"]["detail"]
@@ -117,3 +117,39 @@ def test_default_mixer_and_param_failure_do_not_cascade(fl, home):
     assert checks["mixer write"]["status"] == "ok"
     assert checks["plugin params"]["status"] == "fail"
     assert checks["plugin real units"]["status"] == "skip"
+
+
+def test_deferred_mixer_write_settles_on_reread(fl, home, monkeypatch):
+    monkeypatch.setattr(selftest.time, "sleep", lambda _: None)
+    returned_stale = False
+
+    def deferred(req):
+        nonlocal returned_stale
+        out = fl.call(req)
+        if req["o"] == "set" and req.get("k") == "mixer" and not returned_stale:
+            returned_stale = True
+            return {**out, "vol": 0.8}
+        return out
+
+    checks = by_name(selftest.run(deferred))
+    assert checks["mixer write"]["status"] == "ok"
+
+
+def test_stuck_mixer_write_reports_automation_and_restores(fl, home, monkeypatch):
+    monkeypatch.setattr(selftest.time, "sleep", lambda _: None)
+    seen = []
+
+    def stuck(req):
+        out = fl.call(req)
+        if req["o"] == "set" and req.get("k") == "mixer":
+            seen.append(req["p"])
+            return {**out, "vol": 0.9}
+        if req["o"] == "list" and req.get("k") == "mixer" and req.get("a") == 1 and out.get("rows"):
+            rows = [[r[0], r[1], 0.9, *r[3:]] for r in out["rows"]]
+            return {**out, "rows": rows}
+        return out
+
+    checks = by_name(selftest.run(stuck))
+    assert checks["mixer write"]["status"] == "fail"
+    assert "automation" in checks["mixer write"]["detail"]
+    assert len(seen) == 2
