@@ -258,19 +258,25 @@ def dispatch_action(
             genre = str(body.get("genre") or "house").strip()
             key = str(body.get("key") or "Am").strip()
             raw_bpm = body.get("bpm")
-            bpm = float(raw_bpm) if raw_bpm not in (None, "") else None
-            length = max(1, min(64, int(body.get("length") or 4)))
+            bpm = int(float(raw_bpm)) if raw_bpm not in (None, "") else None
+            raw_len = body.get("length") or "short"
+            length: str | int = (
+                int(raw_len)
+                if str(raw_len).isdigit()
+                else (str(raw_len) if str(raw_len) in ("sketch", "short", "full") else "short")
+            )
             built = compose(genre, key=key, bpm=bpm, length=length)
             saved = produce.save_plan(built)
-            telemetry.update_snapshot(plan=built)
-            return {"ok": True, "action": action, "plan": built, "path": str(saved)}
+            summary = built.summary()
+            telemetry.update_snapshot(latest_plan=summary)
+            return {"ok": True, "action": action, "plan": summary, "path": str(saved)}
         if action == "notes":
             ndir = paths.notes_dir()
             inbox_file = ndir / "inbox.json"
             clear_mode = body.get("clear")
             if clear_mode == "queue":
                 inbox_file.unlink(missing_ok=True)
-                telemetry.update_snapshot(inbox={"notes": [], "clear": False})
+                telemetry.update_snapshot(piano_inbox={"notes": [], "clear": False})
                 return {"ok": True, "action": action, "cleared_queue": True}
             raw_notes = list(body.get("notes") or [])
             chords = str(body.get("chords") or "").strip()
@@ -302,7 +308,7 @@ def dispatch_action(
                 return {"ok": False, "action": action, "error": "enter chords or notes to queue"}
             payload = {"notes": clean, "clear": bool(clear_roll), "ts": round(time.time(), 3)}
             server._write_json(inbox_file, payload)
-            telemetry.update_snapshot(inbox=payload)
+            telemetry.update_snapshot(piano_inbox=payload)
             return {
                 "ok": True,
                 "action": action,
