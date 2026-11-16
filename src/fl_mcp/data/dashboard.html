@@ -5,6 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
 <title>FL-MCP Studio — Live Bridge, Service &amp; DAW Telemetry</title>
+<meta name="theme-color" content="#0b0e14">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" type="image/x-icon" href="/assets/icon.ico">
 <link rel="icon" type="image/png" href="/assets/favicon.png">
 <link rel="preload" as="image" href="/assets/icon-128.png" fetchpriority="high">
 <style>
@@ -39,7 +42,18 @@
   }
 
   * { box-sizing: border-box; }
-  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text); min-height: 100%; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100%;
+    overscroll-behavior: none;
+  }
+  .studio-header, .tabs, .kpi .lbl, button, .strip {
+    user-select: none;
+    -webkit-user-select: none;
+  }
 
   .visually-hidden:where(:not(:focus-within, :active)) {
     position: absolute !important;
@@ -716,7 +730,11 @@ function render(data) {
   const svc = data.service || {};
   const status = studio.status || null;
 
-  $("subLine").textContent = `fl-mcp v${data.meta?.version || "?"} · Port ${data.meta?.port || "FL MCP"}`;
+  const osTag = data.meta?.platform && data.meta?.arch
+    ? `${data.meta.platform} (${data.meta.arch})`
+    : "Desktop App";
+  const rtTag = data.meta?.app_runtime || "app";
+  $("subLine").textContent = `fl-mcp v${data.meta?.version || "?"} · ${osTag} · ${rtTag} · Port ${data.meta?.port || "FL MCP"}`;
 
   if (status) {
     setPill($("flBadge"), "ok", `FL Studio: ${status.fl || "Connected"}`);
@@ -1047,6 +1065,7 @@ function renderSetup(doc, pths, svc, clientRows, templates) {
   const isDaemon = "poller" in svc;
   const pollState = isDaemon ? (poller.enabled ? `Active (${poller.interval_s}s)` : "Paused") : "Manual poll only";
   $("serviceList").innerHTML = [
+    kvRow("Host Platform & Arch", `${latest?.meta?.platform || "--"} (${latest?.meta?.arch || "--"}) · ${latest?.meta?.app_runtime || "auto"}`, false),
     kvRow("Service Process", svc.running ? `Running (PID ${svc.pid})` : "Not running in background — run `fl-mcp service start`", false),
     kvRow("Streamable-HTTP MCP", svc.mcp_url || "http://127.0.0.1:8765/mcp", true),
     kvRow("Legacy SSE MCP", svc.sse_url || "http://127.0.0.1:8765/sse", true),
@@ -1169,6 +1188,16 @@ $("refreshTplBtn").addEventListener("click", async () => {
 
 $("fKind").addEventListener("change", () => latest && renderTraffic(latest.traffic?.events || []));
 $("fText").addEventListener("input", () => latest && renderTraffic(latest.traffic?.events || []));
+
+document.addEventListener("keydown", (e) => {
+  if (e.altKey && !e.ctrlKey && !e.metaKey && e.key >= "1" && e.key <= "5") {
+    const idx = Number(e.key) - 1;
+    if (tabs[idx]) {
+      e.preventDefault();
+      activateTab(tabs[idx], true);
+    }
+  }
+});
 
 refresh();
 setInterval(() => { if (autoRefresh && document.visibilityState === "visible") refresh(); }, 1800);
