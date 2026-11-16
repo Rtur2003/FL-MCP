@@ -1,8 +1,27 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
-  <rect width="64" height="64" rx="14" fill="#10151f"/>
-  <circle cx="32" cy="32" r="21" stroke="#2c3749" stroke-width="1.5"/>
-  <circle cx="32" cy="32" r="15.5" fill="#171d28" stroke="#4b576b" stroke-width="1.5"/>
-  <circle cx="32" cy="32" r="11.5" fill="#0d1118" stroke="#242c3b" stroke-width="1"/>
-  <path d="M32 16v4.5M38.5 21.5l-3 3" stroke="#ff7a2f" stroke-width="2.2" stroke-linecap="round"/>
-  <path d="M40.5 28.5a9.5 9.5 0 0 1 0 7M44 26.5a13.5 13.5 0 0 1 0 11" stroke="#ff9a52" stroke-width="1.8" stroke-linecap="round" opacity=".88"/>
+  <defs>
+    <linearGradient id="chassis" x1="8" y1="6" x2="56" y2="58" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#1A2230"/>
+      <stop offset="1" stop-color="#0A0D14"/>
+    </linearGradient>
+    <linearGradient id="cap" x1="18" y1="16" x2="46" y2="48" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#232D3F"/>
+      <stop offset="1" stop-color="#0E131C"/>
+    </linearGradient>
+    <linearGradient id="meter" x1="14" y1="48" x2="50" y2="18" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2BD4B5"/>
+      <stop offset="0.55" stop-color="#FF7A2F"/>
+      <stop offset="1" stop-color="#FFB84D"/>
+    </linearGradient>
+  </defs>
+  <rect x="2" y="2" width="60" height="60" rx="14" fill="url(#chassis)" stroke="#2E3B52" stroke-width="1.5"/>
+  <path d="M16.5 47.5A22 22 0 1 1 47.5 47.5" stroke="#232C3D" stroke-width="3.2" stroke-linecap="round"/>
+  <path d="M16.5 47.5A22 22 0 1 1 49.2 20.5" stroke="url(#meter)" stroke-width="3.2" stroke-linecap="round"/>
+  <circle cx="32" cy="32" r="16.5" fill="url(#cap)" stroke="#3B4A66" stroke-width="1.2"/>
+  <line x1="39.5" y1="24.5" x2="43.2" y2="20.8" stroke="#FFC880" stroke-width="2.2" stroke-linecap="round"/>
+  <rect x="23" y="28.5" width="2.4" height="7" rx="1.2" fill="#2BD4B5"/>
+  <rect x="27.3" y="25" width="2.4" height="14" rx="1.2" fill="#6EDA91"/>
+  <rect x="31.6" y="22.5" width="2.4" height="19" rx="1.2" fill="#FF7A2F"/>
+  <rect x="35.9" y="26" width="2.4" height="12" rx="1.2" fill="#FFB84D"/>
+  <rect x="40.2" y="28" width="2.4" height="8" rx="1.2" fill="#FF7A2F"/>
 </svg>
