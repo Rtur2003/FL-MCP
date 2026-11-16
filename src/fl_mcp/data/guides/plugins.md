@@ -5,12 +5,13 @@ Every plugin FL can host is reachable by name, stock or third party. Read what i
 ## Read
 
 - `fl_list kind=plugins`: every plugin in the project: where it sits (`c` channel rack, `m` mixer), its index and slot, name, parameter and preset counts.
-- `fl_param target=mixer index=<track> slot=<0-9>` or `target=channel index=<channel>`: parameters as `[i, name, val, text]`: `val` is FL's 0-1 position, `text` is what the plugin shows ("-18 dB", "2.5 kHz", "4:1"). `find=<part of a name>` filters, `start`/`limit` page. `view=info` gives counts and the current preset.
-- Parameter names are whatever the plugin exposes. If a third-party plugin shows only "Param 1..n", use presets or read the window with `fl_desk`.
+- `fl_param target=mixer index=<track> slot=<0-9>` or `target=channel index=<channel>`: parameters as `[i, name, val, text]`: `val` is FL's 0-1 position, `text` is what the plugin shows ("-18 dB", "2.5 kHz", "4:1"). `find=<part of a name>` filters, `start`/`limit` page (responses include `next` when more named parameters remain). `view=info` gives counts and the current preset; `view=io` reads full inputs/outputs and signal chain (`in_channels`, `in_tracks`, `fx_slots`, `sends`, `out_ctrls`, `out_voices`, `notes` pad labels, plus `muted`, `mix`, `track_slots_enabled`, `automation_enabled`, `midi_in_port`, `activity`).
+- Parameter names are whatever the plugin exposes (multi-word search matches tokens such as `"cutoff freq"` -> `"Filter 1 Cutoff Frequency"`). If a third-party plugin shows only "Param 1..n", use presets or read the window with `fl_desk`.
 
 ## Set
 
 - One parameter in the plugin's own unit: `param="Threshold" real="-18 dB"`. The server solves against the plugin's displayed text, so the result really reads -18 dB; the answer returns `text` and `ok`. Units: dB, Hz and kHz, ms and s, %, ratios like 4:1, steps.
+- Wrapper controls: `param="fl:mix" real="80%"` (dry/wet `0-1` or `%` on mixer slots), `param="fl:mute" value=1` (`1` bypass/mute or `0` active), `param="fl:slots" value=0` (track FX rack enable `1`/`0`), and `param="fl:focus"` (focuses the plugin editor on channel or mixer slot); each also works in `settings` name-value pairs.
 - Several at once: `settings="Threshold=-18 dB, Ratio=4:1, Attack=20 ms, Gain=0.6"` (a bare number is the 0-1 position). At most 40 per call.
 - 0-1 position: `param=<name or index> value=0.5`.
 - Presets: `view=presets` lists names; `preset="Warm Pad"` loads one; `preset="+1"` or `"-1"` steps through them.

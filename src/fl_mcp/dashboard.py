@@ -13,6 +13,8 @@ from __future__ import annotations
 import importlib.resources
 import json
 import math
+import os
+import sys
 import threading
 import time
 import webbrowser
@@ -23,7 +25,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from fl_mcp import __version__, desk, paths, produce, telemetry
-from fl_mcp.bridge import DEFAULT_PORT, Bridge, FLError
+from fl_mcp.bridge import DEFAULT_PORT, Bridge, FLError, match_port
 from fl_mcp.install import targets
 
 _TEMPLATE_CACHE: dict[str, Any] = {"ts": 0.0, "items": []}
@@ -56,11 +58,16 @@ def cached_templates(force: bool = False) -> list[dict[str, Any]]:
     return items
 
 
+def _active_port() -> str:
+    return os.environ.get("FL_MCP_PORT") or DEFAULT_PORT
+
+
 def doctor_info() -> dict[str, Any]:
     """Quick non-destructive host layer check (no MIDI ping side-effects)."""
+    port = _active_port()
     info: dict[str, Any] = {
         "version": __version__,
-        "port_name": DEFAULT_PORT,
+        "port_name": port,
         "midi_inputs": [],
         "midi_outputs": [],
         "midi_port_found": False,
@@ -77,9 +84,13 @@ def doctor_info() -> dict[str, Any]:
         outs = list(mido.get_output_names())
         info["midi_inputs"] = ins
         info["midi_outputs"] = outs
-        info["midi_port_found"] = any(DEFAULT_PORT in n for n in ins) and any(
-            DEFAULT_PORT in n for n in outs
+        has_in = bool(
+            match_port(ins, port) or (sys.platform == "darwin" and match_port(ins, "iac"))
         )
+        has_out = bool(
+            match_port(outs, port) or (sys.platform == "darwin" and match_port(outs, "iac"))
+        )
+        info["midi_port_found"] = has_in and has_out
     except Exception as exc:
         info["midi_error"] = str(exc)
 
@@ -88,6 +99,7 @@ def doctor_info() -> dict[str, Any]:
     info["fl_script_installed"] = dev.is_file()
     info["piano_roll_script_installed"] = scr.is_file()
     info["fl_user_dir"] = str(fl_user)
+    info["paths"] = paths.diagnostics()
     try:
         from fl_mcp import audio
 
@@ -97,9 +109,12 @@ def doctor_info() -> dict[str, Any]:
     return info
 
 
-def poll_fl_once(bridge_factory: Any = Bridge) -> dict[str, Any]:
-    """Connect briefly, snapshot live FL Studio state, update snapshot.json, and close cleanly."""
-    b = bridge_factory()
+def poll_fl_once(
+    bridge_factory: Any = Bridge, *, bridge: Any | None = None
+) -> dict[str, Any]:
+    """Connect or reuse a shared bridge, snapshot live FL Studio state, and update snapshot.json."""
+    owns = bridge is None
+    b = bridge_factory() if owns else bridge
     try:
         status = b.call({"o": "status"})
         channels = b.call({"o": "list", "k": "channels", "s": 0, "n": 100, "a": 0})
@@ -132,10 +147,11 @@ def poll_fl_once(bridge_factory: Any = Bridge) -> dict[str, Any]:
     except (FLError, OSError, Exception) as exc:
         return {"ok": False, "error": str(exc)}
     finally:
-        try:
-            b.close()
-        except Exception:
-            pass
+        if owns:
+            try:
+                b.close()
+            except Exception:
+                pass
 
 
 def build_state(
@@ -146,11 +162,13 @@ def build_state(
     refresh_templates: bool = False,
 ) -> dict[str, Any]:
     """Combined payload for `/api/state` and CLI JSON diagnostics."""
+    from fl_mcp import clients, service_daemon
+
     return {
         "meta": {
             "version": __version__,
             "ts": round(time.time(), 3),
-            "port": DEFAULT_PORT,
+            "port": _active_port(),
             "desktop_enabled": desk.enabled(),
             "desktop_mode": desk.mode(),
             "data_dir": str(paths.data_dir()),
@@ -159,6 +177,9 @@ def build_state(
         "traffic": telemetry.read_traffic(limit=limit, kind=kind, only_errors=only_errors),
         "studio": telemetry.read_snapshot(),
         "doctor": doctor_info(),
+        "paths": paths.diagnostics(),
+        "clients": clients.client_statuses(),
+        "service": service_daemon.service_status(),
         "templates": cached_templates(force=refresh_templates),
     }
 
@@ -177,15 +198,37 @@ def make_handler(bridge_factory: Any = Bridge) -> type[BaseHTTPRequestHandler]:
             self.end_headers()
             self.wfile.write(body)
 
+        def _send_bytes(self, body: bytes, content_type: str, cache: str = "no-store") -> None:
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", cache)
+            self.end_headers()
+            self.wfile.write(body)
+
         def do_GET(self) -> None:
+            from fl_mcp import clients, service_daemon
+            from fl_mcp.assets import load_asset
+
             parsed = urlparse(self.path)
             if parsed.path == "/":
-                body = load_html().encode("utf-8")
-                self.send_response(HTTPStatus.OK)
-                self.send_header("Content-Type", "text/html; charset=utf-8")
-                self.send_header("Content-Length", str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
+                self._send_bytes(
+                    load_html().encode("utf-8"), "text/html; charset=utf-8", "no-cache"
+                )
+                return
+            if parsed.path in ("/favicon.ico", "/favicon.png"):
+                loaded = load_asset("favicon.png")
+                if loaded:
+                    self._send_bytes(loaded[0], loaded[1], "public, max-age=3600")
+                    return
+                self._send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
+                return
+            if parsed.path.startswith("/assets/"):
+                loaded = load_asset(parsed.path[len("/assets/") :])
+                if loaded:
+                    self._send_bytes(loaded[0], loaded[1], "public, max-age=3600")
+                    return
+                self._send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
                 return
             if parsed.path == "/api/state":
                 refresh = "refresh_templates=1" in parsed.query
@@ -193,6 +236,20 @@ def make_handler(bridge_factory: Any = Bridge) -> type[BaseHTTPRequestHandler]:
                 return
             if parsed.path == "/api/doctor":
                 self._send_json(doctor_info())
+                return
+            if parsed.path == "/api/paths":
+                self._send_json(paths.diagnostics())
+                return
+            if parsed.path == "/api/clients":
+                self._send_json(
+                    {
+                        "clients": clients.client_statuses(),
+                        "service": service_daemon.service_status(),
+                    }
+                )
+                return
+            if parsed.path == "/api/service":
+                self._send_json(service_daemon.service_status())
                 return
             self._send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
 
@@ -222,6 +279,17 @@ def start_server(
 
 def serve_dashboard(port: int = 8765, open_browser: bool = True, poll_first: bool = False) -> int:
     """Start the local HTTP monitor server and block until Ctrl+C."""
+    from fl_mcp import service_daemon
+
+    st = service_daemon.service_status()
+    if st["running"] and st.get("port") == port:
+        if poll_first:
+            poll_fl_once()
+        url = str(st["url"])
+        print(f"FL-MCP Background Service already hosts Studio UI at {url}", flush=True)
+        if open_browser:
+            webbrowser.open(url)
+        return 0
     if poll_first:
         poll_fl_once()
     srv = start_server("127.0.0.1", port)
