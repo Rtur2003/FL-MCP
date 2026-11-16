@@ -5,6 +5,7 @@ import logging
 import os
 import platform
 import sys
+from pathlib import Path
 
 from fl_mcp import __version__
 
@@ -41,16 +42,24 @@ def _doctor() -> int:
 
 
 def _extras() -> None:
-    from fl_mcp import audio, desk, render, telemetry
+    from fl_mcp import audio, desk, paths, render, service_daemon, telemetry
 
     render_status = render.status()
     mode = desk.mode()
     exe_msg = (
         f"ok, {render_status['fl_exe']}" if render_status["fl_exe"] else "no FL64.exe (Windows)"
     )
+    svc = service_daemon.service_status()
+    svc_msg = (
+        f"running pid={svc['pid']} ({svc['mcp_url']})"
+        if svc["running"]
+        else "stopped, `fl-mcp service start` for background HTTP+UI"
+    )
+    print(f"user data   : {paths.fl_user_dir()}")
     print(f"audio       : {'ok' if audio.available() else 'missing, install fl-mcp[audio]'}")
     print(f"render      : {exe_msg}")
     print(f"desktop     : {mode if mode != 'off' else 'off, `fl-mcp desktop on` to allow'}")
+    print(f"service     : {svc_msg}")
     st = telemetry.read_traffic(limit=0)["stats"]
     if st["total"]:
         print(
@@ -151,6 +160,13 @@ def _desktop(args: argparse.Namespace) -> int:
     from fl_mcp import desk
 
     action = args.action
+    if action == "status":
+        print(
+            json.dumps(
+                {"enabled": desk.enabled(), "mode": desk.mode(), "flag": str(desk.flag_file())}
+            )
+        )
+        return 0
     if action in ("on", "off", "stealth", "polite", "foreground"):
         desk.set_enabled(action)
         if action == "off":
@@ -186,17 +202,66 @@ def _desktop(args: argparse.Namespace) -> int:
 def _config(args: argparse.Namespace) -> int:
     from fl_mcp import clients
 
+    transport = getattr(args, "transport", "stdio") or "stdio"
+    url = getattr(args, "url", None)
+    if getattr(args, "status", False):
+        proj = Path(args.project) if getattr(args, "project", None) else None
+        for row in clients.client_statuses(project=proj):
+            if row["error"]:
+                state = f"error ({row['error']})"
+            elif row["configured"]:
+                state = f"ok ({row['transport']})"
+            elif row["exists"]:
+                state = "present, not registered"
+            else:
+                state = "not configured"
+            where = row["path"] or "CLI managed"
+            print(f"{row['id']:<15} {state:<24} {where}")
+        return 0
+    if getattr(args, "write", False):
+        if not args.client:
+            print(
+                "config --write requires a client name (e.g. fl-mcp config claude-desktop --write)",
+                file=sys.stderr,
+            )
+            return 2
+        proj = Path(args.project) if getattr(args, "project", None) else None
+        try:
+            res = clients.install_client(
+                args.client,
+                args.source,
+                not args.no_audio,
+                project=proj,
+                transport=transport,
+                url=url,
+            )
+        except (OSError, ValueError, RuntimeError) as exc:
+            print(exc, file=sys.stderr)
+            return 1
+        title = clients.CLIENTS[args.client][0]
+        if res["method"] == "cli":
+            print(f"Registered {title} via: {' '.join(res['command'])}")
+        elif res["written"]:
+            bak = f" (backup: {res['backup']})" if res["backup"] else ""
+            print(f"Registered {title} in {res['path']}{bak}")
+        else:
+            print(f"{title} already up to date in {res['path']}")
+        return 0
     names = [args.client] if args.client else list(clients.CLIENTS)
     for name in names:
-        where, text = clients.snippet(name, args.source, not args.no_audio)
+        where, text = clients.snippet(
+            name, args.source, not args.no_audio, transport=transport, url=url
+        )
         print(f"# {clients.CLIENTS[name][0]}: {where}\n{text}\n")
     return 0
 
 
 def _setup(args: argparse.Namespace) -> int:
-    from fl_mcp import clients, desk, install, paths
+    from fl_mcp import clients, desk, install, paths, service_daemon
     from fl_mcp.bridge import Bridge, FLError, match_port
 
+    transport = getattr(args, "transport", "stdio") or "stdio"
+    url = getattr(args, "url", None)
     steps = []
     root = paths.fl_user_dir() if not args.fl_dir else args.fl_dir
     try:
@@ -226,8 +291,34 @@ def _setup(args: argparse.Namespace) -> int:
     except Exception as exc:
         steps.append(("midi port", False, f"MIDI backend: {exc}"))
     if args.desktop:
-        desk.set_enabled(True)
-        steps.append(("desktop", True, "on: the model may see and press FL's screen"))
+        desk.set_enabled(args.desktop)
+        steps.append(("desktop", True, f"{desk.mode()}: non-intrusive desktop control enabled"))
+    if getattr(args, "service", False):
+        try:
+            svc = service_daemon.start_daemon()
+            url = url or svc["mcp_url"]
+            steps.append(
+                ("service", True, f"background daemon ready ({svc['url']}, {svc['mcp_url']})")
+            )
+        except Exception as exc:
+            steps.append(("service", False, str(exc)))
+    wrote_client = False
+    if getattr(args, "write", False):
+        try:
+            res = clients.install_client(
+                args.client,
+                args.source,
+                not getattr(args, "no_audio", False),
+                transport=transport,
+                url=url,
+            )
+            where_txt = res.get("path") or " ".join(res.get("command", ()))
+            steps.append(
+                ("client", True, f"registered {clients.CLIENTS[args.client][0]} ({where_txt})")
+            )
+            wrote_client = True
+        except (OSError, ValueError, RuntimeError) as exc:
+            steps.append(("client", False, str(exc)))
     for name, ok, text in steps:
         print(f"[{'ok' if ok else '!!'}] {name:<10} {text}")
     print(
@@ -235,8 +326,15 @@ def _setup(args: argparse.Namespace) -> int:
         "controller type to 'FL MCP' and enable it; under Output select the same port and give it "
         "the same port number. Then:\n"
     )
-    where, text = clients.snippet(args.client, args.source, True)
-    print(f"Register with {clients.CLIENTS[args.client][0]} ({where}):\n{text}\n")
+    where, text = clients.snippet(
+        args.client,
+        args.source,
+        not getattr(args, "no_audio", False),
+        transport=transport,
+        url=url,
+    )
+    if not wrote_client:
+        print(f"Register with {clients.CLIENTS[args.client][0]} ({where}):\n{text}\n")
     try:
         Bridge().call({"o": "ping"})
         print("FL Studio answers. Run `fl-mcp selftest` to check every feature.")
@@ -246,6 +344,91 @@ def _setup(args: argparse.Namespace) -> int:
             f"FL Studio does not answer yet: {exc}\nFinish the steps above, then `fl-mcp doctor`."
         )
         return 1
+
+
+def _service(args: argparse.Namespace) -> int:
+    import webbrowser
+
+    from fl_mcp import service_daemon
+
+    action = args.action
+    if action == "run":
+        return service_daemon.run_foreground(
+            host=args.host,
+            port=args.port,
+            poll=not args.no_poll,
+            poll_interval=args.poll_interval,
+        )
+    if action == "start":
+        try:
+            st = service_daemon.start_daemon(
+                host=args.host,
+                port=args.port,
+                poll=not args.no_poll,
+                poll_interval=args.poll_interval,
+            )
+        except Exception as exc:
+            print(exc, file=sys.stderr)
+            return 1
+        tag = "already running" if st.get("already_running") else "started"
+        print(f"service {tag} (pid={st['pid']}) | UI: {st['url']} | MCP: {st['mcp_url']}")
+        if getattr(args, "open", False):
+            webbrowser.open(st["url"])
+        return 0
+    if action == "restart":
+        try:
+            st = service_daemon.restart_daemon(
+                host=args.host,
+                port=args.port,
+                poll=not args.no_poll,
+                poll_interval=args.poll_interval,
+            )
+        except Exception as exc:
+            print(exc, file=sys.stderr)
+            return 1
+        print(f"service restarted (pid={st['pid']}) | UI: {st['url']} | MCP: {st['mcp_url']}")
+        return 0
+    if action == "stop":
+        res = service_daemon.stop_daemon()
+        if not res["was_running"]:
+            print("service is not running")
+        elif res["stopped"]:
+            print(f"service stopped (pid={res['pid']})")
+        else:
+            print(f"failed to stop service pid={res['pid']}", file=sys.stderr)
+            return 1
+        return 0
+    if action == "status":
+        st = service_daemon.service_status()
+        if getattr(args, "json", False):
+            print(json.dumps(st, indent=2, ensure_ascii=False))
+        elif st["running"]:
+            auto = "on" if st["autostart"]["enabled"] else "off"
+            print(
+                f"service: running (pid={st['pid']}) | UI: {st['url']} | "
+                f"MCP: {st['mcp_url']} | autostart: {auto} | log: {st['log_path']}"
+            )
+        else:
+            auto = "on" if st["autostart"]["enabled"] else "off"
+            print(f"service: stopped | autostart: {auto} | log: {st['log_path']}")
+        return 0
+    if action == "logs":
+        txt = service_daemon.read_logs(lines=getattr(args, "lines", 40))
+        print(txt or "(no service log yet)")
+        return 0
+    if action == "autostart":
+        mode = getattr(args, "mode", None) or "status"
+        if mode == "enable":
+            res = service_daemon.enable_autostart(port=args.port, poll=not args.no_poll)
+            print(f"autostart enabled ({res['backend']})")
+        elif mode == "disable":
+            res = service_daemon.disable_autostart()
+            print(f"autostart disabled ({res['backend']})")
+        else:
+            res = service_daemon.autostart_status()
+            print(json.dumps(res, indent=2, ensure_ascii=False))
+        return 0
+    return 2
 
 
 def _licence(args: argparse.Namespace) -> int:
@@ -280,7 +463,12 @@ def clients_names() -> list[str]:
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="fl-mcp", description="MCP server for FL Studio.")
     sub = parser.add_subparsers(dest="cmd")
-    sub.add_parser("serve", help="run the MCP server on stdio (default)")
+    serve_p = sub.add_parser("serve", help="run the MCP server (stdio default, or http/sse)")
+    serve_p.add_argument(
+        "--transport", choices=["stdio", "streamable-http", "sse"], default="stdio"
+    )
+    serve_p.add_argument("--host", default="127.0.0.1")
+    serve_p.add_argument("--port", type=int, default=8765)
     inst = sub.add_parser("install", help="copy the scripts into FL Studio's user data folder")
     inst.add_argument("--fl-dir", help="FL Studio user data folder (contains Settings)")
     inst.add_argument("--notes-dir", help="folder shared with the piano roll script")
@@ -304,17 +492,76 @@ def main(argv: list[str] | None = None) -> None:
     desktop = sub.add_parser(
         "desktop", help="let the model see and drive FL silently (stealth/polite/foreground)"
     )
-    desktop.add_argument("action", choices=["on", "off", "stealth", "polite", "foreground", "test"])
-    conf = sub.add_parser("config", help="print the text that registers this server with a client")
+    desktop.add_argument(
+        "action", choices=["on", "off", "stealth", "polite", "foreground", "status", "test"]
+    )
+    conf = sub.add_parser(
+        "config", help="print or write the config that registers this server with a client"
+    )
     conf.add_argument("client", nargs="?", choices=sorted(clients_names()))
     conf.add_argument("--source", choices=["pypi", "git", "local"], default="pypi")
     conf.add_argument("--no-audio", action="store_true", help="leave out the audio extra")
+    conf.add_argument(
+        "--write", action="store_true", help="write the registration directly to the client config"
+    )
+    conf.add_argument(
+        "--project", help="project folder for workspace-scoped clients (cursor, vscode)"
+    )
+    conf.add_argument(
+        "--transport",
+        choices=["stdio", "http"],
+        default="stdio",
+        help="stdio (default) or background http service",
+    )
+    conf.add_argument("--url", help="HTTP MCP endpoint URL (default: http://127.0.0.1:8765/mcp)")
+    conf.add_argument(
+        "--status", action="store_true", help="check existing AI client registrations"
+    )
     setup = sub.add_parser("setup", help="install the scripts, check MIDI and show what is left")
     setup.add_argument("--fl-dir", help="FL Studio user data folder (contains Settings)")
     setup.add_argument("--notes-dir", help="folder shared with the piano roll script")
     setup.add_argument("--client", choices=sorted(clients_names()), default="claude-desktop")
     setup.add_argument("--source", choices=["pypi", "git", "local"], default="pypi")
-    setup.add_argument("--desktop", action="store_true", help="also turn desktop control on")
+    setup.add_argument("--no-audio", action="store_true", help="leave out the audio extra")
+    setup.add_argument(
+        "--transport", choices=["stdio", "http"], default="stdio", help="client transport mode"
+    )
+    setup.add_argument("--url", help="HTTP MCP endpoint URL when using --transport http")
+    setup.add_argument(
+        "--service",
+        action="store_true",
+        help="start the detached background Studio UI + HTTP MCP daemon",
+    )
+    setup.add_argument(
+        "--write",
+        action="store_true",
+        help="write the MCP registration directly to --client config",
+    )
+    setup.add_argument(
+        "--desktop",
+        nargs="?",
+        const="polite",
+        choices=["stealth", "polite", "foreground"],
+        help="also enable desktop control (default mode: polite)",
+    )
+    svc = sub.add_parser(
+        "service", help="manage persistent background daemon (Studio UI + HTTP/SSE MCP + poller)"
+    )
+    svc.add_argument(
+        "action", choices=["start", "stop", "restart", "status", "logs", "run", "autostart"]
+    )
+    svc.add_argument(
+        "mode", nargs="?", choices=["enable", "disable", "status"], help="autostart mode"
+    )
+    svc.add_argument("--host", default="127.0.0.1")
+    svc.add_argument("--port", type=int, default=8765)
+    svc.add_argument("--poll-interval", type=float, default=5.0)
+    svc.add_argument(
+        "--no-poll", action="store_true", help="disable automatic background FL polling"
+    )
+    svc.add_argument("--open", action="store_true", help="open Studio UI after starting service")
+    svc.add_argument("--json", action="store_true", help="output JSON for status")
+    svc.add_argument("--lines", type=int, default=40, help="log tail lines")
     dash = sub.add_parser("dashboard", help="open live web studio visualizer & traffic monitor")
     dash.add_argument("--port", type=int, default=8765, help="HTTP port on 127.0.0.1 (0 = random)")
     dash.add_argument("--no-open", action="store_true", help="do not launch browser automatically")
@@ -361,8 +608,17 @@ def main(argv: list[str] | None = None) -> None:
         raise SystemExit(_traffic(args))
     elif args.cmd == "templates":
         raise SystemExit(_templates(args))
+    elif args.cmd == "service":
+        raise SystemExit(_service(args))
     elif args.cmd in ("login", "logout", "account"):
         raise SystemExit(_licence(args))
+    elif args.cmd == "serve":
+        from fl_mcp.server import mcp, serve
+
+        if args.transport == "stdio":
+            serve()
+        else:
+            mcp.run(transport=args.transport, host=args.host, port=args.port)
     else:
         from fl_mcp.server import serve
 

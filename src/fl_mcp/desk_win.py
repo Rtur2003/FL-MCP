@@ -190,11 +190,20 @@ class WindowsBackend(Backend):
     def _dpi_aware(user32: Any) -> None:
         ws = dt = None
         H, B, DWORD = ctypes.c_void_p, ctypes.c_int, ctypes.c_uint32  # noqa: N806
+
+        def opt_bind(name: str, restype: Any, *argtypes: Any) -> Any:
+            fn = getattr(user32, name)
+            try:
+                fn.restype, fn.argtypes = restype, list(argtypes)
+            except AttributeError:
+                pass
+            return fn
+
         try:
-            open_ws = _bind(user32, "OpenWindowStationW", H, ctypes.c_wchar_p, B, DWORD)
-            set_ws = _bind(user32, "SetProcessWindowStation", B, H)
-            open_dt = _bind(user32, "OpenDesktopW", H, ctypes.c_wchar_p, DWORD, B, DWORD)
-            set_dt = _bind(user32, "SetThreadDesktop", B, H)
+            open_ws = opt_bind("OpenWindowStationW", H, ctypes.c_wchar_p, B, DWORD)
+            set_ws = opt_bind("SetProcessWindowStation", B, H)
+            open_dt = opt_bind("OpenDesktopW", H, ctypes.c_wchar_p, DWORD, B, DWORD)
+            set_dt = opt_bind("SetThreadDesktop", B, H)
             ws = open_ws("winsta0", False, 0x037F)
             if ws:
                 set_ws(ws)
@@ -207,7 +216,7 @@ class WindowsBackend(Backend):
             for val, fn_name in ((dt, "CloseDesktop"), (ws, "CloseWindowStation")):
                 if val:
                     try:
-                        _bind(user32, fn_name, B, H)(val)
+                        opt_bind(fn_name, B, H)(val)
                     except Exception:
                         pass
         # physical pixels everywhere, so screenshots and click coordinates are the same space
