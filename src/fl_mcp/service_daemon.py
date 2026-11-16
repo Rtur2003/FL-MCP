@@ -179,6 +179,13 @@ def _pythonw_executable() -> str:
     return str(exe)
 
 
+def _base_cli_command() -> list[str]:
+    """Return launcher prefix that invokes the CLI safely in Python or frozen app mode."""
+    if getattr(sys, "frozen", False):
+        return [sys.executable, "--cli"]
+    return [_pythonw_executable(), "-m", "fl_mcp"]
+
+
 def _detached_popen_kwargs() -> dict[str, Any]:
     if sys.platform == "win32":
         return {
@@ -351,6 +358,16 @@ def create_asgi_app(
             loaded[0], media_type=loaded[1], headers={"Cache-Control": "public, max-age=3600"}
         )
 
+    async def webmanifest(_request: Request) -> Response:
+        from fl_mcp import app as studio_app
+
+        body = json.dumps(studio_app.app_manifest(), ensure_ascii=False).encode("utf-8")
+        return Response(
+            body,
+            media_type="application/manifest+json",
+            headers={"Cache-Control": "public, max-age=3600"},
+        )
+
     async def api_state(request: Request) -> JSONResponse:
         refresh = request.query_params.get("refresh_templates") == "1"
         state = dashboard.build_state(refresh_templates=refresh)
@@ -401,6 +418,7 @@ def create_asgi_app(
         Route("/", index, methods=["GET"]),
         Route("/favicon.ico", favicon, methods=["GET"]),
         Route("/favicon.png", favicon, methods=["GET"]),
+        Route("/manifest.webmanifest", webmanifest, methods=["GET"]),
         Route("/assets/{name:str}", asset, methods=["GET"]),
         Route("/api/state", api_state, methods=["GET"]),
         Route("/api/doctor", api_doctor, methods=["GET"]),
@@ -526,9 +544,7 @@ def start_daemon(
     lf = log_path()
     _rotate_log(lf)
     argv = [
-        _pythonw_executable(),
-        "-m",
-        "fl_mcp",
+        *_base_cli_command(),
         "service",
         "run",
         "--host",
@@ -613,7 +629,7 @@ def read_logs(lines: int = 40) -> str:
 
 
 def _autostart_command(port: int = DEFAULT_PORT, poll: bool = True) -> list[str]:
-    argv = [_pythonw_executable(), "-m", "fl_mcp", "service", "run", "--port", str(port)]
+    argv = [*_base_cli_command(), "service", "run", "--port", str(port)]
     if not poll:
         argv.append("--no-poll")
     return argv

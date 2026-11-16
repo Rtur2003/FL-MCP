@@ -7,6 +7,8 @@ MIME_TYPES = {
     ".svg": "image/svg+xml",
     ".webp": "image/webp",
     ".ico": "image/x-icon",
+    ".icns": "image/x-icns",
+    ".webmanifest": "application/manifest+json",
 }
 
 
