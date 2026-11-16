@@ -5,50 +5,48 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
-  <title>FL-MCP Studio — Pro-Audio DAW Bridge &amp; Telemetry Console</title>
-  <meta name="theme-color" content="#080b10">
+  <title>FL-MCP Studio</title>
+  <meta name="theme-color" content="#141518">
   <link rel="manifest" href="/manifest.webmanifest">
-  <link rel="icon" type="image/x-icon" href="/assets/icon.ico?v=2">
-  <link rel="icon" type="image/png" href="/assets/favicon.png?v=2">
-  <link rel="preload" as="image" href="/assets/icon-128.png?v=2" fetchpriority="high">
+  <link rel="icon" type="image/x-icon" href="/assets/icon.ico?v=3">
+  <link rel="icon" type="image/png" href="/assets/favicon.png?v=3">
+  <link rel="preload" as="image" href="/assets/icon-128.png?v=3" fetchpriority="high">
   <style>
+    /* 1. Design Tokens — Neutral Dark Graphite & Calibrated Broadcast Accents */
     :root {
       color-scheme: dark;
-      --bg: #080b10;
-      --bg-elev: #0d121b;
-      --bg-panel: #121824;
-      --panel: #121824;
-      --panel-alt: #182030;
-      --lcd-bg: #06080d;
-      --border: #222c3f;
-      --border-strong: #33425d;
-      --spec-top: rgba(255, 255, 255, 0.06);
-      --text: #eef3fc;
-      --muted: #8c9cb8;
+      --bg: #141518;
+      --bg-bar: #181a1e;
+      --panel: #1c1e22;
+      --panel-hi: #23262b;
+      --well: #0e1013;
+      --border: #2a2d34;
+      --border-strong: #383c45;
+      --spec: rgba(255, 255, 255, 0.05);
+      --text: #e8ecf2;
+      --muted: #8e949f;
+      --dim: #5e6470;
       --accent: #ff7a2f;
       --accent-soft: #ff9e5e;
-      --accent-2: #2bd4b5;
-      --accent-tint: rgba(255, 122, 47, 0.14);
-      --green: #3ddc97;
-      --red: #ff5c6c;
-      --bad: #ff5c6c;
-      --amber: #f5b942;
-      --warn: #f5b942;
-      --cyan: #2bd4b5;
-      --violet: #a78bfa;
-      --radius: 6px;
-      --shadow: 0 8px 24px rgba(0, 0, 0, 0.45), inset 0 1px 0 var(--spec-top);
+      --green: #65c466;
+      --amber: #e5a024;
+      --red: #e5484d;
+      --bad: #e5484d;
+      --warn: #e5a024;
+      --steel: #9da5b4;
+      --radius: 4px;
       --mono: "JetBrains Mono", "Cascadia Mono", Consolas, "SFMono-Regular", monospace;
-      --scrollbar-track: #090d14;
-      --scrollbar-thumb: #33425d;
+      --sans: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
+      --scrollbar-track: #121316;
+      --scrollbar-thumb: #32363e;
       scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
-      font-family: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
+      font-family: var(--sans);
     }
 
     @supports not (scrollbar-color: auto) {
       ::-webkit-scrollbar {
-        width: 10px;
-        height: 10px;
+        width: 8px;
+        height: 8px;
       }
 
       ::-webkit-scrollbar-track {
@@ -57,10 +55,11 @@
 
       ::-webkit-scrollbar-thumb {
         background: var(--scrollbar-thumb);
-        border-radius: 4px;
+        border-radius: 3px;
       }
     }
 
+    /* 2. Reset & Accessibility Utilities */
     * {
       box-sizing: border-box;
     }
@@ -71,13 +70,29 @@
       padding: 0;
       background: var(--bg);
       color: var(--text);
-      min-height: 100%;
+      height: 100%;
       overscroll-behavior: none;
     }
 
+    body {
+      display: grid;
+      grid-template-rows: auto auto 1fr 24px;
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    @media (max-width: 960px) {
+      body {
+        height: auto;
+        min-height: 100vh;
+        overflow: auto;
+      }
+    }
+
     .studio-header,
+    .telemetry-strip,
     .tabs,
-    .kpi .lbl,
+    .status-bar,
     button,
     .strip {
       user-select: none;
@@ -98,167 +113,299 @@
 
     .skip-link:focus-visible {
       position: fixed;
-      top: 10px;
-      left: 10px;
+      top: 8px;
+      left: 8px;
       z-index: 100;
       background: var(--accent);
-      color: #080b10;
+      color: #0e1013;
       font-weight: 700;
-      padding: 8px 14px;
-      border-radius: 5px;
+      padding: 6px 12px;
+      border-radius: var(--radius);
       text-decoration: none;
     }
 
     :where(button, [role="tab"], input, select, a):focus-visible {
       outline: 2px solid var(--accent-soft);
-      outline-offset: 2px;
+      outline-offset: 1px;
     }
 
-    /* Hardware Rack Header Shell */
+    /* 3. Top Application Toolbar & Transport Bar */
     .studio-header {
       position: relative;
-      overflow: hidden;
-      border-bottom: 1px solid var(--border-strong);
-      background: var(--bg-elev);
-      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.55);
+      background: var(--bg-bar);
+      border-bottom: 1px solid var(--border);
+      padding: 6px 12px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      flex-wrap: wrap;
+      z-index: 2;
     }
 
     .hero-backdrop {
       position: absolute;
       inset: 0;
       pointer-events: none;
-      z-index: 0;
+      z-index: -1;
+      overflow: hidden;
     }
 
     .hero-backdrop img {
       width: 100%;
       height: 100%;
       object-fit: cover;
-      object-position: center center;
-      opacity: 0.34;
+      opacity: 0.18;
       display: block;
     }
 
-    .hero-backdrop::after {
-      content: "";
-      position: absolute;
-      inset: 0;
-      background:
-        linear-gradient(90deg, rgba(8, 11, 16, 0.92) 0%, rgba(8, 11, 16, 0.55) 45%, rgba(8, 11, 16, 0.88) 100%),
-        linear-gradient(180deg, rgba(8, 11, 16, 0.30) 0%, rgba(8, 11, 16, 0.88) 100%);
-    }
-
-    .header-inner {
-      position: relative;
-      z-index: 1;
-      max-width: 1480px;
-      margin: 0 auto;
-      padding: 12px 20px;
+    .brand-cluster {
       display: flex;
-      flex-wrap: wrap;
       align-items: center;
-      justify-content: space-between;
       gap: 12px;
+      flex-wrap: wrap;
     }
 
     .brand {
       display: flex;
       align-items: center;
-      gap: 12px;
+      gap: 8px;
+      padding-right: 10px;
+      border-right: 1px solid var(--border);
     }
 
     .brand-emblem {
-      width: 44px;
-      height: 44px;
-      aspect-ratio: 1 / 1;
-      border-radius: 10px;
+      width: 28px;
+      height: 28px;
+      border-radius: 6px;
       border: 1px solid var(--border-strong);
-      background: #0a0d14;
-      box-shadow: 0 3px 12px rgba(0, 0, 0, 0.65);
+      background: var(--well);
       display: block;
       flex: none;
     }
 
-    .brand-title-row {
+    .brand h1 {
+      margin: 0;
+      font-size: 0.82rem;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--text);
+    }
+
+    /* View Switcher Tabs in Top Bar */
+    .tabs {
+      display: inline-flex;
+      gap: 2px;
+      background: var(--well);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 2px;
+    }
+
+    .tab {
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: 3px;
+      color: var(--muted);
+      font-family: var(--sans);
+      font-size: 0.73rem;
+      font-weight: 600;
+      padding: 4px 10px;
+      min-block-size: 26px;
+      box-shadow: none;
+    }
+
+    .tab:hover {
+      color: var(--text);
+      background: rgba(255, 255, 255, 0.03);
+      border-color: transparent;
+    }
+
+    .tab[aria-selected="true"] {
+      color: var(--text);
+      background: var(--panel-hi);
+      border-color: var(--border-strong);
+      box-shadow: inset 0 2px 0 var(--accent);
+    }
+
+    /* Transport Cluster */
+    .transport-dock {
       display: flex;
       align-items: center;
       gap: 8px;
+      flex-wrap: wrap;
     }
 
-    .brand h1 {
-      margin: 0;
-      font-size: 0.98rem;
-      font-weight: 800;
-      letter-spacing: 0.04em;
-      text-transform: uppercase;
-      line-height: 1.15;
+    .transport-group {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      background: var(--well);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 2px;
     }
 
-    .hw-tag {
-      font-family: var(--mono);
-      font-size: 0.64rem;
-      font-weight: 700;
-      letter-spacing: 0.06em;
-      padding: 2px 6px;
+    .tr-switch {
+      position: relative;
+      min-block-size: 26px;
+      padding: 4px 8px;
       border-radius: 3px;
-      background: rgba(255, 122, 47, 0.16);
-      border: 1px solid rgba(255, 122, 47, 0.42);
-      color: var(--accent-soft);
+      border: 1px solid transparent;
+      background: var(--panel);
+      font-family: var(--mono);
+      font-size: 0.68rem;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      box-shadow: none;
     }
 
-    .brand-sub {
-      margin: 3px 0 0;
-      font-family: var(--mono);
-      font-size: 0.72rem;
-      color: var(--muted);
+    .tr-switch:hover {
+      background: var(--panel-hi);
+      border-color: var(--border-strong);
+    }
+
+    .tr-switch[aria-pressed="true"] {
+      border-color: var(--amber);
+      color: var(--amber);
+      background: rgba(229, 160, 36, 0.12);
+    }
+
+    #trRecBtn[aria-pressed="true"] {
+      border-color: var(--red);
+      color: #ff8b8e;
+      background: rgba(229, 72, 77, 0.14);
+    }
+
+    .lcd-box {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: var(--well);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 2px 6px;
     }
 
     .header-right {
       display: flex;
       align-items: center;
-      gap: 7px;
+      gap: 6px;
       flex-wrap: wrap;
     }
 
-    /* Recessed Hardware Status Indicators */
+    /* Controls, Inputs & Status Pills */
+    button,
+    select,
+    input[type="text"],
+    input[type="search"] {
+      font-family: inherit;
+      font-size: 0.74rem;
+      font-weight: 600;
+      min-block-size: 28px;
+      padding: 4px 10px;
+      border-radius: var(--radius);
+      border: 1px solid var(--border-strong);
+      background: var(--panel);
+      color: var(--text);
+      box-shadow: inset 0 1px 0 var(--spec);
+      transition: background-color 0.1s ease, border-color 0.1s ease;
+    }
+
+    input[type="text"],
+    input[type="search"] {
+      background: var(--well);
+      font-family: var(--mono);
+      font-weight: 500;
+      box-shadow: none;
+    }
+
+    input[type="search"] {
+      flex: 0 1 240px;
+      min-width: 190px;
+    }
+
+    button,
+    select {
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+    }
+
+    button:hover,
+    select:hover {
+      background: var(--panel-hi);
+      border-color: #4a4f5a;
+    }
+
+    button.primary {
+      background: var(--accent);
+      border-color: #ff9254;
+      color: #0e1013;
+      font-weight: 700;
+      box-shadow: none;
+    }
+
+    button.primary:hover {
+      background: #ff8844;
+    }
+
+    button.danger {
+      color: #ff9ea1;
+      border-color: rgba(229, 72, 77, 0.45);
+    }
+
+    button.compact {
+      min-block-size: 24px;
+      padding: 2px 7px;
+      font-size: 0.68rem;
+      border-radius: 3px;
+    }
+
+    button svg {
+      width: 12px;
+      height: 12px;
+      flex: none;
+    }
+
     .pill {
       display: inline-flex;
       align-items: center;
-      gap: 7px;
-      min-block-size: 30px;
-      padding: 4px 10px;
-      border-radius: 4px;
+      gap: 6px;
+      min-block-size: 26px;
+      padding: 3px 8px;
+      border-radius: 3px;
       font-family: var(--mono);
-      font-size: 0.72rem;
+      font-size: 0.69rem;
       font-weight: 600;
-      border: 1px solid var(--border-strong);
-      background: var(--lcd-bg);
-      box-shadow: inset 0 1px 4px rgba(0, 0, 0, 0.75);
-      color: var(--text);
+      border: 1px solid var(--border);
+      background: var(--well);
+      color: var(--muted);
     }
 
     .pill.ok {
-      border-color: rgba(61, 220, 151, 0.45);
-      color: #8af0bf;
+      border-color: rgba(101, 196, 102, 0.38);
+      color: #98e099;
     }
 
     .pill.warn {
-      border-color: rgba(245, 185, 66, 0.45);
-      color: #fbd27b;
+      border-color: rgba(229, 160, 36, 0.38);
+      color: #f3c66f;
     }
 
     .pill.bad {
-      border-color: rgba(255, 92, 108, 0.45);
-      color: #ffa6b0;
+      border-color: rgba(229, 72, 77, 0.42);
+      color: #ff9ea1;
     }
 
     .state-glyph {
-      width: 7px;
-      height: 7px;
+      width: 6px;
+      height: 6px;
       border-radius: 50%;
       flex: none;
       background: currentColor;
-      box-shadow: 0 0 6px currentColor;
     }
 
     .pill.bad .state-glyph {
@@ -270,283 +417,81 @@
       border-radius: 1px;
     }
 
-    /* Hardware Buttons & Form Controls */
-    button,
-    select,
-    input[type="text"],
-    input[type="search"] {
-      font-family: inherit;
-      font-size: 0.76rem;
-      font-weight: 600;
-      min-block-size: 32px;
-      padding: 5px 11px;
-      border-radius: 5px;
-      border: 1px solid var(--border-strong);
-      background: linear-gradient(180deg, #1b2334 0%, #131926 100%);
-      color: var(--text);
-      box-shadow: inset 0 1px 0 var(--spec-top), 0 1px 2px rgba(0, 0, 0, 0.35);
-      transition: background 0.1s ease, border-color 0.1s ease, transform 0.06s ease;
-    }
-
-    input[type="text"],
-    input[type="search"] {
-      background: var(--lcd-bg);
-      font-family: var(--mono);
-      font-weight: 500;
-      box-shadow: inset 0 1px 4px rgba(0, 0, 0, 0.75);
-    }
-
-    input[type="search"] {
-      flex: 0 1 260px;
-      min-width: 220px;
-    }
-
-    button,
-    select {
-      cursor: pointer;
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-    }
-
-    button:hover,
-    select:hover {
-      background: linear-gradient(180deg, #222c40 0%, #171f2f 100%);
-      border-color: #4b5d7e;
-    }
-
-    button:active {
-      transform: translateY(1px);
-    }
-
-    button.primary {
-      background: linear-gradient(180deg, #ff8842 0%, #e8661c 100%);
-      border-color: #ffa26b;
-      color: #080b10;
-      font-weight: 700;
-      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.28), 0 2px 8px rgba(255, 122, 47, 0.25);
-    }
-
-    button.primary:hover {
-      background: linear-gradient(180deg, #ff9657 0%, #f57228 100%);
-    }
-
-    button.danger {
-      color: #ffb3bc;
-      border-color: rgba(255, 92, 108, 0.45);
-    }
-
-    button.compact {
-      min-block-size: 26px;
-      padding: 3px 8px;
-      font-size: 0.70rem;
-      border-radius: 4px;
-    }
-
-    button svg {
-      width: 13px;
-      height: 13px;
-      flex: none;
-    }
-
-    .workspace {
-      max-width: 1480px;
-      margin: 0 auto;
-      padding: 14px 20px 40px;
-    }
-
-    /* Master DAW Transport & LCD Deck */
-    .transport-dock {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-      flex-wrap: wrap;
-      background: linear-gradient(180deg, #141b28 0%, #0e131d 100%);
-      border: 1px solid var(--border-strong);
-      border-radius: var(--radius);
-      padding: 8px 12px;
-      margin-bottom: 14px;
-      box-shadow: var(--shadow);
-    }
-
-    .transport-group {
-      display: flex;
-      align-items: center;
-      gap: 5px;
-      flex-wrap: wrap;
-    }
-
-    .tr-switch {
-      position: relative;
-      min-inline-size: 54px;
-      justify-content: center;
-      padding-top: 8px;
-      font-family: var(--mono);
-      font-size: 0.70rem;
-      letter-spacing: 0.04em;
-      text-transform: uppercase;
-    }
-
-    .tr-switch::before {
-      content: "";
-      position: absolute;
-      top: 3px;
-      left: 50%;
-      transform: translateX(-50%);
-      width: 14px;
-      height: 2px;
-      border-radius: 1px;
-      background: #2b364b;
-    }
-
-    .tr-switch.primary::before {
-      background: #080b10;
-      opacity: 0.55;
-    }
-
-    .tr-switch[aria-pressed="true"] {
-      border-color: var(--accent-soft);
-      color: var(--accent-soft);
-    }
-
-    .tr-switch[aria-pressed="true"]::before {
-      background: var(--accent);
-      box-shadow: 0 0 6px var(--accent);
-    }
-
-    #trRecBtn[aria-pressed="true"] {
-      border-color: var(--red);
-      color: #ffa6b0;
-    }
-
-    #trRecBtn[aria-pressed="true"]::before {
-      background: var(--red);
-      box-shadow: 0 0 6px var(--red);
-    }
-
-    .lcd-box {
-      display: inline-flex;
-      align-items: center;
-      gap: 10px;
-      background: var(--lcd-bg);
-      border: 1px solid var(--border-strong);
-      border-radius: 4px;
-      padding: 4px 10px;
-      box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.85);
-    }
-
-    .action-toast {
-      font-size: 0.73rem;
-      color: var(--cyan);
-      font-family: var(--mono);
-      background: var(--lcd-bg);
-      border: 1px solid var(--border);
-      border-radius: 4px;
-      padding: 5px 10px;
-      min-width: 170px;
-      text-align: right;
-      box-shadow: inset 0 1px 4px rgba(0, 0, 0, 0.75);
-    }
-
-    /* 5-Module Hardware Telemetry Readout Rack */
-    .kpi-grid {
+    /* 4. Compact Horizontal Telemetry Strip */
+    .telemetry-strip {
+      background: var(--well);
+      border-bottom: 1px solid var(--border);
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(185px, 1fr));
-      gap: 10px;
-      margin-bottom: 14px;
+      grid-template-columns: repeat(5, minmax(140px, 1fr)) auto;
+      align-items: center;
+    }
+
+    @media (max-width: 1024px) {
+      .telemetry-strip {
+        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      }
     }
 
     .kpi {
-      position: relative;
-      background: linear-gradient(180deg, #141b28 0%, #0f141f 100%);
-      border: 1px solid var(--border);
-      border-left: 3px solid var(--accent);
-      border-radius: var(--radius);
-      padding: 10px 14px;
-      box-shadow: inset 0 1px 0 var(--spec-top);
-    }
-
-    .kpi:nth-child(2),
-    .kpi:nth-child(3) {
-      border-left-color: var(--cyan);
-    }
-
-    .kpi:nth-child(4) {
-      border-left-color: var(--violet);
-    }
-
-    .kpi:nth-child(5) {
-      border-left-color: var(--green);
+      padding: 5px 12px;
+      border-right: 1px solid var(--border);
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 8px;
+      min-width: 0;
     }
 
     .kpi .lbl {
       font-family: var(--mono);
-      font-size: 0.66rem;
-      font-weight: 700;
-      color: var(--muted);
+      font-size: 0.63rem;
+      font-weight: 600;
+      color: var(--dim);
       text-transform: uppercase;
-      letter-spacing: 0.08em;
+      letter-spacing: 0.05em;
+      white-space: nowrap;
+    }
+
+    .kpi-readout {
+      display: flex;
+      align-items: baseline;
+      gap: 6px;
+      min-width: 0;
+      overflow: hidden;
     }
 
     .kpi .val {
       font-family: var(--mono);
-      font-size: 1.24rem;
+      font-size: 0.80rem;
       font-weight: 700;
-      margin-top: 4px;
       font-variant-numeric: tabular-nums;
       color: var(--text);
+      white-space: nowrap;
     }
 
     .kpi .sub {
       font-family: var(--mono);
-      font-size: 0.70rem;
+      font-size: 0.67rem;
       color: var(--muted);
-      margin-top: 3px;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
     }
 
-    /* Recessed Console Bank Selector Tabs */
-    .tabs {
-      display: inline-flex;
-      gap: 4px;
-      background: var(--lcd-bg);
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      padding: 4px;
-      margin-bottom: 14px;
-      flex-wrap: wrap;
-      box-shadow: inset 0 2px 5px rgba(0, 0, 0, 0.75);
-    }
-
-    .tab {
-      background: transparent;
-      border: 1px solid transparent;
-      border-radius: 4px;
-      color: var(--muted);
+    .action-toast {
+      padding: 5px 12px;
       font-family: var(--mono);
-      font-size: 0.75rem;
-      font-weight: 700;
-      letter-spacing: 0.03em;
-      text-transform: uppercase;
-      padding: 6px 13px;
-      min-block-size: 32px;
-      box-shadow: none;
+      font-size: 0.70rem;
+      color: var(--accent-soft);
+      white-space: nowrap;
+      text-align: right;
     }
 
-    .tab:hover {
-      color: var(--text);
-      background: rgba(255, 255, 255, 0.04);
-      border-color: transparent;
-    }
-
-    .tab[aria-selected="true"] {
-      color: var(--text);
-      background: linear-gradient(180deg, #1d2638 0%, #141b28 100%);
-      border-color: var(--border-strong);
-      box-shadow: inset 0 2px 0 var(--accent), 0 1px 4px rgba(0, 0, 0, 0.5);
+    /* 5. Docked Workspace & Panels */
+    .workspace {
+      padding: 10px 12px;
+      overflow: auto;
+      min-height: 0;
     }
 
     .panel-section[hidden] {
@@ -554,6 +499,7 @@
     }
 
     .panel-section {
+      height: 100%;
       content-visibility: auto;
       contain-intrinsic-size: auto 440px;
     }
@@ -566,14 +512,15 @@
 
     .grid-2 {
       display: grid;
-      grid-template-columns: 1.32fr 1fr;
-      gap: 14px;
+      grid-template-columns: 1.3fr 1fr;
+      gap: 10px;
+      height: 100%;
     }
 
     .grid-equal {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 14px;
+      gap: 10px;
     }
 
     @media (max-width: 960px) {
@@ -581,42 +528,45 @@
       .grid-2,
       .grid-equal {
         grid-template-columns: 1fr;
+        height: auto;
       }
     }
 
     .card {
-      background: linear-gradient(180deg, #131a27 0%, #0e141f 100%);
+      background: var(--panel);
       border: 1px solid var(--border);
       border-radius: var(--radius);
-      padding: 14px 16px;
+      padding: 10px 12px;
       min-width: 0;
-      box-shadow: var(--shadow);
+      display: flex;
+      flex-direction: column;
     }
 
     .card+.card {
-      margin-top: 14px;
+      margin-top: 10px;
     }
 
     .card h2 {
-      margin: 0 0 12px;
-      padding-bottom: 8px;
+      margin: 0 0 8px;
+      padding-bottom: 6px;
       border-bottom: 1px solid var(--border);
       font-family: var(--mono);
-      font-size: 0.76rem;
+      font-size: 0.71rem;
       font-weight: 700;
       text-transform: uppercase;
-      letter-spacing: 0.07em;
-      color: var(--text);
+      letter-spacing: 0.06em;
+      color: var(--steel);
       display: flex;
       justify-content: space-between;
       align-items: center;
-      gap: 10px;
+      gap: 8px;
       flex-wrap: wrap;
     }
 
-    .card h2 .meta-note {
+    .card h2 .meta-note,
+    .meta-note {
       font-family: var(--mono);
-      font-size: 0.71rem;
+      font-size: 0.68rem;
       color: var(--muted);
       text-transform: none;
       letter-spacing: 0;
@@ -625,164 +575,67 @@
 
     .toolbar {
       display: flex;
-      gap: 8px;
+      gap: 6px;
       flex-wrap: wrap;
       align-items: center;
-      margin-bottom: 12px;
+      margin-bottom: 8px;
     }
 
     .inline-form {
       display: flex;
       align-items: flex-end;
-      gap: 8px;
+      gap: 6px;
       flex-wrap: wrap;
-      margin-bottom: 12px;
-      background: rgba(6, 8, 13, 0.55);
+      margin-bottom: 8px;
+      background: var(--well);
       border: 1px solid var(--border);
-      border-radius: 5px;
-      padding: 8px 10px;
+      border-radius: var(--radius);
+      padding: 6px 8px;
     }
 
     .field-inline {
       display: flex;
       flex-direction: column;
-      gap: 4px;
+      gap: 3px;
     }
 
     .field-inline label {
       font-family: var(--mono);
-      font-size: 0.66rem;
-      font-weight: 700;
+      font-size: 0.62rem;
+      font-weight: 600;
       text-transform: uppercase;
-      letter-spacing: 0.05em;
+      letter-spacing: 0.04em;
       color: var(--muted);
     }
 
-    .client-path {
-      display: block;
-      max-width: 235px;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-
-    .table-wrap {
-      overflow-x: auto;
-      max-height: 500px;
-      background: var(--lcd-bg);
-      border: 1px solid var(--border);
-      border-radius: 5px;
-    }
-
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 0.78rem;
-    }
-
-    th,
-    td {
-      text-align: left;
-      padding: 7px 10px;
-      border-bottom: 1px solid #182030;
-      white-space: nowrap;
-    }
-
-    th {
-      position: sticky;
-      top: 0;
-      background: #0d121b;
-      color: var(--muted);
-      font-family: var(--mono);
-      font-weight: 700;
-      font-size: 0.68rem;
-      text-transform: uppercase;
-      letter-spacing: 0.06em;
-      z-index: 1;
-      border-bottom: 1px solid var(--border-strong);
-    }
-
-    td.wrap {
-      white-space: normal;
-      word-break: break-word;
-      max-width: 420px;
-    }
-
-    .mono {
-      font-family: var(--mono);
-      font-size: 0.74rem;
-    }
-
-    .badge {
-      display: inline-block;
-      padding: 2px 6px;
-      border-radius: 3px;
-      font-family: var(--mono);
-      font-size: 0.67rem;
-      font-weight: 700;
-      border: 1px solid transparent;
-    }
-
-    .badge.tx {
-      background: rgba(43, 212, 181, 0.13);
-      color: var(--cyan);
-      border-color: rgba(43, 212, 181, 0.35);
-    }
-
-    .badge.mcp {
-      background: rgba(167, 139, 250, 0.14);
-      color: var(--violet);
-      border-color: rgba(167, 139, 250, 0.35);
-    }
-
-    .badge.ok {
-      background: rgba(61, 220, 151, 0.14);
-      color: var(--green);
-      border-color: rgba(61, 220, 151, 0.35);
-    }
-
-    .badge.err {
-      background: rgba(255, 92, 108, 0.15);
-      color: #ffa6b0;
-      border-color: rgba(255, 92, 108, 0.38);
-    }
-
-    .badge.dim {
-      background: rgba(140, 156, 184, 0.10);
-      color: var(--muted);
-      border-color: var(--border);
-    }
-
-    /* Precision Console Mixer Strips */
+    /* 6. Mixer Inserts & Channel Rack */
     .mixer {
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
-      gap: 8px;
+      grid-template-columns: repeat(auto-fill, minmax(88px, 1fr));
+      gap: 6px;
+      overflow: auto;
     }
 
     .strip {
-      background: linear-gradient(180deg, #161e2e 0%, #0c1018 100%);
-      border: 1px solid var(--border-strong);
-      border-top: 2px solid var(--accent);
-      border-radius: 5px;
-      padding: 8px 6px;
+      background: var(--bg-bar);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 6px 5px;
       display: flex;
       flex-direction: column;
       align-items: center;
-      gap: 6px;
-      box-shadow: inset 0 1px 0 var(--spec-top);
+      gap: 5px;
     }
 
     .strip .idx {
       font-family: var(--mono);
-      font-size: 0.64rem;
+      font-size: 0.61rem;
       font-weight: 700;
-      letter-spacing: 0.05em;
-      color: var(--muted);
+      color: var(--dim);
     }
 
     .strip .name {
-      font-size: 0.74rem;
+      font-size: 0.72rem;
       font-weight: 600;
       text-align: center;
       max-width: 100%;
@@ -795,11 +648,10 @@
       display: flex;
       align-items: stretch;
       gap: 4px;
-      background: var(--lcd-bg);
+      background: var(--well);
       border: 1px solid var(--border);
-      border-radius: 4px;
-      padding: 4px 5px;
-      box-shadow: inset 0 2px 5px rgba(0, 0, 0, 0.85);
+      border-radius: 3px;
+      padding: 4px;
     }
 
     .db-scale {
@@ -807,16 +659,15 @@
       flex-direction: column;
       justify-content: space-between;
       font-family: var(--mono);
-      font-size: 0.55rem;
-      color: #5c6c88;
+      font-size: 0.54rem;
+      color: var(--dim);
       line-height: 1;
-      padding: 1px 0;
       text-align: right;
     }
 
     .meter {
-      width: 20px;
-      height: 108px;
+      width: 18px;
+      height: 104px;
       position: relative;
       overflow: hidden;
       display: flex;
@@ -824,8 +675,8 @@
       gap: 2px;
       background: repeating-linear-gradient(
         180deg,
-        rgba(255, 255, 255, 0.04) 0px,
-        rgba(255, 255, 255, 0.04) 2px,
+        rgba(255, 255, 255, 0.03) 0px,
+        rgba(255, 255, 255, 0.03) 2px,
         transparent 2px,
         transparent 4px
       );
@@ -833,21 +684,14 @@
 
     .meter .bar {
       flex: 1;
-      background: linear-gradient(180deg, #ff5c6c 0%, #f5b942 24%, #2bd4b5 70%, #3ddc97 100%);
+      background: linear-gradient(180deg, var(--red) 0%, var(--amber) 22%, var(--green) 100%);
       border-radius: 1px;
       min-height: 2px;
-      transition: height 0.14s ease;
+      transition: height 0.12s ease;
     }
 
     .meter .bar.clip {
-      background: linear-gradient(180deg, #ff3b52, #ff7a2f);
-      box-shadow: 0 0 6px #ff3b52;
-    }
-
-    .advice-tip {
-      color: #f6b93b;
-      font-size: 0.76rem;
-      line-height: 1.4;
+      background: var(--red);
     }
 
     .strip .flags {
@@ -856,15 +700,39 @@
       justify-content: center;
       flex-wrap: wrap;
       gap: 3px;
-      font-size: 0.66rem;
     }
 
     .strip .flag {
       font-family: var(--mono);
+      font-size: 0.62rem;
       padding: 1px 4px;
-      border-radius: 3px;
-      background: #1c2536;
+      border-radius: 2px;
+      background: var(--panel-hi);
       color: var(--muted);
+    }
+
+    .flag-btn {
+      min-block-size: 22px;
+      min-inline-size: 22px;
+      padding: 1px 4px;
+      font-family: var(--mono);
+      font-size: 0.64rem;
+      font-weight: 700;
+      border-radius: 2px;
+      line-height: 1;
+      justify-content: center;
+    }
+
+    .flag-btn.m[aria-pressed="true"] {
+      background: color-mix(in oklab, var(--bad), transparent 72%);
+      color: #ff9ea1;
+      border-color: var(--bad);
+    }
+
+    .flag-btn.s[aria-pressed="true"] {
+      background: color-mix(in oklab, var(--warn), transparent 72%);
+      color: #f5cc7a;
+      border-color: var(--warn);
     }
 
     .fx-rack {
@@ -872,28 +740,63 @@
       flex-direction: column;
       gap: 2px;
       width: 100%;
-      margin-top: 2px;
     }
 
     .fx-slot {
       font-family: var(--mono);
-      font-size: 0.60rem;
-      color: #9fb0ce;
-      background: #0a0e17;
-      border: 1px solid #1e283a;
-      border-left: 2px solid var(--cyan);
+      font-size: 0.58rem;
+      color: var(--muted);
+      background: var(--well);
+      border: 1px solid var(--border);
       border-radius: 2px;
-      padding: 2px 4px;
+      padding: 1px 4px;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
-      text-align: left;
     }
 
     .fx-slot.more {
-      border-left-color: var(--muted);
-      color: var(--muted);
+      color: var(--dim);
       text-align: center;
+    }
+
+    .rack {
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+      overflow: auto;
+    }
+
+    .ch {
+      background: var(--bg-bar);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 6px 8px;
+      display: grid;
+      grid-template-columns: 4px 132px 1fr auto;
+      align-items: center;
+      gap: 8px;
+    }
+
+    @media (max-width: 640px) {
+      .ch {
+        grid-template-columns: 4px 1fr;
+      }
+    }
+
+    .ch .dot {
+      height: 24px;
+      border-radius: 2px;
+    }
+
+    .step-grid {
+      display: grid;
+      grid-template-columns: repeat(16, minmax(8px, 1fr));
+      gap: 2px;
+      background: var(--well);
+      padding: 3px;
+      border-radius: 3px;
+      border: 1px solid var(--border);
     }
 
     .step {
@@ -901,103 +804,30 @@
       height: 16px;
       padding: 0;
       border-radius: 2px;
-      border: 1px solid #263147;
-      border-top: 1px solid rgba(255, 255, 255, 0.08);
-      background: #1b2333;
+      border: 1px solid #282b32;
+      background: #22252b;
       box-shadow: none;
     }
 
-    .flag-btn {
-      min-block-size: 24px;
-      min-inline-size: 24px;
-      padding: 2px 5px;
-      font-family: var(--mono);
-      font-size: 0.66rem;
-      font-weight: 700;
-      border-radius: 3px;
-      line-height: 1;
-      justify-content: center;
-    }
-
-    .flag-btn.m[aria-pressed="true"] {
-      background: color-mix(in oklab, var(--bad), transparent 70%);
-      color: #ffa6b0;
-      border-color: var(--bad);
-    }
-
-    .flag-btn.s[aria-pressed="true"] {
-      background: color-mix(in oklab, var(--warn), transparent 70%);
-      color: #ffe08a;
-      border-color: var(--warn);
-    }
-
-    /* FL Studio 4x4 Step Sequencer & Channel Rack */
-    .rack {
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
-    }
-
-    .ch {
-      background: linear-gradient(180deg, #151c2b 0%, #0f1420 100%);
-      border: 1px solid var(--border);
-      border-radius: 5px;
-      padding: 7px 10px;
-      display: grid;
-      grid-template-columns: 5px 136px 1fr auto;
-      align-items: center;
-      gap: 10px;
-    }
-
-    @media (max-width: 640px) {
-      .ch {
-        grid-template-columns: 5px 1fr;
-      }
-    }
-
-    .ch .dot {
-      height: 26px;
-      border-radius: 2px;
-      box-shadow: 0 0 6px currentColor;
-    }
-
-    .step-grid {
-      display: grid;
-      grid-template-columns: repeat(16, minmax(9px, 1fr));
-      gap: 3px;
-      background: var(--lcd-bg);
-      padding: 4px;
-      border-radius: 4px;
-      border: 1px solid var(--border);
-    }
-
-    .step {
-      height: 16px;
-      border-radius: 2px;
-      background: #1b2333;
-      border-top: 1px solid rgba(255, 255, 255, 0.07);
-    }
-
-    /* Authentic FL Studio 4-step beat group tinting (steps 5-8 and 13-16) */
     .step:nth-child(8n + 5),
     .step:nth-child(8n + 6),
     .step:nth-child(8n + 7),
     .step:nth-child(8n + 8) {
-      background: #252131;
+      background: #2b2729;
     }
 
     .step.on {
-      background: linear-gradient(180deg, #ff9a52 0%, #ff6e1f 100%);
-      border-top-color: #ffd0a6;
-      box-shadow: 0 0 6px rgba(255, 122, 47, 0.55);
+      background: var(--accent);
+      border-color: var(--accent-soft);
     }
 
+    /* 7. Piano Roll, Spectrum & Tables */
     canvas#rollCanvas {
       width: 100%;
-      height: 270px;
-      background: var(--lcd-bg);
-      border: 1px solid var(--border-strong);
-      border-radius: 5px;
+      height: 280px;
+      background: var(--well);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
       display: block;
     }
 
@@ -1006,11 +836,11 @@
       grid-template-columns: repeat(7, minmax(0, 1fr));
       gap: 8px;
       align-items: end;
-      height: 175px;
+      height: 180px;
       padding: 12px 10px;
-      background: var(--lcd-bg);
-      border: 1px solid var(--border-strong);
-      border-radius: 5px;
+      background: var(--well);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
     }
 
     .band {
@@ -1024,17 +854,108 @@
 
     .band .bbar {
       width: 100%;
-      max-width: 42px;
-      background: linear-gradient(180deg, var(--accent) 0%, var(--cyan) 100%);
-      border-top: 2px solid #ffd2a8;
+      max-width: 38px;
+      background: linear-gradient(180deg, var(--accent) 0%, #9c5527 100%);
+      border-top: 2px solid var(--accent-soft);
       border-radius: 2px 2px 0 0;
-      transition: height 0.18s ease;
+      transition: height 0.16s ease;
     }
 
     .band .blbl {
       font-family: var(--mono);
-      font-size: 0.68rem;
+      font-size: 0.66rem;
       color: var(--muted);
+    }
+
+    .advice-tip {
+      color: var(--amber);
+      font-size: 0.74rem;
+      line-height: 1.4;
+    }
+
+    .table-wrap {
+      overflow: auto;
+      flex: 1;
+      max-height: 520px;
+      background: var(--well);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.75rem;
+    }
+
+    th,
+    td {
+      text-align: left;
+      padding: 6px 9px;
+      border-bottom: 1px solid #1c1e23;
+      white-space: nowrap;
+    }
+
+    th {
+      position: sticky;
+      top: 0;
+      background: var(--bg-bar);
+      color: var(--muted);
+      font-family: var(--mono);
+      font-weight: 700;
+      font-size: 0.65rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      z-index: 1;
+      border-bottom: 1px solid var(--border);
+    }
+
+    td.wrap {
+      white-space: normal;
+      word-break: break-word;
+      max-width: 440px;
+    }
+
+    .mono {
+      font-family: var(--mono);
+      font-size: 0.72rem;
+    }
+
+    .badge {
+      display: inline-block;
+      padding: 1px 6px;
+      border-radius: 3px;
+      font-family: var(--mono);
+      font-size: 0.65rem;
+      font-weight: 600;
+      border: 1px solid var(--border-strong);
+      background: var(--panel);
+      color: var(--text);
+    }
+
+    .badge.tx {
+      color: var(--accent-soft);
+      border-color: rgba(255, 122, 47, 0.38);
+    }
+
+    .badge.mcp {
+      color: var(--steel);
+      border-color: var(--border-strong);
+    }
+
+    .badge.ok {
+      color: #98e099;
+      border-color: rgba(101, 196, 102, 0.38);
+    }
+
+    .badge.err {
+      color: #ff9ea1;
+      border-color: rgba(229, 72, 77, 0.42);
+    }
+
+    .badge.dim {
+      color: var(--muted);
+      border-color: var(--border);
     }
 
     .checklist,
@@ -1049,10 +970,10 @@
       display: flex;
       justify-content: space-between;
       align-items: center;
-      padding: 7px 0;
-      border-bottom: 1px solid #192233;
-      gap: 12px;
-      font-size: 0.78rem;
+      padding: 6px 0;
+      border-bottom: 1px solid #22252b;
+      gap: 10px;
+      font-size: 0.75rem;
     }
 
     .kv-list li:last-child,
@@ -1063,7 +984,7 @@
     .kv-val {
       display: flex;
       align-items: center;
-      gap: 8px;
+      gap: 6px;
       min-width: 0;
       max-width: 68%;
     }
@@ -1072,40 +993,60 @@
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
-      color: #b8c7e0;
+      color: var(--steel);
+    }
+
+    .client-path {
+      display: block;
+      max-width: 230px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
 
     .tpl-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
       gap: 8px;
     }
 
     .tpl {
-      background: var(--lcd-bg);
+      background: var(--well);
       border: 1px solid var(--border);
-      border-left: 3px solid var(--cyan);
-      border-radius: 4px;
-      padding: 10px 12px;
+      border-radius: var(--radius);
+      padding: 8px 10px;
     }
 
     .tpl .tname {
-      font-weight: 700;
-      font-size: 0.80rem;
-      margin-bottom: 4px;
+      font-weight: 600;
+      font-size: 0.76rem;
+      margin-bottom: 3px;
     }
 
     .tpl .tmeta {
       font-family: var(--mono);
-      font-size: 0.70rem;
+      font-size: 0.67rem;
       color: var(--muted);
     }
 
     .empty {
       color: var(--muted);
       font-family: var(--mono);
-      font-size: 0.76rem;
-      padding: 14px 0;
+      font-size: 0.73rem;
+      padding: 12px 0;
+    }
+
+    /* 8. Bottom Status Bar */
+    .status-bar {
+      background: var(--bg-bar);
+      border-top: 1px solid var(--border);
+      padding: 0 12px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-family: var(--mono);
+      font-size: 0.66rem;
+      color: var(--muted);
     }
 
     @media (forced-colors: active) {
@@ -1128,45 +1069,34 @@
 </head>
 
 <body>
-  <a href="#main-content" class="skip-link visually-hidden">Skip to studio workspace</a>
+  <a href="#main-content" class="skip-link visually-hidden">Skip to workspace</a>
   <div id="liveAnnounce" class="visually-hidden" aria-live="polite"></div>
 
   <header class="studio-header">
     <div class="hero-backdrop" aria-hidden="true">
-      <img src="/assets/studio-backdrop.webp?v=2" alt="" width="1440" height="320" loading="eager" fetchpriority="low">
+      <img src="/assets/studio-backdrop.webp?v=3" alt="" width="1440" height="320" loading="eager" fetchpriority="low">
     </div>
-    <div class="header-inner">
+    <div class="brand-cluster">
       <div class="brand">
-        <img src="/assets/icon-64.png?v=2" srcset="/assets/icon-64.png?v=2 1x, /assets/icon-128.png?v=2 2x" alt="" width="44"
-          height="44" loading="eager" fetchpriority="high" decoding="sync" class="brand-emblem">
-        <div>
-          <div class="brand-title-row">
-            <h1>FL-MCP Studio</h1>
-            <span class="hw-tag">DAW CONSOLE</span>
-          </div>
-          <p class="brand-sub" id="subLine">Universal DAW Bridge, Background Service &amp; Audio Monitor</p>
-        </div>
+        <img src="/assets/icon-64.png?v=3" srcset="/assets/icon-64.png?v=3 1x, /assets/icon-128.png?v=3 2x" alt=""
+          width="28" height="28" loading="eager" fetchpriority="high" decoding="sync" class="brand-emblem">
+        <h1>FL-MCP</h1>
       </div>
-      <div class="header-right">
-        <span class="pill" id="flBadge"><span class="state-glyph" aria-hidden="true"></span><span>FL Studio:
-            Idle</span></span>
-        <span class="pill" id="svcBadge"><span class="state-glyph" aria-hidden="true"></span><span>Service: Foreground
-            UI</span></span>
-        <span class="pill" id="deskBadge"><span class="state-glyph" aria-hidden="true"></span><span>Desktop:
-            Off</span></span>
-        <button type="button" class="primary" id="pollBtn">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true">
-            <path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6" />
-          </svg>
-          <span>Poll FL Now</span>
-        </button>
-        <button type="button" id="autoBtn" aria-pressed="true">Auto-Sync: On</button>
+      <div class="tabs" role="tablist" aria-label="Workspace views">
+        <button type="button" class="tab" role="tab" id="tab-traffic" aria-selected="true"
+          aria-controls="panel-traffic" tabindex="0">Bridge Log</button>
+        <button type="button" class="tab" role="tab" id="tab-mixer" aria-selected="false" aria-controls="panel-mixer"
+          tabindex="-1">Mixer &amp; Rack</button>
+        <button type="button" class="tab" role="tab" id="tab-roll" aria-selected="false" aria-controls="panel-roll"
+          tabindex="-1">Piano Roll</button>
+        <button type="button" class="tab" role="tab" id="tab-audio" aria-selected="false" aria-controls="panel-audio"
+          tabindex="-1">Audio Analyzer</button>
+        <button type="button" class="tab" role="tab" id="tab-setup" aria-selected="false" aria-controls="panel-setup"
+          tabindex="-1">System &amp; Clients</button>
       </div>
     </div>
-  </header>
 
-  <main id="main-content" tabindex="-1" class="workspace">
-    <section class="transport-dock" aria-label="DAW transport and studio controls">
+    <div class="transport-dock" role="toolbar" aria-label="DAW transport">
       <div class="transport-group">
         <button type="button" class="primary tr-switch" data-tr="play">
           <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M4 2.5v11l9-5.5-9-5.5z"/></svg>
@@ -1190,85 +1120,77 @@
         <button type="button" class="tr-switch" data-tr="save">Save</button>
       </div>
       <form id="bpmForm" class="lcd-box" aria-label="Set project tempo">
-        <label for="trBpm" class="mono" style="font-size:0.68rem;color:var(--muted)">TEMPO</label>
+        <label for="trBpm" class="mono" style="font-size:0.64rem;color:var(--muted)">BPM</label>
         <input id="trBpm" name="bpm" type="text" inputmode="decimal" value="128" autocorrect="off" autocapitalize="none"
-          spellcheck="false" style="width:64px;min-block-size:26px;padding:2px 7px;text-align:center">
-        <button type="submit" class="compact">Set BPM</button>
+          spellcheck="false" style="width:54px;min-block-size:22px;padding:1px 5px;text-align:center">
+        <button type="submit" class="compact">Set</button>
       </form>
-      <span class="action-toast" id="actionStatus" role="status">READY</span>
-    </section>
-
-    <section class="kpi-grid" aria-label="Live telemetry summary">
-      <div class="kpi">
-        <div class="lbl">Tempo &amp; Transport</div>
-        <div class="val" id="kTempo">--</div>
-        <div class="sub" id="kSong">No live project polled yet</div>
-      </div>
-      <div class="kpi">
-        <div class="lbl">MIDI Bridge Frames</div>
-        <div class="val" id="kMidi">0</div>
-        <div class="sub" id="kMidiSub">0 errors · 0 retries</div>
-      </div>
-      <div class="kpi">
-        <div class="lbl">Bridge Throughput</div>
-        <div class="val" id="kBytes">0 B</div>
-        <div class="sub" id="kLat">avg 0 ms · p95 0 ms</div>
-      </div>
-      <div class="kpi">
-        <div class="lbl">MCP Tool Dispatches</div>
-        <div class="val" id="kMcp">0</div>
-        <div class="sub" id="kMcpSub">0 errors</div>
-      </div>
-      <div class="kpi">
-        <div class="lbl">Integrated Loudness</div>
-        <div class="val" id="kLufs">-- LUFS</div>
-        <div class="sub" id="kPeak">True Peak: -- dBTP</div>
-      </div>
-    </section>
-
-    <div class="tabs" role="tablist" aria-label="Studio workspace views">
-      <button type="button" class="tab" role="tab" id="tab-traffic" aria-selected="true" aria-controls="panel-traffic"
-        tabindex="0">01 · Traffic &amp; Bridge</button>
-      <button type="button" class="tab" role="tab" id="tab-mixer" aria-selected="false" aria-controls="panel-mixer"
-        tabindex="-1">02 · Mixer &amp; Rack</button>
-      <button type="button" class="tab" role="tab" id="tab-roll" aria-selected="false" aria-controls="panel-roll"
-        tabindex="-1">03 · Piano Roll &amp; Plans</button>
-      <button type="button" class="tab" role="tab" id="tab-audio" aria-selected="false" aria-controls="panel-audio"
-        tabindex="-1">04 · Audio Spectrum</button>
-      <button type="button" class="tab" role="tab" id="tab-setup" aria-selected="false" aria-controls="panel-setup"
-        tabindex="-1">05 · Service &amp; Clients</button>
     </div>
 
+    <div class="header-right">
+      <span class="pill" id="flBadge"><span class="state-glyph" aria-hidden="true"></span><span>FL: Idle</span></span>
+      <span class="pill" id="svcBadge"><span class="state-glyph" aria-hidden="true"></span><span>Service</span></span>
+      <span class="pill" id="deskBadge"><span class="state-glyph" aria-hidden="true"></span><span>Desk: Off</span></span>
+      <button type="button" class="compact primary" id="pollBtn">Poll FL</button>
+      <button type="button" class="compact" id="autoBtn" aria-pressed="true">Sync: On</button>
+    </div>
+  </header>
+
+  <section class="telemetry-strip" aria-label="Live telemetry">
+    <div class="kpi">
+      <span class="lbl">Transport</span>
+      <div class="kpi-readout"><span class="val" id="kTempo">--</span><span class="sub" id="kSong">Idle</span></div>
+    </div>
+    <div class="kpi">
+      <span class="lbl">MIDI Bridge</span>
+      <div class="kpi-readout"><span class="val" id="kMidi">0</span><span class="sub" id="kMidiSub">0 err</span></div>
+    </div>
+    <div class="kpi">
+      <span class="lbl">Throughput</span>
+      <div class="kpi-readout"><span class="val" id="kBytes">0 B</span><span class="sub" id="kLat">0 ms</span></div>
+    </div>
+    <div class="kpi">
+      <span class="lbl">MCP Calls</span>
+      <div class="kpi-readout"><span class="val" id="kMcp">0</span><span class="sub" id="kMcpSub">0 err</span></div>
+    </div>
+    <div class="kpi">
+      <span class="lbl">Loudness</span>
+      <div class="kpi-readout"><span class="val" id="kLufs">-- LUFS</span><span class="sub" id="kPeak">-- dBTP</span></div>
+    </div>
+    <span class="action-toast" id="actionStatus" role="status">Ready</span>
+  </section>
+
+  <main id="main-content" tabindex="-1" class="workspace">
     <section class="panel-section" id="panel-traffic" role="tabpanel" aria-labelledby="tab-traffic">
-      <div class="card">
+      <div class="card" style="height:100%">
         <h2>
-          <span>Incoming / Outgoing Traffic Feed</span>
-          <span class="meta-note" id="logInfo">Showing recent events</span>
+          <span>MIDI &amp; MCP Event Log</span>
+          <span class="meta-note" id="logInfo">0 events</span>
         </h2>
         <div class="toolbar">
           <label for="fKind" class="visually-hidden">Filter stream type</label>
           <select id="fKind">
-            <option value="">All Streams (MIDI + MCP)</option>
-            <option value="midi">MIDI TX/RX Frames Only</option>
-            <option value="mcp">MCP Tool Calls Only</option>
+            <option value="">All Streams</option>
+            <option value="midi">MIDI Bridge Only</option>
+            <option value="mcp">MCP Tools Only</option>
           </select>
           <label for="fText" class="visually-hidden">Filter events by text</label>
-          <input id="fText" type="search" placeholder="Filter tool, op, payload, error...">
+          <input id="fText" type="search" placeholder="Filter operation or payload...">
           <button type="button" id="errOnlyBtn" aria-pressed="false">Errors Only: Off</button>
-          <button type="button" class="danger" id="clearTrafficBtn">Clear Log</button>
+          <button type="button" class="danger" id="clearTrafficBtn">Clear</button>
         </div>
         <div class="table-wrap">
           <table>
-            <caption class="visually-hidden">Incoming and outgoing MIDI bridge and MCP tool traffic</caption>
+            <caption class="visually-hidden">MIDI bridge and MCP tool event log</caption>
             <thead>
               <tr>
                 <th scope="col">Time</th>
                 <th scope="col">Stream</th>
-                <th scope="col">Operation / Tool</th>
+                <th scope="col">Operation</th>
                 <th scope="col">Status</th>
-                <th scope="col">Bytes</th>
+                <th scope="col">Size</th>
                 <th scope="col">Latency</th>
-                <th scope="col">Payload / Summary</th>
+                <th scope="col">Payload</th>
               </tr>
             </thead>
             <tbody id="trafficBody"></tbody>
@@ -1280,11 +1202,11 @@
     <section class="panel-section" id="panel-mixer" role="tabpanel" aria-labelledby="tab-mixer" hidden>
       <div class="grid-2">
         <div class="card">
-          <h2>Mixer Peak Meters &amp; Strips <span class="meta-note" id="mixMeta"></span></h2>
+          <h2>Mixer Inserts <span class="meta-note" id="mixMeta"></span></h2>
           <div class="mixer" id="mixerGrid"></div>
         </div>
         <div class="card">
-          <h2>Channel Rack &amp; 16-Step Sequencer <span class="meta-note" id="chMeta"></span></h2>
+          <h2>Channel Rack <span class="meta-note" id="chMeta"></span></h2>
           <div class="rack" id="rackList"></div>
         </div>
       </div>
@@ -1293,22 +1215,22 @@
     <section class="panel-section" id="panel-roll" role="tabpanel" aria-labelledby="tab-roll" hidden>
       <div class="grid-2">
         <div class="card">
-          <h2 id="rollHeading">Live Piano Roll Inbox / State <span class="meta-note" id="rollMeta"></span></h2>
+          <h2 id="rollHeading">Piano Roll <span class="meta-note" id="rollMeta"></span></h2>
           <form id="chordForm" class="inline-form" aria-labelledby="rollHeading">
-            <div class="field-inline" style="flex:1;min-width:210px">
-              <label for="chordInput">Chord Progression (name@beat:len)</label>
+            <div class="field-inline" style="flex:1;min-width:200px">
+              <label for="chordInput">Chords (name@beat:len)</label>
               <input id="chordInput" name="chords" type="text" value="Am7@0:4, Fmaj7@4:4, Cmaj7@8:4, G7@12:4"
                 autocorrect="off" autocapitalize="none" spellcheck="false">
             </div>
-            <button type="submit" class="primary">Queue Chords</button>
-            <button type="button" id="previewChordsBtn">Preview Live</button>
+            <button type="submit" class="primary">Queue</button>
+            <button type="button" id="previewChordsBtn">Audition</button>
             <button type="button" id="clearQueueBtn">Clear Queue</button>
             <button type="button" class="danger" id="clearRollBtn">Clear Roll</button>
           </form>
-          <canvas id="rollCanvas" aria-label="Piano roll note velocity preview"></canvas>
+          <canvas id="rollCanvas" aria-label="Piano roll note preview"></canvas>
         </div>
         <div class="card">
-          <h2 id="planHeading">Latest Produced Song Plan <span class="meta-note" id="planMeta"></span></h2>
+          <h2 id="planHeading">Arrangement Plan <span class="meta-note" id="planMeta"></span></h2>
           <form id="composeForm" class="inline-form" aria-labelledby="planHeading">
             <div class="field-inline">
               <label for="compGenre">Genre</label>
@@ -1319,7 +1241,7 @@
                 <option value="dnb">Drum &amp; Bass</option>
                 <option value="dubstep">Dubstep</option>
                 <option value="trap">Trap</option>
-                <option value="oriental_trap">Oriental Trap (Hicaz)</option>
+                <option value="oriental_trap">Oriental Trap</option>
                 <option value="boom_bap">Boom Bap</option>
                 <option value="lofi">Lo-Fi</option>
                 <option value="pop">Pop</option>
@@ -1330,16 +1252,16 @@
             <div class="field-inline">
               <label for="compKey">Key</label>
               <input id="compKey" name="key" type="text" value="Am" autocorrect="off" autocapitalize="none"
-                spellcheck="false" style="width:68px">
+                spellcheck="false" style="width:62px">
             </div>
             <div class="field-inline">
               <label for="compBars">Bars</label>
               <input id="compBars" name="length" type="text" inputmode="numeric" value="4" autocorrect="off"
-                autocapitalize="none" spellcheck="false" style="width:58px">
+                autocapitalize="none" spellcheck="false" style="width:52px">
             </div>
-            <button type="submit" class="primary">Compose Plan</button>
+            <button type="submit" class="primary">Compose</button>
           </form>
-          <div id="planBox" class="empty">No song plan generated yet.</div>
+          <div id="planBox" class="empty">No arrangement plan loaded.</div>
         </div>
       </div>
     </section>
@@ -1347,11 +1269,11 @@
     <section class="panel-section" id="panel-audio" role="tabpanel" aria-labelledby="tab-audio" hidden>
       <div class="grid-2">
         <div class="card">
-          <h2>7-Band Spectrum Share (%) <span class="meta-note" id="audioMeta"></span></h2>
+          <h2>7-Band Spectrum (%) <span class="meta-note" id="audioMeta"></span></h2>
           <div class="bands" id="bandsBox"></div>
         </div>
         <div class="card">
-          <h2>Loudness, Dynamics &amp; Stereo Report</h2>
+          <h2>Loudness &amp; Dynamics</h2>
           <ul class="checklist" id="audioStats"></ul>
         </div>
       </div>
@@ -1360,14 +1282,14 @@
     <section class="panel-section" id="panel-setup" role="tabpanel" aria-labelledby="tab-setup" hidden>
       <div class="grid-equal">
         <div class="card">
-          <h2>Background Service &amp; MCP Endpoints</h2>
+          <h2>Service &amp; Endpoints</h2>
           <ul class="kv-list" id="serviceList"></ul>
-          <div class="toolbar" id="serviceControls" style="margin-top: 12px; margin-bottom: 0;"></div>
+          <div class="toolbar" id="serviceControls" style="margin-top: 10px; margin-bottom: 0;"></div>
         </div>
         <div class="card">
-          <h2>System Layer Health &amp; Quick Actions</h2>
+          <h2>Diagnostics &amp; Actions</h2>
           <ul class="checklist" id="doctorList"></ul>
-          <div class="toolbar" style="margin-top: 12px; margin-bottom: 0; gap: 6px;">
+          <div class="toolbar" style="margin-top: 10px; margin-bottom: 0; gap: 5px;">
             <button type="button" class="compact primary" id="installScriptsBtn">Install FL Scripts</button>
             <button type="button" class="compact" id="installShortcutBtn">Add OS Shortcut</button>
             <button type="button" class="compact" id="toggleAutostartBtn">Autostart: Enable</button>
@@ -1377,24 +1299,24 @@
           </div>
         </div>
       </div>
-      <div class="grid-equal" style="margin-top: 14px;">
+      <div class="grid-equal" style="margin-top: 10px;">
         <div class="card">
-          <h2>Resolved Universal Paths</h2>
+          <h2>Environment Paths</h2>
           <ul class="kv-list" id="pathsList"></ul>
         </div>
         <div class="card">
           <h2>
-            <span>AI Client Registrations</span>
+            <span>MCP Clients</span>
             <button type="button" class="compact primary" id="connectAllClientsBtn">Connect All (HTTP)</button>
           </h2>
-          <div class="table-wrap" style="max-height: 310px;">
+          <div class="table-wrap" style="max-height: 260px;">
             <table>
-              <caption class="visually-hidden">Detected AI MCP clients and registration status</caption>
+              <caption class="visually-hidden">MCP clients and registration status</caption>
               <thead>
                 <tr>
                   <th scope="col">Client</th>
                   <th scope="col">Status</th>
-                  <th scope="col">1-Click Connect / CLI</th>
+                  <th scope="col">Register</th>
                 </tr>
               </thead>
               <tbody id="clientsBody"></tbody>
@@ -1402,13 +1324,17 @@
           </div>
         </div>
       </div>
-      <div class="card">
-        <h2>Discovered .flp Templates <button type="button" class="compact" id="refreshTplBtn">Rescan Folders</button>
-        </h2>
+      <div class="card" style="margin-top: 10px;">
+        <h2>Project Templates <button type="button" class="compact" id="refreshTplBtn">Rescan</button></h2>
         <div class="tpl-grid" id="tplGrid"></div>
       </div>
     </section>
   </main>
+
+  <footer class="status-bar">
+    <span id="subLine">FL-MCP Studio</span>
+    <span>HTTP MCP: 127.0.0.1:8765/mcp · Alt+1..5 Switch Views</span>
+  </footer>
 
   <script>
     const $ = (id) => document.getElementById(id);
@@ -1467,7 +1393,7 @@
     async function copyTextReturn(text, label) {
       try {
         await navigator.clipboard.writeText(text);
-        announce(`${label} copied to clipboard.`);
+        announce(`${label} copied.`);
         return true;
       } catch {
         announce(`Unable to copy ${label}.`);
@@ -1484,18 +1410,18 @@
       const status = studio.status || null;
 
       const osTag = data.meta?.platform && data.meta?.arch
-        ? `${data.meta.platform} (${data.meta.arch})`
-        : "Desktop App";
+        ? `${data.meta.platform}/${data.meta.arch}`
+        : "desktop";
       const rtTag = data.meta?.app_runtime || "app";
-      $("subLine").textContent = `fl-mcp v${data.meta?.version || "?"} · ${osTag} · ${rtTag} · Port ${data.meta?.port || "FL MCP"}`;
+      $("subLine").textContent = `fl-mcp v${data.meta?.version || "?"} · ${osTag} · ${rtTag} · Port: ${data.meta?.port || "FL MCP"}`;
 
       if (status) {
-        setPill($("flBadge"), "ok", `FL Studio: ${status.fl || "Connected"}`);
+        setPill($("flBadge"), "ok", `FL ${status.fl || "Connected"}`);
         const pat = status.pat ?? status.pattern ?? 1;
         const isPlaying = Boolean(status.play ?? status.playing);
         const recTag = status.rec ? " · REC" : "";
         $("kTempo").textContent = `${status.bpm ?? "--"} BPM`;
-        $("kSong").textContent = `${status.title || "Untitled"} · Pat ${pat} · ${isPlaying ? "PLAYING" : "STOPPED"}${recTag}`;
+        $("kSong").textContent = `Pat ${pat} · ${isPlaying ? "Playing" : "Stopped"}${recTag}`;
         $("trRecBtn").setAttribute("aria-pressed", status.rec ? "true" : "false");
         $("trMetroBtn").setAttribute("aria-pressed", status.metro ? "true" : "false");
         $("trLoopBtn").textContent = `Loop: ${status.mode === "song" ? "Song" : "Pat"}`;
@@ -1503,36 +1429,36 @@
           $("trBpm").value = String(status.bpm);
         }
       } else {
-        setPill($("flBadge"), doc.midi_port_found ? "warn" : "bad", doc.midi_port_found ? "FL Studio: Waiting" : "FL Studio: No MIDI Port");
+        setPill($("flBadge"), doc.midi_port_found ? "warn" : "bad", doc.midi_port_found ? "FL: Standby" : "FL: No MIDI");
         $("kTempo").textContent = "-- BPM";
-        $("kSong").textContent = "Click 'Poll FL Now' or call any MCP tool";
+        $("kSong").textContent = "Standby";
       }
 
       if (svc.running) {
-        setPill($("svcBadge"), "ok", `Service: PID ${svc.pid}`);
+        setPill($("svcBadge"), "ok", `PID ${svc.pid}`);
       } else {
-        setPill($("svcBadge"), "warn", "Service: Foreground UI");
+        setPill($("svcBadge"), "warn", "Local UI");
       }
 
       const mode = data.meta?.desktop_mode || "off";
-      setPill($("deskBadge"), mode === "off" ? "warn" : "ok", mode === "off" ? "Desktop: Off" : `Desktop: ${mode}`);
+      setPill($("deskBadge"), mode === "off" ? "warn" : "ok", `Desk: ${mode}`);
 
       $("kMidi").textContent = String(st.midi_calls || 0);
-      $("kMidiSub").textContent = `${st.midi_errors || 0} errors · ${st.retries || 0} retries`;
+      $("kMidiSub").textContent = `${st.midi_errors || 0} err · ${st.retries || 0} retry`;
       $("kBytes").textContent = fmtBytes((st.tx_bytes || 0) + (st.rx_bytes || 0));
-      $("kLat").textContent = `avg ${st.avg_ms || 0} ms · p95 ${st.p95_ms || 0} ms`;
+      $("kLat").textContent = `${st.avg_ms || 0} ms avg`;
       $("kMcp").textContent = String(st.mcp_calls || 0);
-      $("kMcpSub").textContent = `${st.mcp_errors || 0} errors`;
+      $("kMcpSub").textContent = `${st.mcp_errors || 0} err`;
 
       const au = studio.audio;
       const lufsVal = au ? (au.lufs_i ?? au.integrated_lufs) : null;
       if (au && lufsVal != null) {
         $("kLufs").textContent = `${Number(lufsVal).toFixed(1)} LUFS`;
         const tpVal = au.true_peak_db ?? au.true_peak_dbtp ?? au.peak_db ?? 0;
-        $("kPeak").textContent = `True Peak: ${Number(tpVal).toFixed(1)} dBTP`;
+        $("kPeak").textContent = `${Number(tpVal).toFixed(1)} dBTP`;
       } else {
         $("kLufs").textContent = "-- LUFS";
-        $("kPeak").textContent = "True Peak: -- dBTP";
+        $("kPeak").textContent = "-- dBTP";
       }
 
       renderTraffic(data.traffic?.events || []);
@@ -1555,23 +1481,23 @@
         return true;
       });
       const sig = JSON.stringify(filtered.map((e) => [e.ts, e.dir, e.op, e.ok, e.attempts]));
-      $("logInfo").textContent = `${filtered.length} shown of ${events.length} recent events`;
+      $("logInfo").textContent = `${filtered.length} / ${events.length} events`;
       if (sig === lastTrafficSig) return;
       lastTrafficSig = sig;
       const tbody = $("trafficBody");
       if (!filtered.length) {
-        tbody.innerHTML = '<tr><td colspan="7" class="empty">No matching traffic events yet.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="7" class="empty">No matching events recorded.</td></tr>';
         return;
       }
       tbody.innerHTML = filtered.map((e) => {
         const isMidi = e.dir === "midi";
-        const bytes = isMidi ? `${e.tx_bytes || 0} -> ${e.rx_bytes || 0} B` : `${e.rx_bytes || 0} B out`;
+        const bytes = isMidi ? `${e.tx_bytes || 0} -> ${e.rx_bytes || 0} B` : `${e.rx_bytes || 0} B`;
         const att = (e.attempts || 1) > 1 ? ` x${e.attempts}` : "";
         const statusBadge = e.ok ? `<span class="badge ok">OK${att}</span>` : '<span class="badge err">ERR</span>';
         const detail = e.error ? `Error: ${e.error}` : (e.req || e.res || "");
         return `<tr>
       <td class="mono">${fmtTime(e.ts)}</td>
-      <td><span class="badge ${isMidi ? "tx" : "mcp"}">${isMidi ? "MIDI TX/RX" : "MCP CALL"}</span></td>
+      <td><span class="badge ${isMidi ? "tx" : "mcp"}">${isMidi ? "MIDI" : "MCP"}</span></td>
       <td class="mono">${esc(e.op)}</td>
       <td>${statusBadge}</td>
       <td class="mono">${bytes}</td>
@@ -1581,7 +1507,7 @@
       }).join("");
     }
 
-    const CH_PALETTE = ["#ff7a2f", "#2bd4b5", "#5da0ff", "#f6b93b", "#d883ff", "#5ce085"];
+    const CH_PALETTE = ["#ff7a2f", "#65c466", "#e5a024", "#9da5b4", "#d97757", "#84b59f"];
 
     function dbToMeterPct(db) {
       if (db == null || Number.isNaN(db) || db <= -60) return 3;
@@ -1592,7 +1518,7 @@
       const mix = studio.mixer?.rows || [];
       const pks = new Map((studio.peaks?.rows || []).map((r) => [r[0], r]));
       const clips = new Set(studio.peaks?.clipping || []);
-      $("mixMeta").textContent = mix.length ? `${mix.length} active tracks` : "";
+      $("mixMeta").textContent = mix.length ? `${mix.length} active` : "";
       $("mixerGrid").innerHTML = mix.length ? mix.slice(0, 24).map((r) => {
         const [i, name, vol, , mute, solo, fxCount] = r;
         const pk = pks.get(i);
@@ -1619,7 +1545,7 @@
           ? (fxCount > 0 ? [`${fxCount} FX`] : [])
           : String(fxCount || "").split(",").map((s) => s.trim()).filter(Boolean);
         const fxTag = fxList.length
-          ? `<span class="flag" title="${esc(fxList.join(" → "))}">${fxList.length}FX</span>`
+          ? `<span class="flag" title="${esc(fxList.join(" -> "))}">${fxList.length}FX</span>`
           : "";
         const fxRack = fxList.length
           ? `<div class="fx-rack">${fxList.slice(0, 2).map((fn) => `<div class="fx-slot" title="${esc(fn)}">${esc(fn.replace(/^Fruity\s+/i, ""))}</div>`).join("")}${fxList.length > 2 ? `<div class="fx-slot more">+${fxList.length - 2} FX</div>` : ""}</div>`
@@ -1631,11 +1557,11 @@
         <div class="db-scale" aria-hidden="true"><span>0</span><span>-6</span><span>-12</span><span>-24</span><span>-48</span></div>
         <div class="meter"><div class="${barCls}" style="height:${lPct}%"></div><div class="${barCls}" style="height:${rPct}%"></div></div>
       </div>
-      <div class="mono" style="font-size:0.68rem;color:var(--muted)">${pkLabel || `${Math.round((vol || 0) * 100)}%`}</div>
+      <div class="mono" style="font-size:0.65rem;color:var(--muted)">${pkLabel || `${Math.round((vol || 0) * 100)}%`}</div>
       <div class="flags">${muteBtn}${soloBtn}${fxTag}</div>
       ${fxRack}
     </div>`;
-      }).join("") : '<div class="empty">Poll FL Studio or list mixer tracks to view live level meters.</div>';
+      }).join("") : '<div class="empty">Poll FL Studio to populate mixer inserts.</div>';
 
       const chs = studio.channels?.rows || [];
       const stepMap = new Map((studio.steps?.rows || []).map((s) => [s[0], s[1]]));
@@ -1650,12 +1576,12 @@
         const chMuteBtn = `<button type="button" class="flag-btn m" data-set-kind="channel" data-set-index="${i}" data-set-prop="mute" data-set-val="${mute ? 0 : 1}" aria-pressed="${mute ? "true" : "false"}">M<span class="visually-hidden">ute channel ${i} ${esc(name)}</span></button>`;
         const chSoloBtn = `<button type="button" class="flag-btn s" data-set-kind="channel" data-set-index="${i}" data-set-prop="solo" data-set-val="${solo ? 0 : 1}" aria-pressed="${solo ? "true" : "false"}">S<span class="visually-hidden">olo channel ${i} ${esc(name)}</span></button>`;
         return `<div class="ch">
-      <div class="dot" style="background:${hex};color:${hex}"></div>
-      <div style="min-width:0"><strong style="font-size:0.78rem;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(name)}</strong><div class="meta-note mono" style="font-size:0.65rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">Ch ${i} · ${esc(subDesc)}${flag}</div></div>
+      <div class="dot" style="background:${hex}"></div>
+      <div style="min-width:0"><strong style="font-size:0.75rem;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(name)}</strong><div class="meta-note mono" style="font-size:0.64rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">Ch ${i} · ${esc(subDesc)}${flag}</div></div>
       <div>${stepsHtml}</div>
       <div style="display:flex;align-items:center;gap:4px">${chMuteBtn}${chSoloBtn}<span class="mono meta-note">FX ${fx ?? "--"}</span></div>
     </div>`;
-      }).join("") : '<div class="empty">Channel Rack data will appear once polled.</div>';
+      }).join("") : '<div class="empty">Poll FL Studio to populate channels.</div>';
     }
 
     function normNote(n) {
@@ -1672,7 +1598,7 @@
       const plan = studio.latest_plan;
       if (!plan) {
         $("planMeta").textContent = "";
-        $("planBox").innerHTML = '<div class="empty">No song plan generated yet.</div>';
+        $("planBox").innerHTML = '<div class="empty">No arrangement plan loaded.</div>';
         return;
       }
       const barCount = plan.bars || (Array.isArray(plan.sections) ? plan.sections.reduce((acc, s) => acc + (Number(s.bars ?? s[2]) || 0), 0) : "?");
@@ -1698,22 +1624,22 @@
       }
       const roleList = Array.isArray(plan.roles) ? plan.roles : (plan.roles && typeof plan.roles === "object" ? Object.keys(plan.roles) : []);
       const rolesLine = roleList.length
-        ? `<div class="meta-note mono" style="margin-bottom:8px">ROLES: ${esc(roleList.join(" · "))}</div>` : "";
-      $("planBox").innerHTML = `<div style="margin-bottom:10px;display:flex;gap:5px;flex-wrap:wrap">${secs}</div>${rolesLine}<ul class="checklist">${partsHtml}</ul>`;
+        ? `<div class="meta-note mono" style="margin-bottom:6px">Roles: ${esc(roleList.join(", "))}</div>` : "";
+      $("planBox").innerHTML = `<div style="margin-bottom:8px;display:flex;gap:4px;flex-wrap:wrap">${secs}</div>${rolesLine}<ul class="checklist">${partsHtml}</ul>`;
     }
 
     function drawRoll(studio) {
       const cv = $("rollCanvas");
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
       const wCss = cv.clientWidth || 560;
-      const hCss = 270;
+      const hCss = 280;
       if (cv.width !== Math.round(wCss * dpr) || cv.height !== Math.round(hCss * dpr)) {
         cv.width = Math.round(wCss * dpr);
         cv.height = Math.round(hCss * dpr);
       }
       const ctx = cv.getContext("2d");
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      ctx.fillStyle = "#06080d";
+      ctx.fillStyle = "#0e1013";
       ctx.fillRect(0, 0, wCss, hCss);
 
       const inbox = studio.piano_inbox || {};
@@ -1724,13 +1650,13 @@
         ? (pstate.applied ? "Applied" : (inbox.replace ? "Queued (Replace)" : "Queued"))
         : (pstate.notes && pstate.notes.length ? "Applied" : "Empty");
       $("rollMeta").textContent = notes.length
-        ? `${notes.length} notes (${sourceTag} · serial ${inbox.serial ?? pstate.serial ?? "--"})`
-        : "No queued piano roll notes";
+        ? `${notes.length} notes (${sourceTag})`
+        : "Empty";
 
       if (!notes.length) {
-        ctx.fillStyle = "#8c9cb8";
+        ctx.fillStyle = "#8e949f";
         ctx.font = "12px 'JetBrains Mono', Consolas, monospace";
-        ctx.fillText("QUEUED MELODY / CHORD NOTES APPEAR HERE", 18, 42);
+        ctx.fillText("Queue or audition a chord progression above.", 16, 38);
         return;
       }
 
@@ -1739,41 +1665,38 @@
       const minP = Math.min(...pitches) - 2;
       const maxP = Math.max(...pitches) + 2;
       const span = Math.max(12, maxP - minP + 1);
-      const padL = 44;
-      const padT = 10;
-      const plotW = wCss - padL - 10;
+      const padL = 42;
+      const padT = 8;
+      const plotW = wCss - padL - 8;
       const plotH = hCss - padT - 18;
       const rowH = Math.max(4, plotH / span);
 
-      // Alternating black/white piano key lanes
       const blackKeys = new Set([1, 3, 6, 8, 10]);
       for (let p = minP; p <= maxP; p++) {
         const y = padT + (maxP - p) * rowH;
         const isBlack = blackKeys.has(((p % 12) + 12) % 12);
-        ctx.fillStyle = isBlack ? "#090c14" : "#0d121d";
+        ctx.fillStyle = isBlack ? "#111317" : "#15181d";
         ctx.fillRect(padL, y, plotW, Math.max(1, rowH - 0.5));
-        ctx.fillStyle = isBlack ? "#121826" : "#1c2538";
-        ctx.fillRect(0, y, padL - 4, Math.max(1, rowH - 0.5));
+        ctx.fillStyle = isBlack ? "#1a1d22" : "#242830";
+        ctx.fillRect(0, y, padL - 3, Math.max(1, rowH - 0.5));
       }
 
-      // Beat & bar vertical grid lines
       for (let b = 0; b <= Math.ceil(maxT); b++) {
         const x = padL + (b / maxT) * plotW;
-        ctx.strokeStyle = b % 4 === 0 ? "#2a3750" : "#161e2e";
-        ctx.lineWidth = b % 4 === 0 ? 1.2 : 1;
+        ctx.strokeStyle = b % 4 === 0 ? "#323640" : "#1e2127";
+        ctx.lineWidth = 1;
         ctx.beginPath();
         ctx.moveTo(x, padT);
         ctx.lineTo(x, padT + plotH);
         ctx.stroke();
         if (b % 4 === 0 && b < Math.ceil(maxT)) {
-          ctx.fillStyle = "#8c9cb8";
+          ctx.fillStyle = "#8e949f";
           ctx.font = "10px monospace";
-          ctx.fillText(`BAR ${b / 4 + 1}`, x + 3, hCss - 4);
+          ctx.fillText(`Bar ${b / 4 + 1}`, x + 3, hCss - 4);
         }
       }
 
-      // Piano roll pitch labels on left keybed
-      ctx.fillStyle = "#9fb0ce";
+      ctx.fillStyle = "#9da5b4";
       ctx.font = "10px monospace";
       for (let p = minP; p <= maxP; p++) {
         if (p % 12 === 0 || p === minP || p === maxP) {
@@ -1782,28 +1705,27 @@
         }
       }
 
-      // FL Studio beveled Piano Roll notes
       for (const n of notes) {
         const x = padL + (n.t / maxT) * plotW;
         const nw = Math.max(5, (Math.max(0.125, n.d) / maxT) * plotW - 1.5);
         const y = padT + (maxP - n.p) * rowH;
         const nh = Math.max(4, rowH - 1.2);
         const vel = clamp(n.v, 0.25, 1.0);
-        ctx.fillStyle = `rgba(255, 122, 47, ${0.48 + vel * 0.50})`;
+        ctx.fillStyle = `rgba(255, 122, 47, ${0.50 + vel * 0.48})`;
         ctx.fillRect(x, y, nw, nh);
-        ctx.fillStyle = "rgba(255, 220, 175, 0.85)";
-        ctx.fillRect(x, y, nw, 1.5);
+        ctx.fillStyle = "rgba(255, 210, 165, 0.75)";
+        ctx.fillRect(x, y, nw, 1.2);
       }
     }
 
     function renderAudio(au) {
       if (!au) {
         $("audioMeta").textContent = "";
-        $("bandsBox").innerHTML = '<div class="empty">Run fl_audio to populate spectrum telemetry.</div>';
-        $("audioStats").innerHTML = '<li class="empty">No measured render yet.</li>';
+        $("bandsBox").innerHTML = '<div class="empty">Run fl_audio to measure spectrum balance.</div>';
+        $("audioStats").innerHTML = '<li class="empty">No audio measurement recorded.</li>';
         return;
       }
-      $("audioMeta").textContent = au.file ? esc(au.file) : "Last report";
+      $("audioMeta").textContent = au.file ? esc(au.file) : "Measured";
       const keys = [["sub", "Sub"], ["bass", "Bass"], ["low_mid", "LowMid"], ["mid", "Mid"], ["high_mid", "HiMid"], ["high", "High"], ["air", "Air"]];
       const bandsDb = au.bands_db;
       let pcts;
@@ -1822,7 +1744,7 @@
       $("bandsBox").innerHTML = keys.map(([, lbl], idx) => {
         const pct = clamp(pcts[idx], 0, 100);
         const tip = rawDbs.length ? ` title="${rawDbs[idx].toFixed(1)} dB"` : "";
-        return `<div class="band"${tip}><span class="mono" style="font-size:0.7rem">${pct.toFixed(0)}%</span><div class="bbar" style="height:${(pct / top) * 116}px"></div><span class="blbl">${lbl}</span></div>`;
+        return `<div class="band"${tip}><span class="mono" style="font-size:0.68rem">${pct.toFixed(0)}%</span><div class="bbar" style="height:${(pct / top) * 120}px"></div><span class="blbl">${lbl}</span></div>`;
       }).join("");
       const lufsVal = au.lufs_i ?? au.integrated_lufs;
       const tpVal = au.true_peak_db ?? au.true_peak_dbtp ?? au.peak_db;
@@ -1830,10 +1752,10 @@
       const corrVal = au.stereo?.corr ?? au.correlation;
       const items = [
         ["Integrated Loudness", lufsVal != null ? `${Number(lufsVal).toFixed(1)} LUFS` : "--"],
-        ["True Peak Ceiling", tpVal != null ? `${Number(tpVal).toFixed(1)} dBTP` : "--"],
-        ["Crest / Dynamics", au.crest_db != null ? `${Number(au.crest_db).toFixed(1)} dB` : "--"],
+        ["True Peak", tpVal != null ? `${Number(tpVal).toFixed(1)} dBTP` : "--"],
+        ["Crest Factor", au.crest_db != null ? `${Number(au.crest_db).toFixed(1)} dB` : "--"],
         ["Loudness Range (LRA)", lraVal != null ? `${Number(lraVal).toFixed(1)} LU` : "--"],
-        ["Stereo Correlation", corrVal != null ? Number(corrVal).toFixed(2) : "Mono"],
+        ["Phase Correlation", corrVal != null ? Number(corrVal).toFixed(2) : "Mono"],
       ];
       const adviceHtml = Array.isArray(au.advice) && au.advice.length
         ? au.advice.map((tip) => `<li class="advice-tip">${esc(tip)}</li>`).join("")
@@ -1851,11 +1773,11 @@
 
     function renderSetup(doc, pths, svc, clientRows, templates) {
       const rows = [
-        ["MIDI Input / Output ('" + (doc.port_name || "FL MCP") + "')", doc.midi_port_found ? "Connected" : "Missing", doc.midi_port_found],
-        ["FL Controller Script", doc.fl_script_installed ? "Installed" : "Missing (run fl-mcp install)", doc.fl_script_installed],
-        ["Piano Roll Script", doc.piano_roll_script_installed ? "Installed" : "Missing (run fl-mcp install)", doc.piano_roll_script_installed],
-        ["Audio Analysis Extra", doc.audio_analysis ? "Ready (numpy/scipy/soundfile)" : "Optional extra missing", doc.audio_analysis],
-        ["Desktop Tier", doc.desktop_mode && doc.desktop_mode !== "off" ? `Active (${doc.desktop_mode})` : "Off (opt-in)", doc.desktop_enabled],
+        ["MIDI Port ('" + (doc.port_name || "FL MCP") + "')", doc.midi_port_found ? "Ready" : "Not Found", doc.midi_port_found],
+        ["Controller Script", doc.fl_script_installed ? "Installed" : "Missing", doc.fl_script_installed],
+        ["Piano Roll Script", doc.piano_roll_script_installed ? "Installed" : "Missing", doc.piano_roll_script_installed],
+        ["Audio DSP Modules", doc.audio_analysis ? "Installed" : "Optional", doc.audio_analysis],
+        ["Desktop Automation", doc.desktop_mode && doc.desktop_mode !== "off" ? `Enabled (${doc.desktop_mode})` : "Disabled", doc.desktop_enabled],
       ];
       $("doctorList").innerHTML = rows.map(([k, v, ok]) =>
         `<li><span>${esc(k)}</span><span class="badge ${ok ? "ok" : "dim"}">${esc(v)}</span></li>`
@@ -1863,30 +1785,30 @@
 
       const poller = svc.poller || {};
       const isDaemon = "poller" in svc;
-      const pollState = isDaemon ? (poller.enabled ? `Active (${poller.interval_s}s)` : "Paused") : "Manual poll only";
+      const pollState = isDaemon ? (poller.enabled ? `Every ${poller.interval_s}s` : "Paused") : "Manual";
       $("serviceList").innerHTML = [
-        kvRow("Host Platform & Arch", `${latest?.meta?.platform || "--"} (${latest?.meta?.arch || "--"}) · ${latest?.meta?.app_runtime || "auto"}`, false),
-        kvRow("Service Process", svc.running ? `Running (PID ${svc.pid})` : "Not running in background — run `fl-mcp service start`", false),
-        kvRow("Streamable-HTTP MCP", svc.mcp_url || "http://127.0.0.1:8765/mcp", true),
-        kvRow("Legacy SSE MCP", svc.sse_url || "http://127.0.0.1:8765/sse", true),
-        kvRow("Background Poller", pollState, false),
-        kvRow("Login Autostart", svc.autostart?.enabled ? `Enabled (${svc.autostart.backend})` : "Off (`fl-mcp service autostart enable`)", false),
+        kvRow("Platform", `${latest?.meta?.platform || "--"} (${latest?.meta?.arch || "--"}) · ${latest?.meta?.app_runtime || "auto"}`, false),
+        kvRow("Daemon Process", svc.running ? `PID ${svc.pid}` : "Foreground mode", false),
+        kvRow("HTTP MCP Endpoint", svc.mcp_url || "http://127.0.0.1:8765/mcp", true),
+        kvRow("SSE Endpoint", svc.sse_url || "http://127.0.0.1:8765/sse", true),
+        kvRow("Telemetry Poller", pollState, false),
+        kvRow("Login Autostart", svc.autostart?.enabled ? `Enabled (${svc.autostart.backend})` : "Disabled", false),
       ].join("");
 
       if (isDaemon) {
         $("serviceControls").innerHTML = `
-      <button type="button" id="togglePollerBtn">${poller.enabled ? "Pause Background Poller" : "Resume Background Poller"}</button>
-      <button type="button" class="danger" id="stopServiceBtn">Stop Service</button>
+      <button type="button" class="compact" id="togglePollerBtn">${poller.enabled ? "Pause Poller" : "Resume Poller"}</button>
+      <button type="button" class="compact danger" id="stopServiceBtn">Stop Service</button>
     `;
       } else {
-        $("serviceControls").innerHTML = `<span class="meta-note">Started via <code class="mono">fl-mcp dashboard</code>. Use <code class="mono">fl-mcp service start</code> for persistent background mode.</span>`;
+        $("serviceControls").innerHTML = `<span class="meta-note">Running in standalone process.</span>`;
       }
 
       $("pathsList").innerHTML = [
         kvRow("Data Dir", pths.data_dir || doc.data_dir, true),
-        kvRow("Notes Inbox Dir", pths.notes_dir || doc.notes_dir, true),
-        kvRow("FL User Data Dir", pths.fl_user_dir || doc.fl_user_dir, true),
-        kvRow("FL Install Dir", (pths.fl_install_dirs && pths.fl_install_dirs[0]) || "Auto-detecting on launch", true),
+        kvRow("Notes Inbox", pths.notes_dir || doc.notes_dir, true),
+        kvRow("FL User Dir", pths.fl_user_dir || doc.fl_user_dir, true),
+        kvRow("FL Install Dir", (pths.fl_install_dirs && pths.fl_install_dirs[0]) || "Auto-detect", true),
       ].join("");
 
       const autoBtnEl = $("toggleAutostartBtn");
@@ -1896,10 +1818,10 @@
 
       $("clientsBody").innerHTML = clientRows.length ? clientRows.map((c) => {
         const statusBadge = c.error
-          ? `<span class="badge err" title="${esc(c.error)}">Parse Error</span>`
+          ? `<span class="badge err" title="${esc(c.error)}">Error</span>`
           : c.configured
-            ? `<span class="badge ok">Configured (${esc(c.transport || "stdio")})</span>`
-            : '<span class="badge dim">Not Registered</span>';
+            ? `<span class="badge ok">${esc(c.transport || "stdio")}</span>`
+            : '<span class="badge dim">Unregistered</span>';
         const cliCmd = `fl-mcp config ${c.id} --transport http --write`;
         return `<tr>
       <td><strong>${esc(c.name)}</strong><span class="meta-note mono client-path" title="${esc(c.path || c.hint)}">${esc(c.path || c.hint)}</span></td>
@@ -1908,15 +1830,15 @@
         <div style="display:inline-flex;gap:4px;white-space:nowrap">
           <button type="button" class="compact primary" data-install-client="${esc(c.id)}" data-transport="http">HTTP<span class="visually-hidden"> connect for ${esc(c.name)}</span></button>
           <button type="button" class="compact" data-install-client="${esc(c.id)}" data-transport="stdio">Stdio<span class="visually-hidden"> connect for ${esc(c.name)}</span></button>
-          <button type="button" class="compact copy-btn" data-copy="${esc(cliCmd)}" data-label="${esc(c.name)} command">Copy CLI<span class="visually-hidden"> for ${esc(c.name)}</span></button>
+          <button type="button" class="compact copy-btn" data-copy="${esc(cliCmd)}" data-label="${esc(c.name)} command">Copy<span class="visually-hidden"> CLI for ${esc(c.name)}</span></button>
         </div>
       </td>
     </tr>`;
-      }).join("") : '<tr><td colspan="3" class="empty">Client discovery unavailable.</td></tr>';
+      }).join("") : '<tr><td colspan="3" class="empty">No clients discovered.</td></tr>';
 
       $("tplGrid").innerHTML = templates.length ? templates.map((t) =>
-        `<div class="tpl"><div class="tname">${esc(t.name)}</div><div class="tmeta">${esc(t.tempo)} BPM · ${esc(t.channels)} ch · ${t.sampler_ready ? "Sampler Ready" : "MIDI Only"}</div><div class="tmeta mono" style="margin-top:4px;overflow:hidden;text-overflow:ellipsis">${esc(t.path)}</div></div>`
-      ).join("") : '<div class="empty">No .flp templates discovered. Set FL_MCP_TEMPLATES or save templates in FL Studio.</div>';
+        `<div class="tpl"><div class="tname">${esc(t.name)}</div><div class="tmeta">${esc(t.tempo)} BPM · ${esc(t.channels)} ch · ${t.sampler_ready ? "Sampler" : "MIDI"}</div><div class="tmeta mono" style="margin-top:3px;overflow:hidden;text-overflow:ellipsis">${esc(t.path)}</div></div>`
+      ).join("") : '<div class="empty">No .flp templates found.</div>';
     }
 
     async function runAction(payload, summary) {
@@ -1950,7 +1872,7 @@
           if (!copyBtn.dataset.orig) copyBtn.dataset.orig = copyBtn.textContent;
           copyBtn.textContent = "Copied";
           clearTimeout(copyBtn._tid);
-          copyBtn._tid = setTimeout(() => { copyBtn.textContent = copyBtn.dataset.orig || "Copy"; }, 1300);
+          copyBtn._tid = setTimeout(() => { copyBtn.textContent = copyBtn.dataset.orig || "Copy"; }, 1200);
         }
         return;
       }
@@ -1987,43 +1909,43 @@
         const cb = ev.target.closest("[data-install-client]");
         const client = cb.dataset.installClient;
         const transport = cb.dataset.transport || "http";
-        await runAction({ action: "install_client", client, transport }, `Connected ${client} (${transport})`);
+        await runAction({ action: "install_client", client, transport }, `Registered ${client} (${transport})`);
         return;
       }
       if (ev.target.closest("#connectAllClientsBtn")) {
-        await runAction({ action: "install_client", client: "all", transport: "http" }, "Connected all AI clients (HTTP)");
+        await runAction({ action: "install_client", client: "all", transport: "http" }, "Registered all clients (HTTP)");
         return;
       }
       if (ev.target.closest("#installScriptsBtn")) {
-        await runAction({ action: "install_scripts" }, "Installed FL Studio scripts");
+        await runAction({ action: "install_scripts" }, "Installed FL scripts");
         return;
       }
       if (ev.target.closest("#installShortcutBtn")) {
-        await runAction({ action: "app_shortcut" }, "Created OS desktop app shortcut");
+        await runAction({ action: "app_shortcut" }, "Created OS shortcut");
         return;
       }
       if (ev.target.closest("#toggleAutostartBtn")) {
         const enable = !(latest?.service?.autostart?.enabled);
-        await runAction({ action: "autostart", enable }, enable ? "Enabled login autostart" : "Disabled login autostart");
+        await runAction({ action: "autostart", enable }, enable ? "Autostart enabled" : "Autostart disabled");
         return;
       }
       if (ev.target.closest("[data-desk-mode]")) {
         const db = ev.target.closest("[data-desk-mode]");
         const mode = db.dataset.deskMode;
-        await runAction({ action: "desktop_mode", mode }, `Desktop mode -> ${mode}`);
+        await runAction({ action: "desktop_mode", mode }, `Desktop: ${mode}`);
         return;
       }
       if (ev.target.closest("#previewChordsBtn")) {
         const chords = $("chordInput").value.trim();
-        await runAction({ action: "notes", chords, preview: true }, "Previewed chords");
+        await runAction({ action: "notes", chords, preview: true }, "Auditioned chords");
         return;
       }
       if (ev.target.closest("#clearQueueBtn")) {
-        await runAction({ action: "notes", clear: "queue" }, "Cleared note queue");
+        await runAction({ action: "notes", clear: "queue" }, "Cleared queue");
         return;
       }
       if (ev.target.closest("#clearRollBtn")) {
-        await runAction({ action: "notes", clear: "roll" }, "Queued Piano Roll clear");
+        await runAction({ action: "notes", clear: "roll" }, "Queued roll clear");
         return;
       }
       if (ev.target.closest("#togglePollerBtn")) {
@@ -2033,14 +1955,14 @@
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ enabled }),
         });
-        announce(enabled ? "Background poller resumed." : "Background poller paused.");
+        announce(enabled ? "Poller resumed." : "Poller paused.");
         await refresh();
         return;
       }
       if (ev.target.closest("#stopServiceBtn")) {
         await fetch("/api/service/stop", { method: "POST" });
-        setPill($("svcBadge"), "warn", "Service: Stopping...");
-        announce("Background service stopping.");
+        setPill($("svcBadge"), "warn", "Stopping");
+        announce("Service stopping.");
       }
     });
 
@@ -2051,13 +1973,13 @@
         announce("BPM must be between 10 and 522.");
         return;
       }
-      await runAction({ action: "transport", transport_action: "tempo", value: val }, `Set tempo ${val} BPM`);
+      await runAction({ action: "transport", transport_action: "tempo", value: val }, `Tempo ${val} BPM`);
     });
 
     $("chordForm").addEventListener("submit", async (e) => {
       e.preventDefault();
       const chords = $("chordInput").value.trim();
-      await runAction({ action: "notes", chords }, "Queued chord progression");
+      await runAction({ action: "notes", chords }, "Queued chords");
     });
 
     $("composeForm").addEventListener("submit", async (e) => {
@@ -2065,7 +1987,7 @@
       const genre = $("compGenre").value;
       const key = $("compKey").value.trim() || "Am";
       const length = Number($("compBars").value) || 4;
-      await runAction({ action: "produce_plan", genre, key, length }, `Composed ${genre} (${key}) plan`);
+      await runAction({ action: "produce_plan", genre, key, length }, `Composed ${genre} (${key})`);
     });
 
     async function refresh() {
@@ -2082,9 +2004,9 @@
         const res = await fetch("/api/poll", { method: "POST" });
         const body = res.ok ? await res.json().catch(() => ({})) : { ok: false, error: `HTTP ${res.status}` };
         await refresh();
-        announce(body.ok === false ? `Poll failed: ${body.error || "FL Studio unavailable"}` : "FL Studio polled.");
+        announce(body.ok === false ? `Poll failed: ${body.error || "unavailable"}` : "Polled FL Studio.");
       } catch {
-        announce("Poll failed: unable to reach service.");
+        announce("Poll failed.");
       } finally {
         btn.disabled = false;
       }
@@ -2092,7 +2014,7 @@
 
     $("autoBtn").addEventListener("click", () => {
       autoRefresh = !autoRefresh;
-      $("autoBtn").textContent = `Auto-Sync: ${autoRefresh ? "On" : "Off"}`;
+      $("autoBtn").textContent = `Sync: ${autoRefresh ? "On" : "Off"}`;
       $("autoBtn").setAttribute("aria-pressed", autoRefresh ? "true" : "false");
     });
 
@@ -2107,7 +2029,7 @@
       await fetch("/api/traffic/clear", { method: "POST" });
       lastTrafficSig = "";
       await refresh();
-      announce("Traffic log cleared.");
+      announce("Log cleared.");
     });
 
     $("refreshTplBtn").addEventListener("click", async () => {

@@ -200,6 +200,171 @@ def build_state(
     }
 
 
+def _act_install_scripts(_body: dict[str, Any], _http_port: int) -> dict[str, Any]:
+    from fl_mcp import install
+
+    (paths.fl_user_dir() / "Settings").mkdir(parents=True, exist_ok=True)
+    installed = install.install()
+    return {
+        "ok": True,
+        "action": "install_scripts",
+        "installed": [str(p) for p in installed],
+        "doctor": doctor_info(),
+    }
+
+
+def _act_install_client(body: dict[str, Any], http_port: int) -> dict[str, Any]:
+    from fl_mcp import clients
+
+    target = str(body.get("client") or "all").strip()
+    transport = str(body.get("transport") or "http").strip()
+    source = str(body.get("source") or "local").strip()
+    http_url = str(body.get("http_url") or f"http://127.0.0.1:{http_port}/mcp")
+    if target == "all":
+        res: Any = clients.install_all(source=source, transport=transport, http_url=http_url)
+    else:
+        res = clients.install_client(target, source=source, transport=transport, http_url=http_url)
+    return {
+        "ok": True,
+        "action": "install_client",
+        "result": res,
+        "clients": clients.client_statuses(),
+    }
+
+
+def _act_desktop_mode(body: dict[str, Any], _http_port: int) -> dict[str, Any]:
+    mode = body.get("mode", "stealth")
+    flag_path = desk.set_enabled(mode)
+    return {
+        "ok": True,
+        "action": "desktop_mode",
+        "desktop_enabled": desk.enabled(),
+        "desktop_mode": desk.mode(),
+        "path": str(flag_path),
+    }
+
+
+def _act_autostart(body: dict[str, Any], http_port: int) -> dict[str, Any]:
+    from fl_mcp import service_daemon
+
+    enable = bool(body.get("enable", True))
+    res = (
+        service_daemon.enable_autostart(port=http_port)
+        if enable
+        else service_daemon.disable_autostart()
+    )
+    return {"ok": True, "action": "autostart", "autostart": res}
+
+
+def _act_app_shortcut(_body: dict[str, Any], _http_port: int) -> dict[str, Any]:
+    from fl_mcp import app as studio_app
+
+    return {"ok": True, "action": "app_shortcut", "shortcut": studio_app.install_app_shortcut()}
+
+
+def _act_produce_plan(body: dict[str, Any], _http_port: int) -> dict[str, Any]:
+    from fl_mcp.music import compose
+
+    genre = str(body.get("genre") or "house").strip()
+    key = str(body.get("key") or "Am").strip()
+    raw_bpm = body.get("bpm")
+    bpm = int(float(raw_bpm)) if raw_bpm not in (None, "") else None
+    raw_len = body.get("length") or "short"
+    length: str | int = (
+        int(raw_len)
+        if str(raw_len).isdigit()
+        else (str(raw_len) if str(raw_len) in ("sketch", "short", "full") else "short")
+    )
+    built = compose(genre, key=key, bpm=bpm, length=length)
+    saved = produce.save_plan(built)
+    summary = built.summary()
+    telemetry.update_snapshot(latest_plan=summary)
+    return {"ok": True, "action": "produce_plan", "plan": summary, "path": str(saved)}
+
+
+def _act_notes(body: dict[str, Any], get_bridge: Any) -> dict[str, Any]:
+    from fl_mcp import server
+    from fl_mcp.music import theory
+
+    inbox_file = paths.notes_dir() / "inbox.json"
+    clear_mode = body.get("clear")
+    if clear_mode == "queue":
+        inbox_file.unlink(missing_ok=True)
+        telemetry.update_snapshot(piano_inbox={"notes": [], "clear": False})
+        return {"ok": True, "action": "notes", "cleared_queue": True}
+
+    raw_notes = list(body.get("notes") or [])
+    chords = str(body.get("chords") or "").strip()
+    if chords:
+        raw_notes.extend(theory.chords_to_notes(chords))
+    clean = [server._note(n) for n in raw_notes]
+
+    if bool(body.get("preview")):
+        if not clean:
+            return {"ok": False, "action": "notes", "error": "enter chords or notes first"}
+        b = get_bridge()
+        ch_arg = body.get("channel")
+        ch = int(ch_arg) if ch_arg not in (None, "") else int((b.call({"o": "status"}) or {}).get("ch") or 0)
+        seen: dict[int, int] = {}
+        for r in clean:
+            seen.setdefault(int(r[0]), int(r[3]))
+        pitches = list(seen.items())[:16]
+        for p, v in pitches:
+            b.call({"o": "note", "c": ch, "n": p, "v": v})
+        time.sleep(0.22)
+        for p, _ in pitches:
+            b.call({"o": "note", "c": ch, "n": p, "v": 0})
+        return {"ok": True, "action": "notes", "previewed": len(pitches), "channel": ch}
+
+    clear_roll = clear_mode in (True, "roll", "all")
+    if not clean and not clear_roll:
+        return {"ok": False, "action": "notes", "error": "enter chords or notes to queue"}
+    payload = {"notes": clean, "clear": bool(clear_roll), "ts": round(time.time(), 3)}
+    server._write_json(inbox_file, payload)
+    telemetry.update_snapshot(piano_inbox=payload)
+    return {"ok": True, "action": "notes", "queued": len(clean), "cleared": bool(clear_roll)}
+
+
+def _act_bridge(
+    action: str, body: dict[str, Any], get_bridge: Any, bridge_factory: Any
+) -> dict[str, Any]:
+    b = get_bridge()
+    if action == "transport":
+        act = str(body.get("transport_action") or body.get("a") or "").strip()
+        res = b.call({"o": "tr", "a": act, "v": body.get("value")})
+    elif action == "set":
+        kind = str(body.get("kind") or "mixer").strip()
+        idx = int(body.get("index", 0))
+        res = b.call({"o": "set", "k": kind, "i": idx, "p": dict(body.get("props") or {})})
+    else:
+        ch = int(body.get("channel", 0))
+        step_idx = max(0, min(63, int(body.get("step", 0))))
+        turn_on = bool(body.get("on", True))
+        res = b.call(
+            {
+                "o": "steps",
+                "c": ch,
+                "p": 0,
+                "n": 16,
+                "clear": 0,
+                "on": [step_idx] if turn_on else [],
+                "off": [] if turn_on else [step_idx],
+            }
+        )
+    poll_fl_once(bridge_factory, bridge=b)
+    return {"ok": True, "action": action, "result": res}
+
+
+_HOST_ACTIONS = {
+    "install_scripts": _act_install_scripts,
+    "install_client": _act_install_client,
+    "desktop_mode": _act_desktop_mode,
+    "autostart": _act_autostart,
+    "app_shortcut": _act_app_shortcut,
+    "produce_plan": _act_produce_plan,
+}
+
+
 def dispatch_action(
     body: dict[str, Any],
     *,
@@ -208,160 +373,27 @@ def dispatch_action(
     http_port: int = 8765,
 ) -> dict[str, Any]:
     """Execute an interactive Studio Desktop App action and return structured status."""
-    from fl_mcp import app as studio_app
-    from fl_mcp import clients, install, server, service_daemon
-    from fl_mcp.music import compose, theory
-
     action = str(body.get("action") or "").strip()
     if not action:
         return {"ok": False, "action": "", "error": "missing action"}
 
     owns = bridge is None
     b: Any | None = None
+
+    def get_bridge() -> Any:
+        nonlocal b
+        if b is None:
+            b = bridge_factory() if owns else bridge
+        return b
+
     try:
-        if action == "install_scripts":
-            (paths.fl_user_dir() / "Settings").mkdir(parents=True, exist_ok=True)
-            installed = install.install()
-            return {
-                "ok": True,
-                "action": action,
-                "installed": [str(p) for p in installed],
-                "doctor": doctor_info(),
-            }
-        if action == "install_client":
-            target = str(body.get("client") or "all").strip()
-            transport = str(body.get("transport") or "http").strip()
-            source = str(body.get("source") or "local").strip()
-            http_url = str(body.get("http_url") or f"http://127.0.0.1:{http_port}/mcp")
-            if target == "all":
-                res: Any = clients.install_all(
-                    source=source, transport=transport, http_url=http_url
-                )
-            else:
-                res = clients.install_client(
-                    target, source=source, transport=transport, http_url=http_url
-                )
-            return {
-                "ok": True,
-                "action": action,
-                "result": res,
-                "clients": clients.client_statuses(),
-            }
-        if action == "desktop_mode":
-            mode = body.get("mode", "stealth")
-            flag_path = desk.set_enabled(mode)
-            return {
-                "ok": True,
-                "action": action,
-                "desktop_enabled": desk.enabled(),
-                "desktop_mode": desk.mode(),
-                "path": str(flag_path),
-            }
-        if action == "autostart":
-            enable = bool(body.get("enable", True))
-            res = (
-                service_daemon.enable_autostart(port=http_port)
-                if enable
-                else service_daemon.disable_autostart()
-            )
-            return {"ok": True, "action": action, "autostart": res}
-        if action == "app_shortcut":
-            res = studio_app.install_app_shortcut()
-            return {"ok": True, "action": action, "shortcut": res}
-        if action == "produce_plan":
-            genre = str(body.get("genre") or "house").strip()
-            key = str(body.get("key") or "Am").strip()
-            raw_bpm = body.get("bpm")
-            bpm = int(float(raw_bpm)) if raw_bpm not in (None, "") else None
-            raw_len = body.get("length") or "short"
-            length: str | int = (
-                int(raw_len)
-                if str(raw_len).isdigit()
-                else (str(raw_len) if str(raw_len) in ("sketch", "short", "full") else "short")
-            )
-            built = compose(genre, key=key, bpm=bpm, length=length)
-            saved = produce.save_plan(built)
-            summary = built.summary()
-            telemetry.update_snapshot(latest_plan=summary)
-            return {"ok": True, "action": action, "plan": summary, "path": str(saved)}
+        host_fn = _HOST_ACTIONS.get(action)
+        if host_fn is not None:
+            return host_fn(body, http_port)
         if action == "notes":
-            ndir = paths.notes_dir()
-            inbox_file = ndir / "inbox.json"
-            clear_mode = body.get("clear")
-            if clear_mode == "queue":
-                inbox_file.unlink(missing_ok=True)
-                telemetry.update_snapshot(piano_inbox={"notes": [], "clear": False})
-                return {"ok": True, "action": action, "cleared_queue": True}
-            raw_notes = list(body.get("notes") or [])
-            chords = str(body.get("chords") or "").strip()
-            if chords:
-                raw_notes.extend(theory.chords_to_notes(chords))
-            clean = [server._note(n) for n in raw_notes]
-            if bool(body.get("preview")):
-                if not clean:
-                    return {"ok": False, "action": action, "error": "enter chords or notes first"}
-                b = bridge_factory() if owns else bridge
-                ch_arg = body.get("channel")
-                if ch_arg not in (None, ""):
-                    ch = int(ch_arg)
-                else:
-                    st = b.call({"o": "status"})
-                    ch = int((st or {}).get("ch") or 0)
-                seen: dict[int, int] = {}
-                for r in clean:
-                    seen.setdefault(int(r[0]), int(r[3]))
-                pitches = list(seen.items())[:16]
-                for p, v in pitches:
-                    b.call({"o": "note", "c": ch, "n": p, "v": v})
-                time.sleep(0.22)
-                for p, _ in pitches:
-                    b.call({"o": "note", "c": ch, "n": p, "v": 0})
-                return {"ok": True, "action": action, "previewed": len(pitches), "channel": ch}
-            clear_roll = clear_mode in (True, "roll", "all")
-            if not clean and not clear_roll:
-                return {"ok": False, "action": action, "error": "enter chords or notes to queue"}
-            payload = {"notes": clean, "clear": bool(clear_roll), "ts": round(time.time(), 3)}
-            server._write_json(inbox_file, payload)
-            telemetry.update_snapshot(piano_inbox=payload)
-            return {
-                "ok": True,
-                "action": action,
-                "queued": len(clean),
-                "cleared": bool(clear_roll),
-            }
-        if action == "transport":
-            act = str(body.get("transport_action") or body.get("a") or "").strip()
-            val = body.get("value")
-            b = bridge_factory() if owns else bridge
-            res = b.call({"o": "tr", "a": act, "v": val})
-            poll_fl_once(bridge_factory, bridge=b)
-            return {"ok": True, "action": action, "result": res}
-        if action == "set":
-            kind = str(body.get("kind") or "mixer").strip()
-            idx = int(body.get("index", 0))
-            props = dict(body.get("props") or {})
-            b = bridge_factory() if owns else bridge
-            res = b.call({"o": "set", "k": kind, "i": idx, "p": props})
-            poll_fl_once(bridge_factory, bridge=b)
-            return {"ok": True, "action": action, "result": res}
-        if action == "step":
-            ch = int(body.get("channel", 0))
-            step_idx = max(0, min(63, int(body.get("step", 0))))
-            turn_on = bool(body.get("on", True))
-            b = bridge_factory() if owns else bridge
-            res = b.call(
-                {
-                    "o": "steps",
-                    "c": ch,
-                    "p": 0,
-                    "n": 16,
-                    "clear": 0,
-                    "on": [step_idx] if turn_on else [],
-                    "off": [] if turn_on else [step_idx],
-                }
-            )
-            poll_fl_once(bridge_factory, bridge=b)
-            return {"ok": True, "action": action, "result": res}
+            return _act_notes(body, get_bridge)
+        if action in ("transport", "set", "step"):
+            return _act_bridge(action, body, get_bridge, bridge_factory)
         return {"ok": False, "action": action, "error": f"unknown action: {action}"}
     except (Exception, SystemExit) as exc:
         return {"ok": False, "action": action, "error": str(exc)}

@@ -67,8 +67,8 @@ def app_manifest() -> dict[str, Any]:
         "start_url": "/?app=1",
         "scope": "/",
         "display": "standalone",
-        "background_color": "#0b0e14",
-        "theme_color": "#0b0e14",
+        "background_color": "#141518",
+        "theme_color": "#141518",
         "icons": [
             {"src": "/assets/icon-64.png", "sizes": "64x64", "type": "image/png"},
             {"src": "/assets/icon-128.png", "sizes": "128x128", "type": "image/png"},
@@ -273,7 +273,7 @@ def _run_native_tk(url: str, *, host: str, port: int, runtime: dict[str, Any]) -
     root.title(f"FL-MCP Studio v{__version__}")
     root.geometry("760x560")
     root.minsize(640, 480)
-    root.configure(bg="#0b0e14")
+    root.configure(bg="#141518")
 
     # Apply bundled OS icon cleanly when available.
     if sys.platform == "win32":
@@ -298,13 +298,13 @@ def _run_native_tk(url: str, *, host: str, port: int, runtime: dict[str, Any]) -
         except tk.TclError:
             emblem = None
 
-    bg = "#0b0e14"
-    panel = "#151b28"
-    elev = "#111622"
-    fg = "#eef2fa"
-    muted = "#98a6c0"
+    bg = "#141518"
+    panel = "#1c1e22"
+    elev = "#181a1e"
+    fg = "#e8ecf2"
+    muted = "#8e949f"
     accent = "#ff7a2f"
-    green = "#3ddc97"
+    green = "#65c466"
     ui_font = (
         "Segoe UI"
         if runtime["os"] == "windows"
@@ -317,7 +317,7 @@ def _run_native_tk(url: str, *, host: str, port: int, runtime: dict[str, Any]) -
     )
 
     header = tk.Frame(
-        root, bg=elev, padx=18, pady=14, highlightthickness=1, highlightbackground="#2a3448"
+        root, bg=elev, padx=18, pady=14, highlightthickness=1, highlightbackground="#2c3036"
     )
     header.pack(fill="x")
     if emblem is not None:
@@ -332,7 +332,7 @@ def _run_native_tk(url: str, *, host: str, port: int, runtime: dict[str, Any]) -
     ).pack(fill="x")
     tk.Label(
         title_box,
-        text=f"v{__version__} · {runtime['os']} ({runtime['arch']}) · Native Desktop App",
+        text=f"v{__version__} · {runtime['os']} ({runtime['arch']}) · Desktop Console",
         font=(ui_font, 9),
         fg=muted,
         bg=elev,
@@ -347,7 +347,7 @@ def _run_native_tk(url: str, *, host: str, port: int, runtime: dict[str, Any]) -
     cards.pack(fill="x")
     for var, fg_color in ((status_var, green), (service_var, fg), (metrics_var, muted)):
         box = tk.Frame(
-            cards, bg=panel, padx=12, pady=8, highlightthickness=1, highlightbackground="#2a3448"
+            cards, bg=panel, padx=12, pady=8, highlightthickness=1, highlightbackground="#2c3036"
         )
         box.pack(fill="x", pady=4)
         tk.Label(
