@@ -227,7 +227,11 @@ def read_snapshot() -> dict[str, Any]:
                         "genre": p.get("genre"),
                         "key": p.get("key"),
                         "bpm": p.get("bpm"),
-                        "bars": p.get("bars"),
+                        "bars": p.get("bars")
+                        or max(
+                            (c.get("bar", 0) + c.get("bars", 0) for c in (p.get("clips") or [])),
+                            default=0,
+                        ),
                         "roles": p.get("roles", []),
                         "patterns": [
                             {

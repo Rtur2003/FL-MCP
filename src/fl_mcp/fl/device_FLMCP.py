@@ -190,7 +190,7 @@ def _col(s):
     try:
         return int(s[0:2], 16) | (int(s[2:4], 16) << 8) | (int(s[4:6], 16) << 16)
     except ValueError:
-        raise ValueError("color must be #RRGGBB")
+        raise ValueError("color must be #RRGGBB") from None
 
 
 def _flip(current, want, toggle):
