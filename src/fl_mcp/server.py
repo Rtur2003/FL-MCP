@@ -107,7 +107,10 @@ async def fl_status(
     status["desktop"] = desk.mode()
     telemetry.update_snapshot(status=status)
     if probe:
+        from fl_mcp import paths
+
         status["probe"] = await _fl({"o": "probe"})
+        status["paths"] = paths.diagnostics()
     if log:
         status["log"] = await _fl({"o": "diag"})
         status["traffic"] = telemetry.brief()
@@ -374,9 +377,13 @@ async def fl_param(
     target: Literal["channel", "mixer"],
     index: Annotated[Index, Field(description="channel index or mixer track")],
     slot: Annotated[int, Field(ge=-1, le=9, description="mixer effect slot 0-9")] = -1,
-    view: Annotated[Literal["params", "info", "presets"], Field(description="read")] = "params",
+    view: Annotated[
+        Literal["params", "info", "presets", "io"], Field(description="read")
+    ] = "params",
     find: Annotated[str, Field(description="list: names containing this")] = "",
-    param: Annotated[str | None, Field(description="name (part) or index")] = None,
+    param: Annotated[
+        str | None, Field(description="name, index, or fl:mix|mute|slots|focus")
+    ] = None,
     value: Annotated[float | None, Field(description="0-1 position of 'param'")] = None,
     real: Annotated[str | None, Field(description="'-6 dB', '2.5 kHz', '120 ms', '4:1'")] = None,
     settings: Annotated[
@@ -387,27 +394,36 @@ async def fl_param(
     limit: Annotated[int, Field(ge=1, le=120)] = 40,
 ) -> str:
     """Any plugin on a channel or mixer slot, stock or third party. Lists parameters; view reads
-    info or preset names. Sets one parameter (value 0-1, or real, solved against the plugin's own
-    text so '-18 dB' really shows -18 dB) or many (settings), or loads a preset."""
+    info, presets, or io (routing, out_ctrls, pads, slot state). Sets param or settings (including
+    fl:mix, fl:mute, fl:slots, fl:focus), or loads preset."""
     if target == "mixer" and slot < 0:
         raise ToolError("mixer needs slot 0-9")
     req: dict[str, Any] = {"o": "param", "t": target, "i": index, "s": slot}
+    p_key = param.strip().lower() if param is not None else ""
     if settings:
         try:
             req.update(a="many", set=units.parse_settings(settings))
         except ValueError as exc:
             raise ToolError(str(exc)) from None
-    elif value is not None or real is not None:
+    elif value is not None or real is not None or p_key == "fl:focus":
         if param is None:
             raise ToolError("value and real need param: a name or index (list them first)")
         if value is not None and real is not None:
             raise ToolError("give value or real, not both")
+        val = 1.0 if value is None and real is None else value
         req.update(a="set", p=int(param) if param.strip().isdigit() else param)
-        req["v" if value is not None else "r"] = value if value is not None else real
+        req["v" if val is not None else "r"] = val if val is not None else real
     elif preset:
         req.update(a="preset", **({"d": int(preset)} if units.is_steps(preset) else {"q": preset}))
-    elif view != "params":
-        req.update(a=view, st=start, n=limit)
+    elif p_key in ("fl:mix", "fl:mute", "fl:slots") or view != "params":
+        act = "io" if p_key in ("fl:mix", "fl:mute", "fl:slots") else view
+        req.update(a=act, st=start, n=limit)
+    elif param is not None:
+        raw_p = param.strip()
+        if raw_p.isdigit():
+            req.update(a="list", f=find, st=int(raw_p), n=1)
+        else:
+            req.update(a="list", f=find or raw_p, st=start, n=limit)
     else:
         req.update(a="list", f=find, st=start, n=limit)
     return _out(await _fl(req))
@@ -429,6 +445,22 @@ async def fl_library(
     if action == "scan":
         return _out(await _thread(library.scan, 45.0))
     if action == "plugins":
+        if role in ("soundfont", "sf2"):
+            sfs = await _thread(library.list_soundfonts, query, limit)
+            return _out(
+                {
+                    "cols": ["name", "pack", "path"],
+                    "rows": [[s["name"], s["k"], s["p"]] for s in sfs],
+                }
+            )
+        if role == "preset":
+            presets = await _thread(library.list_presets, query, None, limit)
+            return _out(
+                {
+                    "cols": ["name", "kind", "format", "path"],
+                    "rows": [[p["name"], p["kind"], p["format"], p["path"]] for p in presets],
+                }
+            )
         rows = await _thread(library.list_plugins, query, role, limit)
         return _out(
             {
@@ -1116,6 +1148,21 @@ def _live_traffic() -> str:
 )
 def _live_studio() -> str:
     return _out(telemetry.read_snapshot())
+
+
+@mcp.resource(
+    "fl://info/paths",
+    name="resolved_paths",
+    title="Resolved paths & service status",
+    description="Resolved FL/data/notes paths, env overrides, and background service URL.",
+    mime_type="application/json",
+)
+def _info_paths() -> str:
+    from fl_mcp import paths, service_daemon
+
+    info = paths.diagnostics()
+    info["service"] = service_daemon.service_status()
+    return _out(info)
 
 
 def _task(request: str, *topics: str) -> str:
