@@ -39,7 +39,9 @@ def command(source: str = "pypi", audio: bool = True, *, resolve: bool = False) 
     """The command and arguments that start the server."""
     if source not in SOURCES:
         raise ValueError(f"source must be one of {', '.join(SOURCES)}")
-    if source == "local":  # the interpreter that runs this: works from any virtual environment
+    if source == "local":  # works from venv, uv tool, or standalone frozen app binary
+        if getattr(sys, "frozen", False):
+            return sys.executable, ["--mcp"]
         return sys.executable, ["-m", "fl_mcp"]
     spec = "fl-mcp[audio]" if audio else "fl-mcp"
     uvx = resolve_uvx() if resolve else (shutil.which("uvx") or "uvx")
