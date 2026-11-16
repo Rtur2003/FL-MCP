@@ -125,7 +125,6 @@ def render_master_icon(size: int = 512) -> np.ndarray:
     # Symmetrically spaced at x = -0.39, -0.13, +0.13, +0.39
     fader_x = (-0.39, -0.13, 0.13, 0.39)
     fader_levels = (0.08, -0.26, -0.06, -0.34)  # y-coordinate of fader cap (negative is higher)
-    slot_top = -0.48
     slot_bot = 0.48
     slot_cy = 0.0
     slot_hh = 0.48

@@ -304,7 +304,11 @@ def _act_notes(body: dict[str, Any], get_bridge: Any) -> dict[str, Any]:
             return {"ok": False, "action": "notes", "error": "enter chords or notes first"}
         b = get_bridge()
         ch_arg = body.get("channel")
-        ch = int(ch_arg) if ch_arg not in (None, "") else int((b.call({"o": "status"}) or {}).get("ch") or 0)
+        ch = (
+            int(ch_arg)
+            if ch_arg not in (None, "")
+            else int((b.call({"o": "status"}) or {}).get("ch") or 0)
+        )
         seen: dict[int, int] = {}
         for r in clean:
             seen.setdefault(int(r[0]), int(r[3]))
