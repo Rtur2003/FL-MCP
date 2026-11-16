@@ -186,7 +186,7 @@ def build_app_archive(
         with tarfile.open(archive_path, "w:gz") as tf:
             for item in sorted(stage.rglob("*")):
                 arc = Path("fl-mcp-studio") / item.relative_to(stage)
-                tf.add(item, arcname=arc.as_posix())
+                tf.add(item, arcname=arc.as_posix(), recursive=False)
     else:
         with zipfile.ZipFile(
             archive_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9
