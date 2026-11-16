@@ -20,9 +20,10 @@ The server talks to FL Studio through a virtual MIDI port called `FL MCP`. Three
 Optional: `fl-mcp desktop on` (or `stealth`, `polite`, `foreground`, `status`) lets the model see FL's screen and drive shortcuts (`fl_desk`), and `fl-mcp setup --desktop` enables `polite` mode automatically. `polite` (default when on) captures via background `PrintWindow` and waits for you to be idle before focusing FL, restoring your previous window afterwards; `stealth` never steals focus. Browser popup confirmation (`fl_ui`) avoids moving your mouse cursor unless in `foreground` mode. The audio tools need the audio extra: `uv tool install "fl-mcp[audio]"`.
 
 Live monitoring, background daemon & troubleshooting tools:
-- `fl-mcp service start`: launches the detached background service hosting both the Studio Web UI (`http://127.0.0.1:8765/`) and persistent HTTP/SSE MCP endpoints (`/mcp`, `/sse`) plus a non-intrusive telemetry poller (`service stop`, `service status`, `service autostart enable`).
+- `fl-mcp app` (or `fl-mcp-studio`): launches FL-MCP Studio as a native desktop app window (`--native` for built-in tkinter, `--install-shortcut` for Start Menu / `.app` / `.desktop`) and ensures the background service is running.
+- `fl-mcp service start`: launches the detached background service hosting both the Studio App backend (`http://127.0.0.1:8765/`) and persistent HTTP/SSE MCP endpoints (`/mcp`, `/sse`) plus a non-intrusive telemetry poller (`service stop`, `service status`, `service autostart enable`).
 - `fl-mcp config <client> --transport http --write`: registers your AI client (including `claude-desktop`, `cursor`, `vscode`, `windsurf`, `gemini`, `antigravity`, `codex`) against the background service endpoint instead of spawning stdio per session.
-- `fl-mcp dashboard`: opens the local browser studio visualizer & incoming/outgoing traffic monitor (`127.0.0.1:8765`, showing MIDI TX/RX frames, latency, mixer meters, Channel Rack, Piano Roll canvas, 7-band audio spectrum, universal paths, and discovered `.flp` templates).
+- `fl-mcp dashboard`: opens the Studio desktop app (`--browser` to open in a browser tab instead; shows MIDI TX/RX frames, latency, mixer meters, Channel Rack, Piano Roll canvas, 7-band audio spectrum, universal paths, and discovered `.flp` templates).
 - `fl-mcp traffic --follow`: streams live MIDI & MCP traffic counters and failures in the terminal.
 - `fl-mcp templates`: lists auto-discovered `.flp` project templates on disk (`fl_produce action=flp template=auto`).
 

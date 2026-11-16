@@ -11,6 +11,7 @@ Serves a dark DAW-styled local web UI on 127.0.0.1 that displays:
 from __future__ import annotations
 
 import importlib.resources
+import importlib.util
 import json
 import math
 import os
@@ -100,9 +101,10 @@ def doctor_info() -> dict[str, Any]:
     info["fl_user_dir"] = str(fl_user)
     info["paths"] = paths.diagnostics()
     try:
-        from fl_mcp import audio
-
-        info["audio_analysis"] = audio.available()
+        info["audio_analysis"] = all(
+            sys.modules.get(mod, False) is not None and importlib.util.find_spec(mod) is not None
+            for mod in ("numpy", "scipy", "soundfile")
+        )
     except Exception:
         info["audio_analysis"] = False
     return info

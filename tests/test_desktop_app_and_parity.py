@@ -141,6 +141,15 @@ def test_build_app_pyinstaller_command_and_names(tmp_path):
     out = build_app.build_app_archive(tmp_path, os_name="linux", arch="arm64", dry_run=True)
     assert out.name.endswith("-linux-arm64.tar.gz")
 
+    import packaging  # ensure PyPA packaging does not shadow local packaging/build_release.py
+
+    assert hasattr(packaging, "__file__")
+    stage = tmp_path / "stage_extras"
+    stage.mkdir()
+    build_app._stage_common_extras(stage, "linux")
+    assert (stage / "fl-mcp-studio.desktop").is_file()
+    assert (stage / "FL-Studio-Scripts" / "install-fl-scripts.py").is_file()
+
 
 def test_theory_named_chords_and_progression_expansion():
     assert theory.parse_named_chord("Am7") == [69, 72, 76, 79]

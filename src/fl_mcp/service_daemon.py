@@ -369,33 +369,53 @@ def create_asgi_app(
         )
 
     async def api_state(request: Request) -> JSONResponse:
+        import anyio
+
         refresh = request.query_params.get("refresh_templates") == "1"
-        state = dashboard.build_state(refresh_templates=refresh)
+        state = await anyio.to_thread.run_sync(
+            lambda: dashboard.build_state(refresh_templates=refresh)
+        )
         state["service"] = {**service_status(), "poller": poller.config()}
         return JSONResponse(state)
 
     async def api_doctor(_request: Request) -> JSONResponse:
-        return JSONResponse(dashboard.doctor_info())
+        import anyio
+
+        return JSONResponse(await anyio.to_thread.run_sync(dashboard.doctor_info))
 
     async def api_paths(_request: Request) -> JSONResponse:
-        return JSONResponse(paths.diagnostics())
+        import anyio
+
+        return JSONResponse(await anyio.to_thread.run_sync(paths.diagnostics))
 
     async def api_clients(_request: Request) -> JSONResponse:
-        return JSONResponse({"clients": clients.client_statuses(), "service": service_status()})
+        import anyio
+
+        res = await anyio.to_thread.run_sync(
+            lambda: {"clients": clients.client_statuses(), "service": service_status()}
+        )
+        return JSONResponse(res)
 
     async def api_service(_request: Request) -> JSONResponse:
         return JSONResponse({**service_status(), "poller": poller.config()})
 
     async def api_poll(_request: Request) -> JSONResponse:
-        return JSONResponse(dashboard.poll_fl_once(bridge=server.bridge))
+        import anyio
+
+        res = await anyio.to_thread.run_sync(lambda: dashboard.poll_fl_once(bridge=server.bridge))
+        return JSONResponse(res)
 
     async def api_traffic_clear(_request: Request) -> JSONResponse:
+        import anyio
+
         from fl_mcp import telemetry
 
-        return JSONResponse({"cleared": telemetry.clear_traffic()})
+        return JSONResponse({"cleared": await anyio.to_thread.run_sync(telemetry.clear_traffic)})
 
     async def api_templates_refresh(_request: Request) -> JSONResponse:
-        items = dashboard.cached_templates(force=True)
+        import anyio
+
+        items = await anyio.to_thread.run_sync(lambda: dashboard.cached_templates(force=True))
         return JSONResponse({"count": len(items), "templates": items})
 
     async def api_poll_config(request: Request) -> JSONResponse:
@@ -534,7 +554,7 @@ def start_daemon(
     port: int = DEFAULT_PORT,
     poll: bool = True,
     poll_interval: float = DEFAULT_POLL_INTERVAL,
-    wait_timeout: float = 5.0,
+    wait_timeout: float = 10.0,
 ) -> dict[str, Any]:
     """Launch the background daemon detached and wait until its endpoint responds."""
     current = service_status()

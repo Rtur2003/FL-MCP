@@ -382,7 +382,9 @@ def _run_native_tk(url: str, *, host: str, port: int, runtime: dict[str, Any]) -
             from fl_mcp.install import install
 
             created = install()
-            messagebox.showinfo("FL-MCP Scripts", "Installed:\n" + "\n".join(str(p) for p in created))
+            messagebox.showinfo(
+                "FL-MCP Scripts", "Installed:\n" + "\n".join(str(p) for p in created)
+            )
         except BaseException as exc:
             messagebox.showerror("FL-MCP Scripts", str(exc))
 
@@ -497,9 +499,13 @@ def open_studio_window(
     chosen = rt["default_backend"] if backend == "auto" else backend
     if chosen == "webview":
         try:
-            return _open_webview(url, title=f"FL-MCP Studio v{__version__}", width=width, height=height)
+            return _open_webview(
+                url, title=f"FL-MCP Studio v{__version__}", width=width, height=height
+            )
         except Exception:
-            chosen = "app-window" if rt["app_window"] else ("native" if rt["tkinter"] else "browser")
+            chosen = (
+                "app-window" if rt["app_window"] else ("native" if rt["tkinter"] else "browser")
+            )
     if chosen == "app-window":
         if open_chromeless_window(url, width=width, height=height, wait=wait_embedded) is not None:
             return "app-window"
@@ -599,7 +605,9 @@ def install_app_shortcut(*, base_dir: Path | None = None) -> dict[str, Any]:
             )
         else:
             # Deterministic offline write when base_dir is provided in isolated unit tests.
-            lnk.write_text(json.dumps({"target": exe, "args": args, "icon": str(icon_file)}), "utf-8")
+            lnk.write_text(
+                json.dumps({"target": exe, "args": args, "icon": str(icon_file)}), "utf-8"
+            )
         return {"os": os_name, "arch": normalize_arch(), "path": str(lnk), "icon": str(icon_file)}
 
     if os_name == "macos":
@@ -632,7 +640,7 @@ def install_app_shortcut(*, base_dir: Path | None = None) -> dict[str, Any]:
 
         cmdline = " ".join(shlex.quote(x) for x in [exe, *args])
         launcher = macos_dir / "FL-MCP Studio"
-        launcher.write_text(f"#!/bin/sh\nexec {cmdline} \"$@\"\n", encoding="utf-8")
+        launcher.write_text(f'#!/bin/sh\nexec {cmdline} "$@"\n', encoding="utf-8")
         launcher.chmod(0o755)
         return {"os": os_name, "arch": normalize_arch(), "path": str(bundle)}
 
@@ -738,7 +746,9 @@ def main(argv: list[str] | None = None) -> None:
         "--backend", choices=BACKENDS, default="auto", help="desktop window runtime"
     )
     parser.add_argument("--native", action="store_true", help="open built-in tkinter desktop panel")
-    parser.add_argument("--browser", action="store_true", help="open in browser instead of app shell")
+    parser.add_argument(
+        "--browser", action="store_true", help="open in browser instead of app shell"
+    )
     parser.add_argument("--foreground", action="store_true", help="run server inside app process")
     parser.add_argument("--status", action="store_true", help="print OS, arch & app runtime info")
     parser.add_argument("--json", action="store_true", help="JSON output for --status/--install")

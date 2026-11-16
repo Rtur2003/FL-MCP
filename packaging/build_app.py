@@ -7,6 +7,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import shutil
 import subprocess
 import sys
@@ -102,6 +103,15 @@ def pyinstaller_args(
     return cmd
 
 
+def _load_build_release():
+    path = Path(__file__).resolve().with_name("build_release.py")
+    spec = importlib.util.spec_from_file_location("fl_mcp_build_release", path)
+    mod = importlib.util.module_from_spec(spec)
+    assert spec is not None and spec.loader is not None
+    spec.loader.exec_module(mod)
+    return mod
+
+
 def _stage_common_extras(stage: Path, os_name: str) -> None:
     fl_dir = ROOT / "src" / "fl_mcp" / "fl"
     scripts = stage / "FL-Studio-Scripts"
@@ -109,7 +119,7 @@ def _stage_common_extras(stage: Path, os_name: str) -> None:
     (scripts / "Piano roll scripts").mkdir(parents=True, exist_ok=True)
     shutil.copy2(fl_dir / "device_FLMCP.py", scripts / "Hardware" / "FLMCP" / "device_FLMCP.py")
     shutil.copy2(fl_dir / "FL MCP.pyscript", scripts / "Piano roll scripts" / "FL MCP.pyscript")
-    from packaging import build_release
+    build_release = _load_build_release()
 
     (scripts / "install-fl-scripts.py").write_text(
         build_release.STANDALONE_INSTALL_PY, encoding="utf-8"
