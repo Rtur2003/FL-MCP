@@ -290,5 +290,11 @@ def test_interactive_studio_action_endpoint(fl, monkeypatch, tmp_path):
         ).json()
         assert r_set["ok"] is True and r_set["result"]["mute"] == 1
 
+        r_step = client.post(
+            "/api/action",
+            json={"action": "step", "channel": 0, "step": 4, "on": True},
+        ).json()
+        assert r_step["ok"] is True and 4 in r_step["result"]["on"]
+
         r_scr = client.post("/api/action", json={"action": "install_scripts"}).json()
         assert r_scr["ok"] is True and len(r_scr["installed"]) == 2

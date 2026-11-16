@@ -134,6 +134,18 @@ def poll_fl_once(bridge_factory: Any = Bridge, *, bridge: Any | None = None) -> 
             "rows": peaks_rows,
             "clipping": [r[0] for r in peaks_rows if r[2] >= 0.0],
         }
+        steps_rows = []
+        for ch_row in (channels.get("rows") or [])[:12]:
+            ch_idx = int(ch_row[0])
+            try:
+                st_res = b.call(
+                    {"o": "steps", "c": ch_idx, "p": 0, "n": 16, "clear": 0, "on": [], "off": []}
+                )
+                on_set = set(st_res.get("on") or [])
+                bits = "".join("1" if s in on_set else "0" for s in range(16))
+                steps_rows.append([ch_idx, bits])
+            except Exception:
+                pass
         telemetry.update_snapshot(
             status=status,
             channels=channels,
@@ -141,6 +153,7 @@ def poll_fl_once(bridge_factory: Any = Bridge, *, bridge: Any | None = None) -> 
             patterns=patterns,
             plugins=plugins,
             peaks=peaks,
+            steps={"cols": ["channel", "bits"], "rows": steps_rows},
         )
         return {"ok": True, "status": status}
     except (FLError, OSError, Exception) as exc:
@@ -329,6 +342,24 @@ def dispatch_action(
             props = dict(body.get("props") or {})
             b = bridge_factory() if owns else bridge
             res = b.call({"o": "set", "k": kind, "i": idx, "p": props})
+            poll_fl_once(bridge_factory, bridge=b)
+            return {"ok": True, "action": action, "result": res}
+        if action == "step":
+            ch = int(body.get("channel", 0))
+            step_idx = max(0, min(63, int(body.get("step", 0))))
+            turn_on = bool(body.get("on", True))
+            b = bridge_factory() if owns else bridge
+            res = b.call(
+                {
+                    "o": "steps",
+                    "c": ch,
+                    "p": 0,
+                    "n": 16,
+                    "clear": 0,
+                    "on": [step_idx] if turn_on else [],
+                    "off": [] if turn_on else [step_idx],
+                }
+            )
             poll_fl_once(bridge_factory, bridge=b)
             return {"ok": True, "action": action, "result": res}
         return {"ok": False, "action": action, "error": f"unknown action: {action}"}

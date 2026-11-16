@@ -8,9 +8,9 @@
   <title>FL-MCP Studio — Pro-Audio DAW Bridge &amp; Telemetry Console</title>
   <meta name="theme-color" content="#080b10">
   <link rel="manifest" href="/manifest.webmanifest">
-  <link rel="icon" type="image/x-icon" href="/assets/icon.ico">
-  <link rel="icon" type="image/png" href="/assets/favicon.png">
-  <link rel="preload" as="image" href="/assets/icon-128.png" fetchpriority="high">
+  <link rel="icon" type="image/x-icon" href="/assets/icon.ico?v=2">
+  <link rel="icon" type="image/png" href="/assets/favicon.png?v=2">
+  <link rel="preload" as="image" href="/assets/icon-128.png?v=2" fetchpriority="high">
   <style>
     :root {
       color-scheme: dark;
@@ -867,6 +867,46 @@
       color: var(--muted);
     }
 
+    .fx-rack {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      width: 100%;
+      margin-top: 2px;
+    }
+
+    .fx-slot {
+      font-family: var(--mono);
+      font-size: 0.60rem;
+      color: #9fb0ce;
+      background: #0a0e17;
+      border: 1px solid #1e283a;
+      border-left: 2px solid var(--cyan);
+      border-radius: 2px;
+      padding: 2px 4px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      text-align: left;
+    }
+
+    .fx-slot.more {
+      border-left-color: var(--muted);
+      color: var(--muted);
+      text-align: center;
+    }
+
+    .step {
+      min-block-size: 16px;
+      height: 16px;
+      padding: 0;
+      border-radius: 2px;
+      border: 1px solid #263147;
+      border-top: 1px solid rgba(255, 255, 255, 0.08);
+      background: #1b2333;
+      box-shadow: none;
+    }
+
     .flag-btn {
       min-block-size: 24px;
       min-inline-size: 24px;
@@ -1093,11 +1133,11 @@
 
   <header class="studio-header">
     <div class="hero-backdrop" aria-hidden="true">
-      <img src="/assets/studio-backdrop.webp" alt="" width="1440" height="320" loading="eager" fetchpriority="low">
+      <img src="/assets/studio-backdrop.webp?v=2" alt="" width="1440" height="320" loading="eager" fetchpriority="low">
     </div>
     <div class="header-inner">
       <div class="brand">
-        <img src="/assets/icon-64.png" srcset="/assets/icon-64.png 1x, /assets/icon-128.png 2x" alt="" width="44"
+        <img src="/assets/icon-64.png?v=2" srcset="/assets/icon-64.png?v=2 1x, /assets/icon-128.png?v=2 2x" alt="" width="44"
           height="44" loading="eager" fetchpriority="high" decoding="sync" class="brand-emblem">
         <div>
           <div class="brand-title-row">
@@ -1327,10 +1367,10 @@
         <div class="card">
           <h2>System Layer Health &amp; Quick Actions</h2>
           <ul class="checklist" id="doctorList"></ul>
-          <div class="toolbar" style="margin-top: 12px; margin-bottom: 0;">
-            <button type="button" class="primary" id="installScriptsBtn">Install FL Scripts</button>
-            <button type="button" id="installShortcutBtn">Add OS App Shortcut</button>
-            <button type="button" id="toggleAutostartBtn">Enable Login Autostart</button>
+          <div class="toolbar" style="margin-top: 12px; margin-bottom: 0; gap: 6px;">
+            <button type="button" class="compact primary" id="installScriptsBtn">Install FL Scripts</button>
+            <button type="button" class="compact" id="installShortcutBtn">Add OS Shortcut</button>
+            <button type="button" class="compact" id="toggleAutostartBtn">Autostart: Enable</button>
             <button type="button" class="compact" data-desk-mode="off">Desk: Off</button>
             <button type="button" class="compact" data-desk-mode="stealth">Desk: Stealth</button>
             <button type="button" class="compact" data-desk-mode="polite">Desk: Polite</button>
@@ -1575,7 +1615,15 @@
         const barCls = isClip ? "bar clip" : "bar";
         const muteBtn = `<button type="button" class="flag-btn m" data-set-kind="mixer" data-set-index="${i}" data-set-prop="mute" data-set-val="${mute ? 0 : 1}" aria-pressed="${mute ? "true" : "false"}">M<span class="visually-hidden">ute mixer track ${i} ${esc(name)}</span></button>`;
         const soloBtn = `<button type="button" class="flag-btn s" data-set-kind="mixer" data-set-index="${i}" data-set-prop="solo" data-set-val="${solo ? 0 : 1}" aria-pressed="${solo ? "true" : "false"}">S<span class="visually-hidden">olo mixer track ${i} ${esc(name)}</span></button>`;
-        const fxTag = fxCount ? `<span class="flag">${esc(fxCount)}</span>` : "";
+        const fxList = typeof fxCount === "number"
+          ? (fxCount > 0 ? [`${fxCount} FX`] : [])
+          : String(fxCount || "").split(",").map((s) => s.trim()).filter(Boolean);
+        const fxTag = fxList.length
+          ? `<span class="flag" title="${esc(fxList.join(" → "))}">${fxList.length}FX</span>`
+          : "";
+        const fxRack = fxList.length
+          ? `<div class="fx-rack">${fxList.slice(0, 2).map((fn) => `<div class="fx-slot" title="${esc(fn)}">${esc(fn.replace(/^Fruity\s+/i, ""))}</div>`).join("")}${fxList.length > 2 ? `<div class="fx-slot more">+${fxList.length - 2} FX</div>` : ""}</div>`
+          : "";
         return `<div class="strip">
       <div class="idx">${i === 0 ? "MASTER" : "INS " + i}</div>
       <div class="name" title="${esc(name)}">${esc(name)}</div>
@@ -1585,6 +1633,7 @@
       </div>
       <div class="mono" style="font-size:0.68rem;color:var(--muted)">${pkLabel || `${Math.round((vol || 0) * 100)}%`}</div>
       <div class="flags">${muteBtn}${soloBtn}${fxTag}</div>
+      ${fxRack}
     </div>`;
       }).join("") : '<div class="empty">Poll FL Studio or list mixer tracks to view live level meters.</div>';
 
@@ -1594,17 +1643,15 @@
       $("rackList").innerHTML = chs.length ? chs.map((c) => {
         const [i, name, chType, , , mute, solo, fx, plugin] = c;
         const hex = CH_PALETTE[Math.abs(Number(i) || 0) % CH_PALETTE.length];
-        const bits = stepMap.get(i) || "";
-        const stepsHtml = bits
-          ? `<div class="step-grid">${[...bits.slice(0, 16)].map((b) => `<div class="step ${b === "1" ? "on" : ""}"></div>`).join("")}</div>`
-          : `<span class="meta-note">${esc(plugin || chType || "Channel")}</span>`;
+        const rawBits = (stepMap.get(i) || "").padEnd(16, "0").slice(0, 16);
+        const stepsHtml = `<div class="step-grid">${[...rawBits].map((b, sIdx) => `<button type="button" class="step ${b === "1" ? "on" : ""}" data-step-ch="${i}" data-step-idx="${sIdx}" data-step-on="${b === "1" ? 0 : 1}" aria-pressed="${b === "1" ? "true" : "false"}"><span class="visually-hidden">Ch ${i} ${esc(name)} step ${sIdx + 1}</span></button>`).join("")}</div>`;
         const flag = mute ? " · Muted" : solo ? " · Solo" : "";
-        const kindNote = chType ? ` · ${esc(chType)}` : "";
+        const subDesc = plugin || chType || "Sampler";
         const chMuteBtn = `<button type="button" class="flag-btn m" data-set-kind="channel" data-set-index="${i}" data-set-prop="mute" data-set-val="${mute ? 0 : 1}" aria-pressed="${mute ? "true" : "false"}">M<span class="visually-hidden">ute channel ${i} ${esc(name)}</span></button>`;
         const chSoloBtn = `<button type="button" class="flag-btn s" data-set-kind="channel" data-set-index="${i}" data-set-prop="solo" data-set-val="${solo ? 0 : 1}" aria-pressed="${solo ? "true" : "false"}">S<span class="visually-hidden">olo channel ${i} ${esc(name)}</span></button>`;
         return `<div class="ch">
       <div class="dot" style="background:${hex};color:${hex}"></div>
-      <div><strong style="font-size:0.78rem">${esc(name)}</strong><div class="meta-note mono" style="font-size:0.68rem">Ch ${i}${kindNote}${flag}</div></div>
+      <div style="min-width:0"><strong style="font-size:0.78rem;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(name)}</strong><div class="meta-note mono" style="font-size:0.65rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">Ch ${i} · ${esc(subDesc)}${flag}</div></div>
       <div>${stepsHtml}</div>
       <div style="display:flex;align-items:center;gap:4px">${chMuteBtn}${chSoloBtn}<span class="mono meta-note">FX ${fx ?? "--"}</span></div>
     </div>`;
@@ -1844,7 +1891,7 @@
 
       const autoBtnEl = $("toggleAutostartBtn");
       if (autoBtnEl) {
-        autoBtnEl.textContent = svc.autostart?.enabled ? "Disable Login Autostart" : "Enable Login Autostart";
+        autoBtnEl.textContent = svc.autostart?.enabled ? "Autostart: Disable" : "Autostart: Enable";
       }
 
       $("clientsBody").innerHTML = clientRows.length ? clientRows.map((c) => {
@@ -1858,9 +1905,9 @@
       <td><strong>${esc(c.name)}</strong><span class="meta-note mono client-path" title="${esc(c.path || c.hint)}">${esc(c.path || c.hint)}</span></td>
       <td>${statusBadge}</td>
       <td>
-        <div style="display:flex;gap:6px;flex-wrap:wrap">
-          <button type="button" class="compact primary" data-install-client="${esc(c.id)}" data-transport="http">Connect HTTP<span class="visually-hidden"> for ${esc(c.name)}</span></button>
-          <button type="button" class="compact" data-install-client="${esc(c.id)}" data-transport="stdio">Connect Stdio<span class="visually-hidden"> for ${esc(c.name)}</span></button>
+        <div style="display:inline-flex;gap:4px;white-space:nowrap">
+          <button type="button" class="compact primary" data-install-client="${esc(c.id)}" data-transport="http">HTTP<span class="visually-hidden"> connect for ${esc(c.name)}</span></button>
+          <button type="button" class="compact" data-install-client="${esc(c.id)}" data-transport="stdio">Stdio<span class="visually-hidden"> connect for ${esc(c.name)}</span></button>
           <button type="button" class="compact copy-btn" data-copy="${esc(cliCmd)}" data-label="${esc(c.name)} command">Copy CLI<span class="visually-hidden"> for ${esc(c.name)}</span></button>
         </div>
       </td>
@@ -1911,6 +1958,17 @@
         const trBtn = ev.target.closest("[data-tr]");
         const act = trBtn.dataset.tr;
         await runAction({ action: "transport", transport_action: act }, `Transport ${act}`);
+        return;
+      }
+      if (ev.target.closest("[data-step-ch]")) {
+        const stBtn = ev.target.closest("[data-step-ch]");
+        const channel = Number(stBtn.dataset.stepCh || 0);
+        const step = Number(stBtn.dataset.stepIdx || 0);
+        const on = Number(stBtn.dataset.stepOn || 0) === 1;
+        await runAction(
+          { action: "step", channel, step, on },
+          `Ch ${channel} step ${step + 1} ${on ? "ON" : "OFF"}`
+        );
         return;
       }
       if (ev.target.closest("[data-set-kind]")) {
