@@ -181,6 +181,8 @@ def _num(v, lo, hi, what):
 
 def _col(s):
     s = str(s).strip().lstrip("#")
+    if len(s) == 3:
+        s = s[0] * 2 + s[1] * 2 + s[2] * 2
     if len(s) != 6:
         raise ValueError("color must be #RRGGBB")
     return int(s[0:2], 16) | (int(s[2:4], 16) << 8) | (int(s[4:6], 16) << 16)
@@ -524,9 +526,12 @@ def _op_tr(r):
         if v is None or bool(transport.isRecording()) != bool(v):
             transport.record()
     elif a == "loop":
-        want = 1 if v in (1, "song") else 0
-        if transport.getLoopMode() != want:
+        if v is None:
             transport.setLoopMode()
+        else:
+            want = 1 if v in (1, "song") else 0
+            if transport.getLoopMode() != want:
+                transport.setLoopMode()
     elif a == "metronome":
         if v is None or bool(general.getUseMetronome()) != bool(v):
             transport.globalTransport(midi.FPT_Metronome, 1)
