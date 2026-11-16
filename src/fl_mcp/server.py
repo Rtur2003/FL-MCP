@@ -207,12 +207,13 @@ async def fl_set(
     res = await _fl({"o": "set", "k": kind, "i": index, "p": props})
     if kind == "mixer" and isinstance(res, dict) and _mixer_pending(res, props):
         # FL Studio 2025 commits active/routed mixer edits on the next UI/mixer tick (~15-50 ms).
+        extra_keys = {k: res[k] for k in ("stereo", "arm") if k in res}
         for _ in range(4):
             await anyio.sleep(0.05)
             page = await _fl({"o": "list", "k": "mixer", "s": index, "n": 1, "a": 1})
             rows = page.get("rows") or []
             if rows and page.get("cols"):
-                res = dict(zip(page["cols"], rows[0], strict=False))
+                res = {**dict(zip(page["cols"], rows[0], strict=False)), **extra_keys}
                 if not _mixer_pending(res, props):
                     break
     return _out(res)
@@ -265,7 +266,8 @@ def _note(row: list[float]) -> list[float]:
     if len(row) not in (3, 4):
         raise ToolError("each note is [midi_note, start_beat, length_beats, velocity?]")
     pitch, start, length = row[:3]
-    velocity = row[3] if len(row) == 4 else 100
+    raw_vel = float(row[3]) if len(row) == 4 else 100.0
+    velocity = max(1, round(raw_vel * 127)) if 0 < raw_vel < 1.0 else round(raw_vel)
     if not (0 <= pitch <= 127 and float(pitch).is_integer()):
         raise ToolError(f"midi_note must be an integer 0-127, got {pitch}")
     if start < 0 or length <= 0:
@@ -1288,3 +1290,6 @@ def load_plugin(name: str, target: str = "") -> str:
 
 def serve() -> None:
     mcp.run()
+
+
+main = serve
