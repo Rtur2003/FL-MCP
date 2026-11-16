@@ -228,7 +228,7 @@ def test_build_app_linux_tar_has_no_duplicate_members(monkeypatch, tmp_path):
 
     build_app = _load_pkg_mod("build_app")
 
-    def fake_run(cmd, check=True):
+    def fake_run(cmd, **kwargs):
         dist_arg = next(a.split("=", 1)[1] for a in cmd if a.startswith("--distpath="))
         bundle = Path(dist_arg) / "fl-mcp-studio"
         (bundle / "_internal").mkdir(parents=True, exist_ok=True)
