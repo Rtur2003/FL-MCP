@@ -207,6 +207,7 @@ def dispatch_action(
     b: Any | None = None
     try:
         if action == "install_scripts":
+            (paths.fl_user_dir() / "Settings").mkdir(parents=True, exist_ok=True)
             installed = install.install()
             return {
                 "ok": True,
@@ -331,7 +332,7 @@ def dispatch_action(
             poll_fl_once(bridge_factory, bridge=b)
             return {"ok": True, "action": action, "result": res}
         return {"ok": False, "action": action, "error": f"unknown action: {action}"}
-    except Exception as exc:
+    except (Exception, SystemExit) as exc:
         return {"ok": False, "action": action, "error": str(exc)}
     finally:
         if owns and b is not None:
