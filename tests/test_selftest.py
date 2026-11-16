@@ -5,7 +5,7 @@ import json
 import pytest
 
 from fl_mcp import selftest
-from fl_mcp.bridge import FLError
+from fl_mcp.bridge import SCRIPT_VERSION, FLError
 
 
 @pytest.fixture
@@ -28,7 +28,7 @@ def test_everything_the_fake_offers_passes_and_the_rest_is_skipped_with_a_reason
     assert not failed, failed
     for name in ("link", "status", "features", "lists", "mixer write", "tempo write", "windows"):
         assert checks[name]["status"] == "ok", (name, checks[name])
-    assert "script v5" in checks["link"]["detail"]
+    assert f"script v{SCRIPT_VERSION}" in checks["link"]["detail"]
     assert report["summary"]["fail"] == 0 and report["summary"]["ok"] >= 7
     assert (
         checks["desktop"]["status"] == "skip" and "fl-mcp desktop on" in checks["desktop"]["detail"]
