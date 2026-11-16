@@ -359,18 +359,21 @@ class Desk:
                         "FL Studio cannot be captured in the background right now (minimized or "
                         "occluded): unminimize FL once or switch to 'polite' mode"
                     )
-                self.focus_fl()  # nothing else may cover it; refuses when FL is not there
-                mine = [
-                    w for w in self.backend.windows() if self.is_fl(w) and min(w.rect[2:]) >= 60
-                ]
-                if not mine:
-                    raise DeskError("FL Studio has no visible window to capture")
-                x0 = max(min(w.rect[0] for w in mine), sx)
-                y0 = max(min(w.rect[1] for w in mine), sy)
-                x1 = min(max(w.rect[0] + w.rect[2] for w in mine), sx + sw)
-                y1 = min(max(w.rect[1] + w.rect[3] for w in mine), sy + sh)
-                rect, title = (x0, y0, x1 - x0, y1 - y0), f"{len(mine)} FL windows"
-                png, w2, h2 = self.backend.capture(rect, max_width)
+                try:
+                    self.focus_fl()  # nothing else may cover it; refuses when FL is not there
+                    mine = [
+                        w for w in self.backend.windows() if self.is_fl(w) and min(w.rect[2:]) >= 60
+                    ]
+                    if not mine:
+                        raise DeskError("FL Studio has no visible window to capture")
+                    x0 = max(min(w.rect[0] for w in mine), sx)
+                    y0 = max(min(w.rect[1] for w in mine), sy)
+                    x1 = min(max(w.rect[0] + w.rect[2] for w in mine), sx + sw)
+                    y1 = min(max(w.rect[1] + w.rect[3] for w in mine), sy + sh)
+                    rect, title = (x0, y0, x1 - x0, y1 - y0), f"{len(mine)} FL windows"
+                    png, w2, h2 = self.backend.capture(rect, max_width)
+                finally:
+                    self._restore_if_polite(front)
         self.last = Shot((rect[0], rect[1]), w2 / rect[2], (w2, h2))
         return png, {
             "of": title,

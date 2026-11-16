@@ -368,11 +368,43 @@ def _template(path: str) -> Path:
     raise ValueError("template must be the path of an existing .flp project (or 'auto')")
 
 
+def _resolve_sound_spec(path: str, library: Any) -> str:
+    if path.startswith("%"):
+        return path
+    expanded = Path(path).expanduser()
+    if expanded.is_file():
+        return str(expanded)
+    low = path.lower()
+    if low.startswith("fst:"):
+        preset = library.find_preset(path[4:].strip())
+        if preset is None:
+            raise ValueError(f"preset not found: {path[4:].strip()}")
+        return str(preset)
+    if low.startswith("sf2:"):
+        sf2 = library.find_soundfont(path[4:].strip())
+        if sf2 is None:
+            raise ValueError(f"soundfont not found: {path[4:].strip()}")
+        return str(sf2)
+    if "/" not in path and "\\" not in path and expanded.suffix.lower() not in library.SAMPLE_EXT:
+        if low.endswith(".sf2"):
+            sf2 = library.find_soundfont(path)
+            if sf2 is not None:
+                return str(sf2)
+        else:
+            preset = library.find_preset(path)
+            if preset is not None:
+                return str(preset)
+            if not low.endswith(".fst"):
+                sf2 = library.find_soundfont(path)
+                if sf2 is not None:
+                    return str(sf2)
+    raise ValueError(f"sample not found: {path}")
+
+
 def parse_sounds(
     plan: Plan, template: str, override: dict[str, int] | None, text: str
 ) -> dict[str, str]:
-    """role -> sample path from 'auto' (a kit from the library for drum roles the template lacks)
-    or 'kick=C:/x/kick.wav; snare=...'."""
+    """role -> path from 'auto' (kit for missing drums) or 'role=path/preset/sf2; ...'."""
     from fl_mcp import library
 
     if text.strip().lower() == "auto":
@@ -390,9 +422,7 @@ def parse_sounds(
             raise ValueError(f"'{part.strip()}' should look like role=path")
         if role not in plan.roles:
             raise ValueError(f"the plan has no {role} part (roles: {', '.join(plan.roles)})")
-        if not path.startswith("%") and not Path(path).expanduser().is_file():
-            raise ValueError(f"sample not found: {path}")
-        out[role] = path if path.startswith("%") else str(Path(path).expanduser())
+        out[role] = _resolve_sound_spec(path, library)
     return out
 
 
@@ -409,6 +439,7 @@ def export_flp(
     picked = parse_sounds(plan, str(tpl_path), override, sounds) if sounds else None
     report = flp.build(tpl_path, plan, out, override, "replace" if replace else "append", picked)
     report["template"] = str(tpl_path)
+    report["verify"] = flp.Flp.parse(out.read_bytes()).verify()
     return report
 
 
@@ -420,6 +451,26 @@ def inspect_flp(template: str | Path) -> dict[str, Any]:
             "count": len(items),
             "ready_count": sum(1 for t in items if t["ready"]),
             "templates": items,
+        }
+    cand = Path(raw).expanduser()
+    if cand.suffix.lower() == ".fst":
+        if not cand.is_file():
+            if "/" not in raw and "\\" not in raw:
+                from fl_mcp import library
+
+                found = library.find_preset(cand.stem)
+                if found is not None:
+                    cand = found
+            if not cand.is_file():
+                raise ValueError("preset must be an existing .fst file")
+        info = flp.read_fst(cand)
+        return {
+            "kind": "preset",
+            "file": info["file"],
+            "plugin": info["plugin"],
+            "name": info["name"],
+            "param_bytes": len(info["params"]),
+            "sf2": info["sf2"],
         }
     path = _template(raw)
     project = flp.Flp.parse(path.read_bytes())
