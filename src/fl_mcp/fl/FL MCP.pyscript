@@ -70,7 +70,5 @@ def _run():
                       int(round(n.velocity * 127))])
     state = {"ts": time.time(), "ppq": ppq, "count": score.noteCount,
              "serial": queue.get("serial") if queue else None, "notes": notes}
-    tmp = STATE + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
+    with open(STATE, "w", encoding="utf-8") as f:  # os.replace raises a SystemError in FL 2025's embedded Python
         json.dump(state, f, separators=(",", ":"))
-    os.replace(tmp, STATE)
