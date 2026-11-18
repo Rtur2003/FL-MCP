@@ -556,3 +556,144 @@ def test_clients_install_json_toml_backup_and_cli(monkeypatch, tmp_path):
             tl.loads(codex_cfg.read_text(encoding="utf-8"))["mcp_servers"]["fl-studio"]["command"]
             == sys.executable
         )
+
+
+def test_onboarding_registry_diagnostics_new_clients_mac_jxa_and_ocr(monkeypatch, tmp_path):
+    from pathlib import Path
+    from typing import Any
+
+    from fl_mcp import clients, dashboard, desk_win, install, uiload
+
+    # 1. New clients: cline, roo-code, zed, opencode & antigravity serverUrl HTTP check
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+
+    zed_res = clients.install_client(
+        "zed", source="local", transport="http", url="http://127.0.0.1:8765/mcp"
+    )
+    zed_cfg = json.loads(Path(zed_res["path"]).read_text(encoding="utf-8"))
+    assert "context_servers" in zed_cfg and zed_cfg["context_servers"]["fl-studio"]["url"]
+
+    oc_res = clients.install_client(
+        "opencode", source="local", transport="http", url="http://127.0.0.1:8765/mcp"
+    )
+    oc_cfg = json.loads(Path(oc_res["path"]).read_text(encoding="utf-8"))
+    assert oc_cfg["mcp"]["fl-studio"]["type"] == "remote"
+
+    ag_res = clients.install_client(
+        "antigravity", source="local", transport="http", url="http://127.0.0.1:8765/mcp"
+    )
+    ag_cfg = json.loads(Path(ag_res["path"]).read_text(encoding="utf-8"))
+    assert ag_cfg["mcpServers"]["fl-studio"]["serverUrl"] == "http://127.0.0.1:8765/mcp"
+
+    for cid in ("cline", "roo-code"):
+        r = clients.install_client(cid, source="local")
+        assert Path(r["path"]).is_file()
+
+    # 2. install.configure_fl_midi refuses when FL Studio is running
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(install, "is_fl_running", lambda: True)
+    running_res = install.configure_fl_midi("FL MCP")
+    assert running_res["ok"] is False and "currently running" in running_res["error"]
+
+    # 3. install.diagnose_fl_midi + configure_fl_midi with fake winreg store
+    reg_store: dict[str, dict[str, Any]] = {
+        r"Software\Image-Line\FL Studio 25\General": {},
+        r"Software\Image-Line\FL Studio 25\Devices\MIDI input": {},
+        r"Software\Image-Line\FL Studio 25\Devices\MIDI output": {},
+    }
+
+    class FakeKey:
+        def __init__(self, path):
+            self.path = path
+
+        def __enter__(self):
+            reg_store.setdefault(self.path, {})
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    class FakeWinreg:
+        HKEY_CURRENT_USER = object()
+        KEY_SET_VALUE = 2
+        REG_SZ = 1
+
+        def OpenKey(self, _hive, subkey):
+            if subkey not in reg_store:
+                raise OSError(subkey)
+            return FakeKey(subkey)
+
+        def CreateKeyEx(self, _hive, subkey, _res, _acc):
+            return FakeKey(subkey)
+
+        def QueryInfoKey(self, key):
+            vals = reg_store.get(key.path, {})
+            pref = key.path + "\\"
+            subs = {
+                k[len(pref) :].split("\\", 1)[0]
+                for k in reg_store
+                if k.startswith(pref) and k[len(pref) :]
+            }
+            return (len(subs), len(vals), 0)
+
+        def EnumKey(self, key, idx):
+            pref = key.path + "\\"
+            subs = sorted(
+                {
+                    k[len(pref) :].split("\\", 1)[0]
+                    for k in reg_store
+                    if k.startswith(pref) and k[len(pref) :]
+                }
+            )
+            return subs[idx]
+
+        def EnumValue(self, key, idx):
+            items = list(reg_store[key.path].items())
+            return items[idx][0], items[idx][1], self.REG_SZ
+
+        def SetValueEx(self, key, name, _res, _typ, val):
+            reg_store[key.path][name] = str(val)
+
+    monkeypatch.setattr(install, "_winreg", lambda: FakeWinreg())
+    monkeypatch.setattr(install.paths, "fl_registry_version_keys", lambda: ["FL Studio 25"])
+    monkeypatch.setattr(install, "is_fl_running", lambda: False)
+    paired = install.configure_fl_midi("FL MCP")
+    assert paired["ok"] is True and paired["updated"][0]["fl_key"] == "FL Studio 25"
+    diag = install.diagnose_fl_midi("FL MCP")
+    assert diag["configured"] is True
+
+    # 4. dashboard dispatch_action("onboard") & build_state metadata
+    monkeypatch.setattr(
+        install,
+        "onboard",
+        lambda **kw: {
+            "ok": True,
+            "steps": {"scripts": {"ok": True}, "fl_midi": {"ok": True}},
+            "fl_diagnostics": {"configured": True, "issues": []},
+        },
+    )
+    onb_act = dashboard.dispatch_action({"action": "onboard"})
+    assert onb_act["ok"] is True and onb_act["action"] == "onboard"
+    state = dashboard.build_state()
+    assert state["meta"]["tools_count"] >= 14 and "context" in state
+
+    # 5. macOS JXA loader + WinRT OCR empty fallback guard
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *a, **kw: SimpleNamespace(
+            returncode=0, stdout=json.dumps({"ok": True, "via": "Fruity Limiter"}), stderr=""
+        ),
+    )
+    calls = [{"rows": []}, {"rows": [[0, "m", 1, 0, "Fruity Limiter", 10, 0]]}]
+    mac_loaded = uiload._mac_add_menu_load(
+        lambda _req: calls.pop(0) if calls else {"rows": [[0, "m", 1, 0, "Fruity Limiter", 10, 0]]},
+        "Fruity Limiter",
+        1,
+        [],
+    )
+    assert mac_loaded is not None and mac_loaded["via"] == "Fruity Limiter"
+    assert desk_win.ocr_png(b"") == []
