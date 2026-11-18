@@ -21,7 +21,7 @@ import plugins
 import transport
 import ui
 
-VERSION = 6
+VERSION = 7
 PROTO = 1
 
 _REC_PLUG_MUTE = getattr(midi, "REC_Plug_Mute", 536878848)
@@ -198,6 +198,42 @@ def _flip(current, want, toggle):
         toggle()
 
 
+_in_batch = [False]
+
+
+def _save_undo(label):
+    if _in_batch[0]:
+        return
+    fn = getattr(general, "saveUndo", None)
+    if fn is not None:
+        _try(fn, str(label), 0)
+
+
+def _insert_max():
+    fn = getattr(mixer, "getTrackCount", None)
+    if fn is not None:
+        n = _try(fn)
+        if isinstance(n, int) and n > 0:
+            return n
+    return max(1, mixer.trackCount() - 2)
+
+
+def _slot_max():
+    ver = str(_try(ui.getVersion) or "")
+    nums, cur = [], []
+    for ch in ver:
+        if ch.isdigit():
+            cur.append(ch)
+        elif cur:
+            nums.append(int("".join(cur)))
+            cur = []
+    if cur:
+        nums.append(int("".join(cur)))
+    if len(nums) >= 2 and (nums[0] > 26 or (nums[0] == 26 and nums[1] >= 2)):
+        return 25
+    return 10
+
+
 def _plain(v):
     if v is None or isinstance(v, (bool, int, str)):
         return v
@@ -235,11 +271,12 @@ def _ch_row(i):
     ]
 
 
-def _mx_row(i, n=None):
+def _mx_row(i, n=None, slots=None):
     n = n or mixer.trackCount() - 1
+    slots = slots or _slot_max()
     fx = [
         plugins.getPluginName(i, s, False, False)
-        for s in range(10)
+        for s in range(slots)
         if mixer.isTrackPluginValid(i, s)
     ]
     to = [d for d in range(n) if d != i and mixer.getRouteSendActive(i, d)]
@@ -319,8 +356,9 @@ def _mk_plugins(everything):
     for c in range(channels.channelCount(True)):
         if channels.getChannelType(c, True) in (1, 2):
             where.append(("c", c, -1))
+    slots = _slot_max()
     for t in range(mixer.trackCount() - 1):
-        for s in range(10):
+        for s in range(slots):
             if mixer.isTrackPluginValid(t, s):
                 where.append(("m", t, s))
 
@@ -393,10 +431,8 @@ _SETTERS = {
         ),
         "pan": lambda i, v: channels.setChannelPan(i, _num(v, -1, 1, "pan"), midi.PIM_None, True),
         "mute": lambda i, v: channels.muteChannel(i, 1 if v else 0, True),
-        "solo": lambda i, v: _flip(
-            channels.isChannelSolo(i, True), v, lambda: channels.soloChannel(i, True)
-        ),
-        "fx": lambda i, v: channels.setTargetFxTrack(i, _idx(v, 0, 125, "fx"), True),
+        "solo": lambda i, v: channels.soloChannel(i, 1 if v else 0, True),
+        "fx": lambda i, v: channels.setTargetFxTrack(i, _idx(v, 0, _insert_max(), "fx"), True),
         "select": lambda i, v: channels.selectOneChannel(i, True) if v else None,
     },
     "mixer": {
@@ -459,6 +495,7 @@ def _op_set(r):
         raise ValueError(
             "not settable on %s: %s (allowed: %s)" % (k, ", ".join(bad), ", ".join(sorted(spec)))
         )
+    _save_undo("FL MCP: set %s %d" % (k, i))
     _route(i, send, level)
     for name, value in props.items():
         spec[name](i, value)
@@ -542,9 +579,13 @@ def _op_tr(r):
             transport.globalTransport(midi.FPT_Metronome, 1)
     elif a == "tempo":
         bpm = _num(v, 10, 522, "tempo")
-        general.processRECEvent(
-            midi.REC_Tempo, int(round(bpm * 1000)), midi.REC_Control | midi.REC_UpdateControl
-        )
+        fn = getattr(mixer, "setCurrentTempo", None)
+        if fn is not None and _try(fn, float(bpm)) is not None:
+            pass
+        else:
+            general.processRECEvent(
+                midi.REC_Tempo, int(round(bpm * 1000)), midi.REC_Control | midi.REC_UpdateControl
+            )
     elif a == "position":
         bar = _num(v, 1, 100000, "bar")
         transport.setSongPos(int(round((bar - 1) * general.getRecPPB())), midi.SONGLENGTH_ABSTICKS)
@@ -569,6 +610,7 @@ def _op_steps(r):
         patterns.jumpToPattern(p)
     pat = patterns.patternNumber()
     n = _idx(r.get("n") or 16, 1, 256, "length")
+    _save_undo("FL MCP: steps ch %d" % c)
     if r.get("clear"):
         for s in range(n):
             if channels.getGridBit(c, s, True):
@@ -658,6 +700,10 @@ def _parse_text(text):
     if s[:1] in "LlRr" and s[1:2] in " 0123456789":  # pan readouts: L 50% / R 30%
         value = -abs(value) if s[0] in "Ll" else abs(value)
     rest = rest.lower().replace(" ", "")
+    if value == 1.0 and rest.startswith(":"):
+        rhs = _scan_number(rest[1:])
+        if rhs is not None and not rhs[1]:
+            return rhs[0], "ratio"
     for key in _UNIT_KEYS:
         if rest.startswith(key):
             unit, scale = _UNITS[key]
@@ -676,9 +722,10 @@ def _plug_ref(r):
         slot, glob = -1, True
     elif t == "mixer":
         i = _idx(r["i"], 0, mixer.trackCount() - 2, "track")
+        slots = _slot_max()
         if r.get("s") is None:
-            raise ValueError("mixer needs slot 0-9")
-        slot, glob = _idx(r["s"], 0, 9, "slot"), False
+            raise ValueError("mixer needs slot 0-%d" % (slots - 1))
+        slot, glob = _idx(r["s"], 0, slots - 1, "slot"), False
     else:
         raise ValueError("target must be channel or mixer")
     if not plugins.isValid(i, slot, glob):
@@ -699,23 +746,29 @@ def _tokens(text):
     return out
 
 
-def _find_param(i, slot, glob, ref):
-    """A parameter index from an index or a name (exact, prefix, substring, then tokens)."""
+def _param_index(i, slot, glob):
     count = plugins.getParamCount(i, slot, glob)
-    if isinstance(ref, int) or str(ref).strip().isdigit():
+    out = []
+    for k in range(count):
+        name = plugins.getParamName(k, i, slot, glob)
+        key = _key(name)
+        if key:
+            out.append((k, name, key))
+    return count, out
+
+
+def _find_param(i, slot, glob, ref, cache=None):
+    """A parameter index from an index or a name (exact, prefix, substring, then tokens)."""
+    count = cache[0] if cache is not None else plugins.getParamCount(i, slot, glob)
+    if (isinstance(ref, int) and not isinstance(ref, bool)) or str(ref).strip().isdigit():
         return _idx(int(ref), 0, count - 1, "param")
     want = _key(ref)
     toks = _tokens(ref)
     if not want:
         raise ValueError("param needs an index or a name")
+    named = cache[1] if cache is not None else _param_index(i, slot, glob)[1]
     exact, starts, within, tok_all = [], [], [], []
-    named = []
-    for k in range(count):
-        name = plugins.getParamName(k, i, slot, glob)
-        key = _key(name)
-        if not key:
-            continue
-        named.append((k, name, key))
+    for k, name, key in named:
         if key == want:
             exact.append(k)
         elif key.startswith(want):
@@ -827,6 +880,11 @@ def _plug_eid(i, slot, offset):
 
 
 def _slot_mix_get(i, slot):
+    fn = getattr(mixer, "getPluginMixLevel", None)
+    if fn is not None:
+        v = _try(fn, i, slot)
+        if isinstance(v, (int, float)) and 0.0 <= v <= 1.0:
+            return float(v)
     eid = _plug_eid(i, slot, _REC_PLUG_MIX)
     if eid is None:
         return 1.0
@@ -842,6 +900,9 @@ def _slot_mix_get(i, slot):
 
 
 def _slot_mix_set(i, slot, val):
+    fn = getattr(mixer, "setPluginMixLevel", None)
+    if fn is not None and _try(fn, i, slot, float(val), midi.PIM_None) is not None:
+        return
     eid = _plug_eid(i, slot, _REC_PLUG_MIX)
     if eid is None:
         raise ValueError("cannot address mixer slot mix")
@@ -932,11 +993,11 @@ def _set_wrapper(i, slot, glob, key, item):
     raise ValueError("unknown wrapper control '%s'; use fl:mix, fl:mute, fl:slots, fl:focus" % key)
 
 
-def _set_one(i, slot, glob, item):
+def _set_one(i, slot, glob, item, cache=None):
     ref = item.get("p")
     if isinstance(ref, str) and ref.strip().lower().startswith("fl:"):
         return _set_wrapper(i, slot, glob, ref.strip().lower(), item)
-    p = _find_param(i, slot, glob, ref)
+    p = _find_param(i, slot, glob, ref, cache=cache)
     ok = True
     if item.get("r") is not None:
         want, unit = _target(item["r"], item.get("u"))
@@ -1010,7 +1071,7 @@ def _note_names(i, slot, glob, limit):
 
 def _track_slots_io(trk):
     rows = []
-    for s in range(10):
+    for s in range(_slot_max()):
         if plugins.isValid(trk, s, False):
             rows.append(
                 [
@@ -1112,15 +1173,24 @@ def _op_param(r):
     elif act == "io":
         out.update(_plug_io(i, slot, glob))
     elif act == "set":
+        _save_undo("FL MCP: param set")
         out["param"] = _set_one(i, slot, glob, r)
     elif act == "many":
         items = r.get("set") or []
         if len(items) > 40:
             raise ValueError("at most 40 parameters per call")
+        need_idx = any(
+            isinstance(it.get("p"), str)
+            and not it.get("p", "").strip().isdigit()
+            and not it.get("p", "").strip().lower().startswith("fl:")
+            for it in items
+        )
+        cache = _param_index(i, slot, glob) if need_idx else None
+        _save_undo("FL MCP: param batch")
         done = []
         for n, item in enumerate(items):
             try:
-                done.append(_set_one(i, slot, glob, item))
+                done.append(_set_one(i, slot, glob, item, cache=cache))
             except Exception as exc:
                 raise ValueError("item %d (%s): %s" % (n, item.get("p"), exc)) from None
         out["params"] = done
@@ -1164,9 +1234,15 @@ def _op_roll(r):
     if p > 0:
         patterns.jumpToPattern(p)
     if c >= 0:
-        channels.selectOneChannel(_idx(c, 0, channels.channelCount(True) - 1, "channel"), True)
+        target = _idx(c, 0, channels.channelCount(True) - 1, "channel")
+        prev = _try(channels.selectedChannel, False, 0, True)
+        channels.selectOneChannel(target, True)
+        # FL does not retarget an already-open Piano Roll on selectOneChannel; reopen it cleanly.
+        if ui.getVisible(midi.widPianoRoll) and prev != target:
+            ui.hideWindow(midi.widPianoRoll)
     if not ui.getVisible(midi.widPianoRoll):
         ui.showWindow(midi.widPianoRoll)
+    _try(ui.setFocused, midi.widPianoRoll)
     return {
         "pat": patterns.patternNumber(),
         "ch": channels.selectedChannel(False, 0, True),
@@ -1298,15 +1374,19 @@ def _op_batch(r):
     if len(steps) > 300:
         raise ValueError("at most 300 steps per batch")
     bad = 0
-    for n, sub in enumerate(steps):
-        if sub.get("o") in ("batch", "ping"):
-            raise ValueError("step %d: %s cannot run inside a batch" % (n, sub.get("o")))
-        try:
-            res = _run(sub)
-        except Exception as exc:
-            raise ValueError("step %d (%s): %s" % (n, sub.get("o"), _err(exc))) from None
-        if isinstance(res, dict):
-            bad += int(res.get("bad") or 0)
+    _in_batch[0] = True
+    try:
+        for n, sub in enumerate(steps):
+            if sub.get("o") in ("batch", "ping"):
+                raise ValueError("step %d: %s cannot run inside a batch" % (n, sub.get("o")))
+            try:
+                res = _run(sub)
+            except Exception as exc:
+                raise ValueError("step %d (%s): %s" % (n, sub.get("o"), _err(exc))) from None
+            if isinstance(res, dict):
+                bad += int(res.get("bad") or 0)
+    finally:
+        _in_batch[0] = False
     if r.get("u"):
         general.saveUndo(
             "FL MCP: " + str(r["u"])[:40], midi.UF_EE | midi.UF_PR | midi.UF_PL | midi.UF_Knob
@@ -1529,12 +1609,21 @@ _OPTIONAL = (
     ("plugins", "getPresetCount"),
     ("plugins", "nextPreset"),
     ("plugins", "getParamValueString"),
+    ("plugins", "getPadInfo"),
+    ("mixer", "getTrackCount"),
     ("mixer", "getActiveEffectIndex"),
     ("mixer", "linkChannelToTrack"),
+    ("mixer", "setPluginMixLevel"),
+    ("mixer", "setCurrentTempo"),
+    ("patterns", "setPatternLength"),
+    ("channels", "getChannelType"),
+    ("channels", "getShuffle"),
+    ("channels", "setShuffle"),
+    ("channels", "fillEachNSteps"),
     ("general", "getChangedFlag"),
     ("general", "saveUndo"),
-    ("channels", "getChannelType"),
     ("arrangement", "addAutoTimeMarker"),
+    ("arrangement", "selectionSet"),
 )
 
 
@@ -1550,11 +1639,139 @@ def _op_probe(r):
         ),
         "n_ch": _try(channels.channelCount, True),
         "n_trk": _try(mixer.trackCount),
+        "n_inserts": _insert_max(),
+        "n_slots": _slot_max(),
         "n_pat": _try(patterns.patternCount),
         "changed": _try(general.getChangedFlag),
         "port": _try(device.getPortNumber),
         "linked": bool(_try(device.isAssigned)),
     }
+
+
+def _op_summary(r):
+    inc = str(r.get("inc") or "channels,mixer,patterns").lower()
+    want_all = inc == "all"
+    tokens = set(t.strip() for t in inc.split(",") if t.strip())
+    limit = _idx(r.get("n") or 40, 1, 100, "limit")
+    out = _op_status(r)
+    out["sel"] = {
+        "ch": out.get("ch"),
+        "trk": out.get("trk"),
+        "pat": out.get("pat"),
+        "form": _try(ui.getFocusedFormCaption),
+        "plugin": _try(ui.getFocusedPluginName),
+    }
+    for kind in ("channels", "mixer", "patterns", "plugins"):
+        if not want_all and kind not in tokens:
+            continue
+        cols, lo, hi, make = _LISTS[kind](bool(r.get("a")))
+        rows = []
+        for idx in range(lo, hi + 1):
+            row = make(idx)
+            if row is not None:
+                rows.append(row)
+                if len(rows) >= limit:
+                    break
+        out[kind] = {"cols": cols, "rows": rows, "truncated": len(rows) >= limit}
+    return out
+
+
+def _op_clip(r):
+    act = str(r.get("a") or "").lower()
+    if act not in ("copy", "paste", "cut", "delete", "duplicate"):
+        raise ValueError("clip action must be copy, paste, cut, delete or duplicate")
+    sel_set = getattr(arrangement, "selectionSet", None)
+    sel_clr = getattr(arrangement, "selectionClear", None)
+    desel = getattr(playlist, "deselectAll", None)
+    bar_ticks = int(general.getRecPPB() or (general.getRecPPQ() * 4))
+    ui.showWindow(midi.widPlaylist)
+    _try(ui.setFocused, midi.widPlaylist)
+    if act in ("copy", "cut", "delete", "duplicate"):
+        if sel_set is None:
+            raise ValueError("arrangement.selectionSet requires FL Studio 24.2+ (API v38+)")
+        if r.get("s") is None or r.get("e") is None:
+            raise ValueError("%s needs start and end bars" % act)
+        s_bar = _num(r["s"], 1, 100000, "start")
+        e_bar = _num(r["e"], 1, 100000, "end")
+        if e_bar <= s_bar:
+            raise ValueError("end bar must be greater than start bar")
+        if desel is not None:
+            _try(desel)
+        if sel_clr is not None:
+            _try(sel_clr)
+        sel_set(int(round((s_bar - 1.0) * bar_ticks)), int(round((e_bar - 1.0) * bar_ticks)))
+        _save_undo("FL MCP: clip %s" % act)
+        fpt = (
+            midi.FPT_Copy
+            if act in ("copy", "duplicate")
+            else (midi.FPT_Cut if act == "cut" else midi.FPT_Delete)
+        )
+        transport.globalTransport(fpt, 1)
+    pastes = 0
+    if act in ("paste", "duplicate"):
+        dests = r.get("d")
+        if dests is None:
+            raise ValueError("%s needs destination bar(s)" % act)
+        if not isinstance(dests, (list, tuple)):
+            dests = [dests]
+        if act == "paste":
+            _save_undo("FL MCP: clip paste")
+        for b in dests[:64]:
+            bar = _num(b, 1, 100000, "dest_bar")
+            transport.setSongPos(int(round((bar - 1.0) * bar_ticks)), midi.SONGLENGTH_ABSTICKS)
+            transport.globalTransport(midi.FPT_Paste, 1)
+            pastes += 1
+    return {"action": act, "bar_ticks": bar_ticks, "pastes": pastes}
+
+
+def _op_link(r):
+    act = str(r.get("a") or "status").lower()
+    if act == "last_tweaked":
+        ctrl = _idx(r.get("ci") or 0, 0, 16384, "control")
+        ch = _idx(r.get("ch") or 0, 0, 15, "midi_channel")
+        glob = bool(r.get("g"))
+        eid = int(r.get("eid")) if r.get("eid") is not None else 2147483647
+        res = device.linkToLastTweaked(ctrl, ch, glob, eid)
+        found = _try(device.findEventID, ctrl, 1 if glob else 0)
+        return {
+            "linked": res,
+            "control": ctrl,
+            "event_id": found,
+            "param": _try(device.getLinkedParamName, found)
+            if isinstance(found, int) and found >= 0
+            else "",
+            "text": _try(device.getLinkedValueString, found)
+            if isinstance(found, int) and found >= 0
+            else "",
+        }
+    if act == "cc":
+        cc = _idx(r["cc"], 0, 127, "cc")
+        val = _idx(r["v"], 0, 127, "val")
+        ch = _idx(r.get("ch") or 0, 0, 15, "midi_channel")
+        msg = (0xB0 | ch) | (cc << 8) | (val << 16)
+        device.forwardMIDICC(msg, 1)
+        return {"cc": cc, "val": val, "ch": ch, "forwarded": True}
+    if act == "pads":
+        i, slot, glob = _plug_ref(r)
+        fn = getattr(plugins, "getPadInfo", None)
+        if fn is None:
+            raise ValueError("plugins.getPadInfo is not supported on this FL Studio version")
+        count = _try(fn, i, slot, 0, -1, glob)
+        return {"plugin": plugins.getPluginName(i, slot, True, glob), "pad_count": count}
+    if act == "status":
+        ctrl = _idx(r.get("ci") or 0, 0, 16384, "control")
+        glob = bool(r.get("g"))
+        found = _try(device.findEventID, ctrl, 1 if glob else 0)
+        return {
+            "assigned": bool(_try(device.isAssigned)),
+            "port": _try(device.getPortNumber),
+            "control": ctrl,
+            "event_id": found,
+            "param": _try(device.getLinkedParamName, found)
+            if isinstance(found, int) and found >= 0
+            else "",
+        }
+    raise ValueError("link action must be status, last_tweaked, cc or pads")
 
 
 def _op_diag(r):
@@ -1607,6 +1824,7 @@ def _op_call(r):
 _OPS = {
     "ping": _op_ping,
     "status": _op_status,
+    "summary": _op_summary,
     "list": _op_list,
     "set": _op_set,
     "tr": _op_tr,
@@ -1620,6 +1838,8 @@ _OPS = {
     "markers": _op_markers,
     "note": _op_note,
     "grid": _op_grid,
+    "clip": _op_clip,
+    "link": _op_link,
     "batch": _op_batch,
     "ui": _op_ui,
     "probe": _op_probe,
