@@ -139,9 +139,15 @@ def test_config_prints_ready_text_for_every_client(capsys):
                 import tomllib
 
                 assert tomllib.loads(text)["mcp_servers"]["fl-studio"]["args"][-1] == "fl-mcp"
+        elif name == "opencode":
+            doc = json.loads(text)
+            server = doc["mcp"]["fl-studio"]
+            assert server["type"] == "local"
+            assert server["command"][1:] == ["--from", "fl-mcp[audio]", "fl-mcp"]
         else:
             doc = json.loads(text)
-            server = (doc.get("mcpServers") or doc["servers"])["fl-studio"]
+            section = doc.get("mcpServers") or doc.get("servers") or doc["context_servers"]
+            server = section["fl-studio"]
             assert server["args"] == ["--from", "fl-mcp[audio]", "fl-mcp"]
             assert ("type" in server) is (name == "vscode")
     assert json.loads(clients.snippet("cursor", "pypi", audio=False)[1])["mcpServers"]["fl-studio"][
@@ -272,3 +278,52 @@ def test_desktop_cli_supports_stealth_polite_foreground(tmp_path, monkeypatch, c
         cli.main(["desktop", "off"])
     assert e_off.value.code == 0
     assert desk.mode() == "off"
+
+
+def test_onboard_config_all_and_serve_profile_cli(monkeypatch, fl_home, tmp_path, capsys):
+    from fl_mcp import clients, install, server
+
+    seen = {}
+    monkeypatch.setattr(
+        install,
+        "onboard",
+        lambda **kw: (
+            seen.update(onboard=kw)
+            or {
+                "ok": True,
+                "steps": {"scripts": {"ok": True, "files": ["a", "b"]}},
+                "fl_diagnostics": {"issues": []},
+            }
+        ),
+    )
+    with pytest.raises(SystemExit) as info:
+        cli.main(["onboard", "--fl-dir", str(fl_home), "--no-service", "--no-fl-midi", "--json"])
+    assert info.value.code == 0
+    assert json.loads(capsys.readouterr().out)["ok"] is True
+    assert seen["onboard"]["configure_midi"] is False
+
+    monkeypatch.setattr(
+        clients,
+        "install_all",
+        lambda *a, **kw: [{"id": "cursor", "label": "Cursor", "ok": True, "path": "c.json"}],
+    )
+    with pytest.raises(SystemExit) as cfg_exit:
+        cli.main(["config", "all", "--write", "--source", "auto"])
+    assert cfg_exit.value.code == 0 and "Cursor" in capsys.readouterr().out
+
+    with pytest.raises(SystemExit) as auto_exit:
+        cli.main(["setup", "--auto", "--json"])
+    assert auto_exit.value.code == 0 and json.loads(capsys.readouterr().out)["ok"] is True
+
+    prev_prof = os.environ.pop("FL_MCP_PROFILE", None)
+    try:
+        monkeypatch.setattr(
+            server, "serve", lambda: seen.setdefault("served", os.environ.get("FL_MCP_PROFILE"))
+        )
+        cli.main(["serve", "--profile", "compact"])
+        assert seen["served"] == "compact"
+    finally:
+        if prev_prof is None:
+            os.environ.pop("FL_MCP_PROFILE", None)
+        else:
+            os.environ["FL_MCP_PROFILE"] = prev_prof
