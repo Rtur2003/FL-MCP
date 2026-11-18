@@ -1,6 +1,17 @@
 import os
+import re
 import sys
 from pathlib import Path
+
+
+def context_dir() -> Path:
+    """Folder for global, per-project, and sparse producer memory files."""
+    return data_dir() / "context"
+
+
+def memory_dir() -> Path:
+    """Folder for sparse producer memories (<name>.md)."""
+    return data_dir() / "memory"
 
 
 def data_dir() -> Path:
@@ -16,6 +27,18 @@ def logs_dir() -> Path:
 def cache_dir() -> Path:
     """Folder for cached indexes and scratch state."""
     return data_dir() / "cache"
+
+
+def models_dir() -> Path:
+    """Folder for offline ONNX / AI models (Basic Pitch, Silero VAD, etc.)."""
+    env = os.environ.get("FL_MCP_MODELS_DIR")
+    return Path(env).expanduser().resolve() if env else data_dir() / "models"
+
+
+def assets_dir() -> Path:
+    """Folder for downloadable audio assets (soundfonts, samples, irs, midi)."""
+    env = os.environ.get("FL_MCP_ASSETS_DIR")
+    return Path(env).expanduser().resolve() if env else data_dir() / "assets"
 
 
 def notes_dir(fl_dir: str | Path | None = None) -> Path:
@@ -48,6 +71,31 @@ def _is_isolated_home(home: Path) -> bool:
     return False
 
 
+def fl_version_sort_key(name: str) -> tuple[int, str]:
+    """Sort 'FL Studio 26' > 'FL Studio 25' > 'FL Studio 9' numerically."""
+    match = re.search(r"(\d+)", name)
+    return (int(match.group(1)) if match else 0, name)
+
+
+def fl_registry_version_keys() -> list[str]:
+    """Installed HKCU\\Software\\Image-Line\\FL Studio <N> registry key names, newest first."""
+    if sys.platform != "win32":
+        return []
+    try:
+        import winreg
+
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Image-Line") as root:
+            sub_count = winreg.QueryInfoKey(root)[0]
+            fl_keys = [
+                winreg.EnumKey(root, idx)
+                for idx in range(sub_count)
+                if winreg.EnumKey(root, idx).startswith("FL Studio")
+            ]
+            return sorted(fl_keys, key=fl_version_sort_key, reverse=True)
+    except OSError:
+        return []
+
+
 def _win_user_data_candidates() -> tuple[list[Path], Path | None]:
     """Query Image-Line Registry settings and Windows Shell Documents folder."""
     candidates: list[Path] = []
@@ -56,13 +104,7 @@ def _win_user_data_candidates() -> tuple[list[Path], Path | None]:
         import winreg
 
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Image-Line") as root:
-            sub_count = winreg.QueryInfoKey(root)[0]
-            fl_keys: list[str] = []
-            for idx in range(sub_count):
-                name = winreg.EnumKey(root, idx)
-                if name.startswith("FL Studio"):
-                    fl_keys.append(name)
-            for key_name in sorted(fl_keys, reverse=True):
+            for key_name in fl_registry_version_keys():
                 try:
                     with winreg.OpenKey(root, rf"{key_name}\General") as gen:
                         val, _ = winreg.QueryValueEx(gen, "User data folder")
@@ -154,6 +196,8 @@ def diagnostics() -> dict[str, object]:
     return {
         "platform": sys.platform,
         "data_dir": str(data_dir()),
+        "models_dir": str(models_dir()),
+        "assets_dir": str(assets_dir()),
         "logs_dir": str(logs_dir()),
         "notes_dir": str(notes_dir(user_dir)),
         "fl_user_dir": str(user_dir),
