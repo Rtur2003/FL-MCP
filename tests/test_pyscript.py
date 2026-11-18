@@ -148,3 +148,60 @@ def test_selective_delete_and_empty_replace_clear(roll):
     module.apply(None)
     assert roll.score.noteCount == 0
     assert roll.score.cleared == 1
+
+
+def test_digest_idempotency_preserves_manual_edits(roll):
+    roll.queue([[60, 0, 1, 100]], replace=True, serial=11)
+    scr = roll.load()
+    scr.apply()
+    assert [n.number for n in roll.score.notes] == [60]
+    st = roll.state()
+    assert "sig" in st and st["serial"] == 11
+
+    # Simulate user editing Piano Roll manually without changing inbox.json
+    roll.score.clearNotes(all=True)
+    n = roll.score.notes
+    from tests.test_pyscript import Note
+
+    manual = Note()
+    manual.number, manual.time, manual.length, manual.velocity = 67, 0, 96, 0.9
+    n.append(manual)
+    scr.apply()
+    assert [x.number for x in roll.score.notes] == [67]
+
+    # New serial overwrites cleanly
+    roll.queue([[72, 0, 1, 100]], replace=True, serial=12)
+    scr.apply()
+    assert [x.number for x in roll.score.notes] == [72]
+
+
+def test_baked_fallback_applies_when_file_io_is_blocked(roll, tmp_path, monkeypatch):
+    import builtins
+    import runpy
+
+    from fl_mcp import install
+
+    fl_home = tmp_path / "fl"
+    (fl_home / "Settings").mkdir(parents=True)
+    notes_folder = tmp_path / "notes"
+    install.install(fl_home, notes_folder)
+    baked_path = install.bake_piano_roll_script(
+        {"serial": 77, "replace": True, "notes": [[64, 0, 1, 100]]},
+        fl_dir=fl_home,
+        notes_dir=notes_folder,
+    )
+    assert baked_path is not None and baked_path.is_file()
+
+    orig_open = builtins.open
+
+    def blocked_open(file, *a, **kw):
+        if str(file).endswith(("inbox.json", "state.json")):
+            raise OSError("sandboxed FL file I/O")
+        return orig_open(file, *a, **kw)
+
+    monkeypatch.setattr(builtins, "open", blocked_open)
+    ns = runpy.run_path(str(baked_path))
+    if not roll.score.notes:
+        ns["apply"]()
+    assert not roll.messages, roll.messages
+    assert [n.number for n in roll.score.notes] == [64]
