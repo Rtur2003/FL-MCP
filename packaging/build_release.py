@@ -59,7 +59,11 @@ def _win_user_data_candidates() -> tuple[list[Path], Path | None]:
                 for idx in range(sub_count)
                 if winreg.EnumKey(root, idx).startswith("FL Studio")
             ]
-            for key_name in sorted(fl_keys, reverse=True):
+            fl_keys.sort(
+                key=lambda k: [int(m) for m in __import__("re").findall(r"\\d+", k)] or [0],
+                reverse=True,
+            )
+            for key_name in fl_keys:
                 try:
                     with winreg.OpenKey(root, rf"{key_name}\\General") as gen:
                         val, _ = winreg.QueryValueEx(gen, "User data folder")
@@ -137,6 +141,7 @@ def _configure_loopmidi() -> None:
         with winreg.CreateKey(winreg.HKEY_CURRENT_USER, base) as key:
             winreg.SetValueEx(key, "DetectFeedback", 0, winreg.REG_DWORD, 0)
             winreg.SetValueEx(key, "CommandTreshhold", 0, winreg.REG_DWORD, 50000)
+            winreg.SetValueEx(key, "StartMinimized", 0, winreg.REG_DWORD, 1)
         port = os.environ.get("FL_MCP_PORT") or "FL MCP"
         with winreg.CreateKey(winreg.HKEY_CURRENT_USER, rf"{base}\\Ports") as key:
             winreg.SetValueEx(key, port, 0, winreg.REG_DWORD, 1)
