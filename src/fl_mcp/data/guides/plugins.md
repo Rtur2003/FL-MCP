@@ -5,7 +5,7 @@ Every plugin FL can host is reachable by name, stock or third party. Read what i
 ## Read
 
 - `fl_list kind=plugins`: every plugin in the project: where it sits (`c` channel rack, `m` mixer), its index and slot, name, parameter and preset counts.
-- `fl_param target=mixer index=<track> slot=<0-9>` or `target=channel index=<channel>`: parameters as `[i, name, val, text]`: `val` is FL's 0-1 position, `text` is what the plugin shows ("-18 dB", "2.5 kHz", "4:1"). `find=<part of a name>` filters, `start`/`limit` page (responses include `next` when more named parameters remain). `view=info` gives counts and the current preset; `view=io` reads full inputs/outputs and signal chain (`in_channels`, `in_tracks`, `fx_slots`, `sends`, `out_ctrls`, `out_voices`, `notes` pad labels, plus `muted`, `mix`, `track_slots_enabled`, `automation_enabled`, `midi_in_port`, `activity`).
+- `fl_param target=mixer index=<track> slot=<0-9>` or `target=channel index=<channel>`: parameters as `[i, name, val, text]`: `val` is FL's 0-1 position, `text` is what the plugin shows ("-18 dB", "2.5 kHz", "4:1"). Use `find=<text>` or semantic category filters `find="cat:Filter"` (`Filter`, `Env`, `Comp`, `Space`, `Drive`, `Mod`, `Osc`, `Level`, customizable in `~/.fl-mcp/fx_prefs.json`). `start`/`limit` page with `next` cursor. `view=info` gives counts and preset; `view=io` reads routing, sends, `out_ctrls`, `out_voices`, FPC/drum `notes` pads, `mix`, `muted`, `track_slots_enabled`, `automation_enabled`, `midi_in_port`.
 - Parameter names are whatever the plugin exposes (multi-word search matches tokens such as `"cutoff freq"` -> `"Filter 1 Cutoff Frequency"`). If a third-party plugin shows only "Param 1..n", use presets or read the window with `fl_desk`.
 
 ## Set
@@ -45,4 +45,4 @@ FL's API cannot create plugins, so load them the way a person does, driven from 
 
 ## Sounds on disk
 
-`fl_library action=scan` indexes FL's sample packs and the folders in `FL_MCP_SAMPLES` once. `find role=<kick|snare|clap|hat|ohat|perc|bass|fx|chords|pad|lead>` ranks samples by name and by measured sound (length, decay, brightness, low end); `kit genre=<g>` picks one coherent drum kit; `info path=<file>` measures one file; `action=plugins` lists installed plugins by kind.
+`fl_library action=scan` indexes FL's sample packs, SoundFonts, `.fst` presets, and `FL_MCP_SAMPLES`. `find` accepts single roles or comma-separated multi-role queries (`role="kick,snare,hat"`) and ranks by name and acoustic features; `similar path=<wav>` finds acoustically closest samples by weighted Euclidean distance (`dur`, `decay_ms`, `zcr_hz`, `low`, `rms_db`); `kit genre=<g>` picks one coherent drum kit; `info path=<file>` measures one file; `action=plugins` lists installed instruments, effects, `.sf2` SoundFonts, and `.fst` presets.
