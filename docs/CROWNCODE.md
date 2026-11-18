@@ -7,7 +7,7 @@ Do not move the server code into the CrownCode repository: it is released as a P
 ## What was added to CrownCode (branch `claude/bold-franklin-u2nys9`)
 
 | File | What |
-|---|---|
+| --- | --- |
 | `platform/config/product-catalog.ts` | the `fl-mcp` entry: route `/fl-mcp`, icon, schema.org facts (SoftwareApplication, Windows and macOS, link to the repository), `updated` date |
 | `platform/locales/en.json`, `tr.json` | `products.items.flMcp`: title, description, status, and the page text under `page` (facts, example requests, setup steps, limits, source) |
 | `platform/pages/fl-mcp/index.tsx` | the page, built from `WorldPage` and the shared section classes, with copy buttons for the commands |
@@ -21,11 +21,11 @@ The header menu, the "back to the atlas" badge, search, sitemap and structured d
 
 ## Keeping the page true
 
-CrownCode's `PRODUCT.md` says project status must stay truthful, so the page says **Experimental** and states that FL-MCP has not been run in a live FL Studio. When that changes:
+CrownCode's `PRODUCT.md` says project status must stay truthful. Update CrownCode locale fields from **Experimental** to **Live-Verified** referencing verified FL Studio 2025 (`Producer Edition v25.2.5 [build 5319]`, API 40, `fl-mcp selftest --deep`: 17/17 checks passing), Windows/macOS Studio Desktop App + persistent HTTP daemon, autonomous `fl-mcp onboard`, and 12 AI client integrations:
 
-1. Run FL-MCP in a real FL Studio and fix what differs.
-2. In both locale files change `products.items.flMcp.status`, the Status fact and the last item under limits; set `updated` in the catalog entry to the date of the change.
-3. Only then add a screenshot or a short recording of a real session.
+1. Keep `updated` in `platform/config/product-catalog.ts` synchronized with releases.
+2. Reflect current automated onboarding (`fl-mcp onboard --install-midi --desktop`) and 14 core tools (`<16.5 KB` schema) across `en.json` and `tr.json`.
+3. Only publish screenshots or recordings captured from real Studio / FL Studio sessions.
 
 ## When it is sold
 
