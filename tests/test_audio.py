@@ -438,3 +438,46 @@ def test_hidden_popen_creates_isolated_desktop_and_cleans_handles(monkeypatch):
         render._CREATE_NO_WINDOW | render._BELOW_NORMAL_PRIORITY_CLASS
     )
     assert popen_args["startupinfo"].wShowWindow == render._SW_HIDE
+
+
+def test_transcribe_masking_active_rms_and_cli_mid_zip(tmp_path):
+    # 1. CLI /M and /Z command line flags
+    mid_cmd = render.command_line(Path("C:/FL/FL64.exe"), "mid", tmp_path / "in", tmp_path / "out")
+    zip_cmd = render.command_line(Path("C:/FL/FL64.exe"), "zip", tmp_path / "in", tmp_path / "out")
+    assert " /M " in mid_cmd and " /E" not in mid_cmd
+    assert " /Z " in zip_cmd and " /E" not in zip_cmd
+
+    # 2. Active-region RMS ignores leading/trailing silence
+    sil = np.zeros(FS * 2, dtype="float32")
+    body = sine(-12, 2.0)
+    padded = stereo_of(np.concatenate([sil, body, sil]))
+    pk = audio.peaks(padded)
+    assert pk["active_rms_db"] > pk["rms_db"] + 3.0
+
+    # 3. Transcribe BPM + C major melody (C5-E5-G5-C5 on quarter-note 120 BPM pulses)
+    n_beat = int(FS * 0.5)
+    t_b = np.arange(n_beat) / FS
+    env = np.minimum(1.0, t_b / 0.01) * np.exp(-t_b * 3.5)
+    hz_seq = [523.25, 659.25, 783.99, 523.25, 659.25, 783.99, 523.25, 659.25]
+    mel = np.concatenate(
+        [(0.5 * env * np.sin(2 * np.pi * f * t_b)).astype("float32") for f in hz_seq]
+    )
+    mel_wav = wav(tmp_path, stereo_of(mel), "melody.wav")
+    tr = audio.transcribe(mel_wav)
+    assert tr["bpm"] == pytest.approx(120.0, abs=4.0)
+    assert tr["key"] == "C major"
+    assert tr["notes_count"] >= 4
+    pitches = {n[0] for n in tr["notes"]}
+    assert {72, 76, 79} & pitches
+
+    # 4. Vocal vs backing masking detection
+    t = np.arange(FS * 3) / FS
+    bed = (0.4 * np.sin(2 * np.pi * 350 * t) + 0.3 * np.sin(2 * np.pi * 1800 * t)).astype("float32")
+    vox = (0.08 * np.sin(2 * np.pi * 350 * t) + 0.08 * np.sin(2 * np.pi * 1800 * t)).astype(
+        "float32"
+    )
+    m = audio.masking(
+        wav(tmp_path, stereo_of(vox), "vox.wav"), wav(tmp_path, stereo_of(bed), "bed.wav")
+    )
+    assert m["masking_index"] > 20.0
+    assert any(mv["gain_db"] < 0 for mv in m["eq_moves"])
