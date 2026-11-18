@@ -21,10 +21,13 @@ NO_LIMITER = (
 
 
 def find_limiter(call: Call) -> dict[str, Any]:
-    out = call({"o": "list", "k": "plugins", "s": 0, "n": 200, "a": 1})
-    for _, at, index, slot, plugin, *_ in out["rows"]:
-        if at == "m" and index == 0 and plugins_kb.classify(plugin) == "limiter":
-            return {"slot": slot, "plugin": plugin}
+    start: int | None = 0
+    while start is not None:
+        out = call({"o": "list", "k": "plugins", "s": start, "n": 60, "a": 1})
+        for _, at, index, slot, plugin, *_ in out["rows"]:
+            if at == "m" and index == 0 and plugins_kb.classify(plugin) == "limiter":
+                return {"slot": slot, "plugin": plugin}
+        start = out.get("next")
     raise ValueError(NO_LIMITER)
 
 
