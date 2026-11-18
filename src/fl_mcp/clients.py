@@ -13,7 +13,7 @@ from typing import Any
 
 NAME = "fl-studio"
 REPO = "https://github.com/Rtur2003/FL-MCP"
-SOURCES = ("pypi", "git", "local")
+SOURCES = ("auto", "pypi", "git", "local")
 TRANSPORTS = ("stdio", "http")
 DEFAULT_HTTP_URL = "http://127.0.0.1:8765/mcp"
 
@@ -41,6 +41,13 @@ def command(
     """The command and arguments that start the server."""
     if source not in SOURCES:
         raise ValueError(f"source must be one of {', '.join(SOURCES)}")
+    if source == "auto":
+        if getattr(sys, "frozen", False):
+            return sys.executable, ["--mcp"]
+        exe_cli = shutil.which("fl-mcp")
+        if exe_cli:
+            return exe_cli, []
+        source = "local"
     if source == "local":  # works from venv, uv tool, or standalone frozen app binary
         if getattr(sys, "frozen", False):
             return sys.executable, ["--mcp"]
@@ -52,20 +59,75 @@ def command(
     return uvx, ["--from", spec, "fl-mcp"] if audio else ["fl-mcp"]
 
 
+def prewarm_uvx(audio: bool = True, timeout: float = 120.0) -> dict[str, Any]:
+    """Pre-install or warm `fl-mcp[audio]` via uv so AI clients never time out on cold start."""
+    spec = "fl-mcp[audio]" if audio else "fl-mcp"
+    uv = shutil.which("uv")
+    if not uv:
+        for cand in (Path.home() / ".local" / "bin" / ("uv.exe" if os.name == "nt" else "uv"),):
+            if cand.is_file():
+                uv = str(cand)
+                break
+    if not uv:
+        return {"ok": False, "skipped": True, "reason": "uv not found on PATH"}
+    try:
+        res = subprocess.run(
+            [uv, "tool", "install", "--upgrade", spec],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+        return {
+            "ok": res.returncode == 0,
+            "method": "uv tool install",
+            "command": [uv, "tool", "install", "--upgrade", spec],
+            "output": (res.stdout or res.stderr or "").strip()[:300],
+        }
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
 CLIENTS = {
     "claude-desktop": (
         "Claude Desktop",
         "Settings > Developer > Edit Config (claude_desktop_config.json). "
         "Or install the .mcpb bundle by double-clicking it.",
     ),
-    "claude-code": ("Claude Code", "run this once in a terminal"),
+    "claude-code": ("Claude Code", "run this once in a terminal (or ~/.claude.json)"),
     "cursor": ("Cursor", "~/.cursor/mcp.json (or .cursor/mcp.json in a project)"),
-    "vscode": ("VS Code (Copilot)", ".vscode/mcp.json in the project"),
+    "vscode": ("VS Code (Copilot)", "Code/User/mcp.json (or .vscode/mcp.json in a project)"),
     "windsurf": ("Windsurf", "~/.codeium/windsurf/mcp_config.json"),
     "gemini": ("Gemini CLI", "~/.gemini/settings.json"),
-    "antigravity": ("Antigravity", "~/.gemini/antigravity/mcp_config.json"),
+    "antigravity": (
+        "Antigravity",
+        "~/.gemini/config/mcp_config.json or ~/.gemini/antigravity/mcp_config.json",
+    ),
     "codex": ("Codex CLI", "~/.codex/config.toml"),
+    "cline": ("Cline", "VS Code globalStorage cline_mcp_settings.json"),
+    "roo-code": ("Roo Code", "VS Code globalStorage mcp_settings.json"),
+    "zed": ("Zed", "~/.config/zed/settings.json or %APPDATA%\\Zed\\settings.json"),
+    "opencode": ("OpenCode", "~/.config/opencode/opencode.json"),
 }
+
+
+def _app_data_base() -> Path:
+    home = Path.home()
+    if os.name == "nt":
+        return Path(os.environ.get("APPDATA") or (home / "AppData" / "Roaming"))
+    if sys.platform == "darwin":
+        return home / "Library" / "Application Support"
+    return Path(os.environ.get("XDG_CONFIG_HOME") or (home / ".config"))
+
+
+def _root_key(client: str) -> str:
+    if client == "vscode":
+        return "servers"
+    if client == "zed":
+        return "context_servers"
+    if client == "opencode":
+        return "mcp"
+    return "mcpServers"
 
 
 def _server_entry(
@@ -76,18 +138,22 @@ def _server_entry(
     transport: str = "stdio",
     url: str | None = None,
 ) -> dict[str, Any]:
+    arg_list = args or []
     if transport == "http":
         endpoint = url or DEFAULT_HTTP_URL
         if client == "vscode":
             return {"type": "http", "url": endpoint}
         if client == "gemini":
             return {"httpUrl": endpoint}
-        if client == "windsurf":
+        if client in ("windsurf", "antigravity"):
             return {"serverUrl": endpoint}
         if client == "claude-desktop":
             return {"command": "npx", "args": ["-y", "mcp-remote", endpoint, "--allow-http"]}
+        if client == "opencode":
+            return {"type": "remote", "url": endpoint}
         return {"url": endpoint}
-    arg_list = args or []
+    if client == "opencode":
+        return {"type": "local", "command": [cmd, *arg_list]}
     return (
         {"type": "stdio", "command": cmd, "args": arg_list}
         if client == "vscode"
@@ -102,18 +168,18 @@ def config_path(client: str, project: Path | None = None) -> Path | None:
     if client == "claude-code":
         return None
     home = Path.home()
+    base = _app_data_base()
     if client == "claude-desktop":
-        if os.name == "nt":
-            base = Path(os.environ.get("APPDATA") or (home / "AppData" / "Roaming"))
-        elif sys.platform == "darwin":
-            base = home / "Library" / "Application Support"
-        else:
-            base = Path(os.environ.get("XDG_CONFIG_HOME") or (home / ".config"))
         return base / "Claude" / "claude_desktop_config.json"
     if client == "cursor":
         return (Path(project) if project else home) / ".cursor" / "mcp.json"
     if client == "vscode":
-        return (Path(project) if project else Path.cwd()) / ".vscode" / "mcp.json"
+        if project is not None:
+            return Path(project) / ".vscode" / "mcp.json"
+        user_dir = base / "Code" / "User"
+        if user_dir.is_dir():
+            return user_dir / "mcp.json"
+        return Path.cwd() / ".vscode" / "mcp.json"
     if client == "windsurf":
         return home / ".codeium" / "windsurf" / "mcp_config.json"
     if client == "gemini":
@@ -124,8 +190,73 @@ def config_path(client: str, project: Path | None = None) -> Path | None:
         if not ide_dir.exists() and cli_cfg.parent.exists():
             return cli_cfg
         return ide_dir / "mcp_config.json"
+    if client == "cline":
+        return (
+            base
+            / "Code"
+            / "User"
+            / "globalStorage"
+            / "saoudrizwan.claude-dev"
+            / "settings"
+            / "cline_mcp_settings.json"
+        )
+    if client == "roo-code":
+        return (
+            base
+            / "Code"
+            / "User"
+            / "globalStorage"
+            / "rooveterinaryinc.roo-cline"
+            / "settings"
+            / "mcp_settings.json"
+        )
+    if client == "zed":
+        if os.name == "nt":
+            return base / "Zed" / "settings.json"
+        cfg_base = Path(os.environ.get("XDG_CONFIG_HOME") or (home / ".config"))
+        return cfg_base / "zed" / "settings.json"
+    if client == "opencode":
+        cfg_base = Path(os.environ.get("XDG_CONFIG_HOME") or (home / ".config"))
+        return cfg_base / "opencode" / "opencode.json"
     codex_home = Path(os.environ.get("CODEX_HOME") or (home / ".codex"))
     return codex_home / "config.toml"
+
+
+def is_client_installed(client: str, project: Path | None = None) -> bool:
+    """Return True if the AI client appears to be installed or initialized on this machine."""
+    if client == "claude-code":
+        return bool(shutil.which("claude") or (Path.home() / ".claude.json").is_file())
+    if client == "vscode":
+        if project is not None:
+            return True
+        return (_app_data_base() / "Code" / "User").is_dir() or bool(shutil.which("code"))
+    if client == "cursor":
+        return (Path.home() / ".cursor").is_dir() or bool(shutil.which("cursor"))
+    if client == "windsurf":
+        return (Path.home() / ".codeium" / "windsurf").is_dir() or bool(shutil.which("windsurf"))
+    if client == "gemini":
+        return (Path.home() / ".gemini" / "settings.json").is_file() or bool(shutil.which("gemini"))
+    if client == "antigravity":
+        return (
+            (Path.home() / ".gemini" / "antigravity").is_dir()
+            or (Path.home() / ".gemini" / "config").is_dir()
+            or bool(shutil.which("agy"))
+        )
+    if client == "codex":
+        codex_dir = Path(os.environ.get("CODEX_HOME") or (Path.home() / ".codex"))
+        return codex_dir.is_dir() or bool(shutil.which("codex"))
+    if client == "claude-desktop":
+        return (_app_data_base() / "Claude").is_dir()
+    if client in ("cline", "roo-code"):
+        cfg = config_path(client, project)
+        return bool(cfg is not None and cfg.parent.parent.is_dir())
+    if client == "zed":
+        cfg = config_path(client, project)
+        return bool((cfg is not None and cfg.parent.is_dir()) or shutil.which("zed"))
+    if client == "opencode":
+        cfg = config_path(client, project)
+        return bool((cfg is not None and cfg.parent.is_dir()) or shutil.which("opencode"))
+    return False
 
 
 def _validate_transport(transport: str) -> None:
@@ -152,7 +283,7 @@ def snippet(
             return where, f"claude mcp add --transport http {NAME} {endpoint}"
         if client == "codex":
             return where, f"[mcp_servers.{NAME}]\nurl = {json.dumps(endpoint)}\n"
-        key = "servers" if client == "vscode" else "mcpServers"
+        key = _root_key(client)
         entry = _server_entry(client, transport="http", url=endpoint)
         return where, json.dumps({key: {NAME: entry}}, indent=2)
     cmd, args = command(source, audio)
@@ -164,7 +295,7 @@ def snippet(
     if client == "codex":
         text = f"[mcp_servers.{NAME}]\ncommand = {json.dumps(cmd)}\nargs = {json.dumps(args)}\n"
         return where, text
-    key = "servers" if client == "vscode" else "mcpServers"
+    key = _root_key(client)
     return where, json.dumps({key: {NAME: _server_entry(client, cmd, args)}}, indent=2)
 
 
@@ -256,13 +387,22 @@ def install_client(
     endpoint = url or DEFAULT_HTTP_URL
     cmd, args = ("", []) if transport == "http" else command(source, audio, resolve=True)
     if client == "claude-code":
+        label = CLIENTS[client][0]
         argv = (
             ["claude", "mcp", "add", "--transport", "http", NAME, endpoint]
             if transport == "http"
             else ["claude", "mcp", "add", NAME, "--", cmd, *args]
         )
         if dry_run:
-            return {"client": client, "method": "cli", "command": argv, "written": False}
+            return {
+                "client": client,
+                "label": label,
+                "method": "cli",
+                "transport": transport,
+                "path": None,
+                "command": argv,
+                "written": False,
+            }
         exe = shutil.which("claude")
         if not exe:
             raise RuntimeError(
@@ -273,14 +413,22 @@ def install_client(
         if res.returncode != 0:
             msg = (res.stderr or res.stdout or "").strip() or f"exit {res.returncode}"
             raise RuntimeError(f"claude mcp add failed: {msg}")
-        return {"client": client, "method": "cli", "command": [exe, *argv[1:]], "written": True}
+        return {
+            "client": client,
+            "label": label,
+            "method": "cli",
+            "transport": transport,
+            "path": None,
+            "command": [exe, *argv[1:]],
+            "written": True,
+        }
     target = Path(path) if path is not None else config_path(client, project)
     assert target is not None
     existing = target.read_text(encoding="utf-8") if target.exists() else ""
     if client == "codex":
         updated = _merge_codex_toml(existing, NAME, cmd, args, transport=transport, url=endpoint)
     else:
-        key = "servers" if client == "vscode" else "mcpServers"
+        key = _root_key(client)
         entry = _server_entry(client, cmd, args, transport=transport, url=endpoint)
         updated = _merge_json(existing, key, NAME, entry)
     changed = updated != existing
@@ -294,6 +442,7 @@ def install_client(
         target.write_text(updated, encoding="utf-8")
     return {
         "client": client,
+        "label": CLIENTS[client][0],
         "method": "file",
         "transport": transport,
         "path": str(target),
@@ -304,17 +453,105 @@ def install_client(
     }
 
 
+def install_all(
+    source: str = "pypi",
+    audio: bool = True,
+    *,
+    project: Path | None = None,
+    dry_run: bool = False,
+    transport: str = "stdio",
+    url: str | None = None,
+    only_installed: bool = False,
+) -> list[dict[str, Any]]:
+    """Register FL-MCP with supported clients, continuing cleanly if optional tools are absent."""
+    _validate_transport(transport)
+    results: list[dict[str, Any]] = []
+    has_npx = bool(shutil.which("npx"))
+    for key, (label, _) in CLIENTS.items():
+        if (
+            key == "vscode"
+            and project is None
+            and not (_app_data_base() / "Code" / "User").is_dir()
+        ):
+            results.append(
+                {
+                    "client": key,
+                    "label": label,
+                    "method": "file",
+                    "transport": transport,
+                    "path": None,
+                    "ok": True,
+                    "skipped": True,
+                    "written": False,
+                    "reason": "VS Code user dir absent; pass --project for .vscode/mcp.json",
+                }
+            )
+            continue
+        if only_installed and not is_client_installed(key, project):
+            results.append(
+                {
+                    "client": key,
+                    "label": label,
+                    "method": "cli" if key == "claude-code" else "file",
+                    "transport": transport,
+                    "path": None,
+                    "ok": True,
+                    "skipped": True,
+                    "written": False,
+                    "reason": "client not detected on this computer",
+                }
+            )
+            continue
+        chosen_transport = (
+            "stdio"
+            if (key == "claude-desktop" and transport == "http" and not has_npx)
+            else transport
+        )
+        try:
+            res = install_client(
+                key,
+                source,
+                audio,
+                project=project,
+                dry_run=dry_run,
+                transport=chosen_transport,
+                url=url,
+            )
+            if chosen_transport != transport:
+                res["fallback"] = "npx not on PATH; registered stdio instead of HTTP mcp-remote"
+            results.append({"ok": True, "skipped": False, **res})
+        except (OSError, ValueError, RuntimeError) as exc:
+            cfg = config_path(key, project)
+            msg = str(exc)
+            missing_cli = key == "claude-code" and "not found on PATH" in msg
+            results.append(
+                {
+                    "client": key,
+                    "label": label,
+                    "method": "cli" if key == "claude-code" else "file",
+                    "transport": chosen_transport,
+                    "path": str(cfg) if cfg is not None else None,
+                    "ok": missing_cli,
+                    "skipped": missing_cli,
+                    "written": False,
+                    "error": msg,
+                }
+            )
+    return results
+
+
 def client_statuses(project: Path | None = None) -> list[dict[str, Any]]:
     """Inspect whether FL-MCP is registered in each supported AI client config."""
     out: list[dict[str, Any]] = []
     for key, (label, where) in CLIENTS.items():
         cfg = config_path(key, project)
+        inspect_file = (Path.home() / ".claude.json") if key == "claude-code" else cfg
         configured = False
         transport = ""
         error = ""
-        if cfg is not None and cfg.is_file():
+        if inspect_file is not None and inspect_file.is_file():
             try:
-                raw = cfg.read_text(encoding="utf-8")
+                raw = inspect_file.read_text(encoding="utf-8")
                 if key == "codex":
                     tl = _tomllib()
                     if tl:
@@ -339,7 +576,7 @@ def client_statuses(project: Path | None = None) -> list[dict[str, Any]]:
                         )
                 else:
                     data = json.loads(raw)
-                    sec_key = "servers" if key == "vscode" else "mcpServers"
+                    sec_key = _root_key(key)
                     entry = (data.get(sec_key) or {}).get(NAME) if isinstance(data, dict) else None
                 if isinstance(entry, dict):
                     configured = True
@@ -353,6 +590,7 @@ def client_statuses(project: Path | None = None) -> list[dict[str, Any]]:
                             "url" in entry
                             or "httpUrl" in entry
                             or "serverUrl" in entry
+                            or entry.get("type") == "remote"
                             or has_remote
                         )
                         else "stdio"
@@ -364,8 +602,9 @@ def client_statuses(project: Path | None = None) -> list[dict[str, Any]]:
                 "id": key,
                 "name": label,
                 "hint": where,
+                "installed": is_client_installed(key, project),
                 "path": str(cfg) if cfg is not None else None,
-                "exists": bool(cfg and cfg.is_file()),
+                "exists": bool(inspect_file and inspect_file.is_file()),
                 "configured": configured,
                 "transport": transport,
                 "error": error,
