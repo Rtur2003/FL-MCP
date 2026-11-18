@@ -10,14 +10,14 @@ Nothing is impossible, the method just has to change. Go down this ladder and st
 
 | Need | Rung | Tools |
 | --- | --- | --- |
-| Read or change something that exists (tempo, faders, mute, steps, plugin values) | 1. FL's scripting API | `fl_status`, `fl_list`, `fl_set`, `fl_transport`, `fl_steps`, `fl_param`, `fl_call` |
-| Notes in the piano roll | 1b. piano roll script | `fl_notes`, then `fl_desk macro=script` |
-| Open a window, press a key, move around FL's browser, load a plugin or sample | 2. FL's own UI from inside FL, no mouse | `fl_ui` |
-| New channels, patterns, playlist clips, sample channels | 3. write a project file | `fl_produce template=<.flp>` (+ `sounds=auto`), then open it |
-| Audio file of the mix | 4. FL's command line | `fl_audio action=render` (isolated hidden desktop when `project=` is given on Windows) |
-| Anything a person can see and click | 5. the desktop | `fl_desk` (opt-in: `stealth`, `polite`, or `foreground`) |
+| Read or change something that exists (tempo, faders, mute, steps, plugin values) | 1. FL's scripting API | `fl_status` (`include="summary,memory"`), `fl_list`, `fl_set`, `fl_transport`, `fl_steps`, `fl_param`, `fl_call` |
+| Notes in the piano roll | 1b. piano roll script (`inbox.json` + `_BAKED` fallback) | `fl_notes` (`apply=true`), or `fl_desk macro=script` (WinRT OCR arms first run) |
+| Open a window, press a key, walk FL's browser, load a plugin/sample | 2. FL's UI (browser + Win `TQuickPopupMenuWindow` / macOS JXA `Add` menu) | `fl_ui` |
+| New channels, patterns, playlist clips, full arrangements, `.fsc` scores | 3. binary FLP/ZIP/FSC engine (FL 20–26+, 500 inserts) | `fl_produce` (`flp`, `arrange`, `inspect`) |
+| Audio/MIDI/ZIP export & analysis | 4. FL command line (`wav/mp3/ogg/flac` + `/M` `mid` + `/Z` `zip`) | `fl_audio action=render` |
+| Anything a person can see and click | 5. the desktop (`stealth` / `polite` / `foreground`) | `fl_desk` |
 
-Check what this FL build offers with `fl_status probe=true` before relying on rung 2.
+Check what this FL build offers (cached per FL version) with `fl_status include="summary,probe,memory"`. Enable `FL_MCP_READONLY=1` or `--profile read-only|compact|produce|mix` when safe exploration is needed.
 
 ## Rung 2: FL's browser from inside FL
 
