@@ -501,6 +501,16 @@ class Desk:
             waited = self._poll_script_state(folder, queued, before, timeout)
             if waited is not None:
                 return {"applied": True, "waited_s": waited, "background": False}
+            arm = getattr(self.backend, "arm_piano_roll_script", None)
+            if callable(arm) and arm("FL MCP", roll or target):
+                waited = self._poll_script_state(folder, queued, before, min(timeout, 3.0))
+                if waited is not None:
+                    return {
+                        "applied": True,
+                        "waited_s": waited,
+                        "background": False,
+                        "armed": True,
+                    }
             return {
                 "applied": False,
                 "note": "the script did not run. In FL's piano roll open Tools > Scripting > "
