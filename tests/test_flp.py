@@ -620,3 +620,43 @@ def test_markers_verify_and_build_with_fst_and_sf2(tmp_path, monkeypatch):
     empty_ver = empty_proj.verify()
     assert any("no arrangement clips" in w for w in empty_ver["warnings"])
     assert any("0 notes" in w for w in empty_ver["warnings"])
+
+
+def test_fsc_zip_fl26_88b_and_registry_version_sorting(tmp_path, monkeypatch):
+    import zipfile
+
+    from fl_mcp import paths
+
+    # 1. .fsc roundtrip
+    fsc_path = tmp_path / "melody.fsc"
+    flp.write_fsc(fsc_path, [[60, 0.0, 1.0, 100], [64, 1.0, 0.5, 90]], ppq=96)
+    score = flp.read_fsc(fsc_path)
+    assert score["ppq"] == 96 and len(score["notes"]) == 2
+    assert score["notes"][0][:3] == [60, 0.0, 1.0]
+
+    # 2. .zip Zipped Loop Package via Flp.open
+    zip_path = tmp_path / "loop.zip"
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        zf.writestr("project.flp", template(clips=1))
+    opened = Flp.open(zip_path)
+    assert len(opened.playlist_items()) == 1
+
+    # 3. _text() ASCII vs UTF-16LE heuristic
+    assert flp._text(b"Lead\x00") == "Lead"
+    assert flp._text("Bass".encode("utf-16-le") + b"\x00\x00") == "Bass"
+
+    # 4. FL 26 88-byte playlist & dynamic 500-insert cap
+    raw88 = template(version="26.0.0", clips=0)
+    p26 = Flp.parse(raw88)
+    assert p26._max_insert() == 500
+    assert p26._record_size(b"\x00" * 88) == 88
+    p26.set_playlist([(0, 1, 96, 1)], mode="replace", synthesize=True)
+    assert len(p26.playlist_items()) == 1
+    assert len(p26._playlist_event(0).data) == 88
+
+    # 5. Registry version sorting: FL Studio 26 > FL Studio 25 > FL Studio 9
+    assert sorted(
+        ["FL Studio 9", "FL Studio 25", "FL Studio 26"],
+        key=paths.fl_version_sort_key,
+        reverse=True,
+    ) == ["FL Studio 26", "FL Studio 25", "FL Studio 9"]
