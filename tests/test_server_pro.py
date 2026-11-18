@@ -229,3 +229,23 @@ async def test_a_template_that_is_not_an_flp_is_refused(studio, tmp_path):
     assert "not an FL Studio project" in await run(
         "fl_produce", {"action": "inspect", "template": str(bad)}, expect_error=True
     )
+
+
+async def test_arrange_fix_and_bus_workflows(studio, tmp_path):
+    from fl_mcp.flp import Flp
+    from tests.flpgen import template
+
+    src = tmp_path / "user_loop.flp"
+    src.write_bytes(template(clips=1, sampler=True))
+    arr = await run("fl_produce", {"action": "arrange", "template": str(src), "length": "sketch"})
+    assert arr["bars"] >= 16 and len(arr["sections"]) >= 3 and arr["preserved_patterns"]
+    out_flp = Flp.parse(__import__("pathlib").Path(arr["file"]).read_bytes())
+    assert len(out_flp.playlist_items()) >= len(arr["sections"])
+
+    # fl_mix action=fix and action=bus
+    fixed = await run("fl_mix", {"action": "fix", "seconds": 1.0})
+    assert fixed["applied_ops"] >= 1 and (fixed["panned"] or fixed["eq"])
+    bus = await run("fl_mix", {"action": "bus", "targets": "1,2->10@0.35", "role": "Drum Bus"})
+    assert bus["bus_track"] == 10 and bus["sources"] == [1, 2]
+    assert studio.fake.tracks[10]["name"] == "Drum Bus"
+    assert studio.fake.tracks[1]["levels"][10] == pytest.approx(0.35, abs=0.01)
