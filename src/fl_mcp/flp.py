@@ -8,6 +8,7 @@ the public reverse-engineering work (see NOTICE); no code from it is included.
 """
 
 import struct
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -22,7 +23,10 @@ CHAN_ROUTE, CHAN_ROUTE_16, CHAN_COLOR, CHAN_LEVELS = 22, 104, 128, 219  # insert
 NEW_PAT, PAT_NAME, PAT_COLOR, NOTES = 65, 193, 150, 224
 NEW_ARR, PLAYLIST = 99, 233
 TIME_MARKER_POS, TIME_MARKER_NAME = 148, 205
+FSC_FORMAT = 16
 FST_FORMAT = 48
+_FL24_PL_TAIL = bytes.fromhex("00000000000000000000f03f0000000000000000")
+_FL26_PL_TAIL = bytes.fromhex("00000000000000000000f03f00000000ffffffff0000000000000000")
 PATTERN_EVENTS = {
     25,
     26,
@@ -102,7 +106,11 @@ class Channel:
 
 
 def _text(data: bytes) -> str:
-    return data.decode("utf-16le", "replace").rstrip("\x00")
+    if not data:
+        return ""
+    if len(data) >= 2 and len(data) % 2 == 0 and (data[-2:] == b"\x00\x00" or data[1] == 0):
+        return data.decode("utf-16le", "replace").rstrip("\x00")
+    return data.rstrip(b"\x00").decode("cp1252", "replace")
 
 
 def _utf16(text: str) -> bytes:
@@ -229,6 +237,47 @@ def read_fst(path: str | Path) -> dict[str, Any]:
     }
 
 
+def read_fsc(path: str | Path) -> dict[str, Any]:
+    """Read an FL `.fsc` Piano Roll score into `[pitch, start_beat, length_beat, vel]` rows."""
+    p = Path(path)
+    raw = p.read_bytes()
+    header, _, _, events = _parse_header_and_events(raw, expected_formats=(FSC_FORMAT,))
+    ppq = struct.unpack("<H", header[12:14])[0]
+    notes: list[list[Any]] = []
+    for ev in events:
+        if ev.id != NOTES:
+            continue
+        for k in range(0, len(ev.data) - (len(ev.data) % NOTE.size), NOTE.size):
+            pos, _flags, _ch, length, key, _grp, _fp, _u1, _rel, _mc, _pan, vel, _mx, _my = (
+                NOTE.unpack_from(ev.data, k)
+            )
+            notes.append([key, round(pos / ppq, 4), round(length / ppq, 4), vel])
+    return {"file": str(p), "ppq": ppq, "count": len(notes), "notes": notes}
+
+
+def write_fsc(path: str | Path, notes: list[list[Any]], ppq: int = 96) -> Path:
+    """Write notes `[pitch, start_beat, length_beat, vel]` into an FL Studio `.fsc` score file."""
+    if ppq not in PPQS:
+        raise FlpError(f"unsupported PPQ {ppq}")
+    records = [
+        note_record(
+            round(float(n[1]) * ppq),
+            max(1, round(float(n[2]) * ppq)),
+            int(n[0]),
+            0,
+            int(n[3]) if len(n) > 3 else 100,
+        )
+        for n in notes
+    ]
+    events = [Event(NOTES, b"".join(sorted(records, key=lambda r: struct.unpack_from("<I", r)[0])))]
+    body = b"".join(e.encode() for e in events)
+    header = b"FLhd" + struct.pack("<IHHH", 6, FSC_FORMAT, 0, ppq)
+    out = Path(path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_bytes(header + b"FLdt" + struct.pack("<I", len(body)) + body)
+    return out
+
+
 class Flp:
     def __init__(self, header: bytes, events: list[Event]) -> None:
         self.header, self.events = header, events
@@ -239,6 +288,19 @@ class Flp:
     def parse(cls, raw: bytes) -> "Flp":
         header, _, _, events = _parse_header_and_events(raw, expected_formats=(0,))
         return cls(header, events)
+
+    @classmethod
+    def open(cls, path: str | Path) -> "Flp":
+        """Open a `.flp` file or a Zipped Loop Package (`.zip`) containing a `.flp`."""
+        p = Path(path)
+        raw = p.read_bytes()
+        if p.suffix.lower() == ".zip" or raw[:4] == b"PK\x03\x04":
+            with zipfile.ZipFile(p) as zf:
+                flps = [n for n in zf.namelist() if n.lower().endswith(".flp")]
+                if not flps:
+                    raise FlpError(f"zipped loop package {p.name} contains no .flp project")
+                raw = zf.read(flps[0])
+        return cls.parse(raw)
 
     def dumps(self) -> bytes:
         body = b"".join(e.encode() for e in self.events)
@@ -314,6 +376,9 @@ class Flp:
                     used.add(struct.unpack("<H", x.data)[0])
         return used
 
+    def _max_insert(self) -> int:
+        return 500 if (self._version_major() >= 25 or self.version.startswith("24.2.99")) else 125
+
     def _clone_channel_block(
         self,
         seed_iid: int,
@@ -326,8 +391,9 @@ class Flp:
         updates: list[tuple[int, bytes, int | None]] | None = None,
         drop_ids: set[int] | None = None,
     ) -> int:
-        if not 0 <= insert <= 125:
-            raise FlpError("insert must be 0-125")
+        limit = self._max_insert()
+        if not 0 <= insert <= limit:
+            raise FlpError(f"insert must be 0-{limit}")
         spans = self._channel_spans()
         start, stop = spans[seed_iid]
         block = [
@@ -367,7 +433,7 @@ class Flp:
             )
             put(eid, data, before_id=before_id, after_id=after_id)
         put(CHAN_NAME, _utf16(name))
-        if any(e.id == CHAN_ROUTE_16 for e in block):
+        if insert > 255 or any(e.id == CHAN_ROUTE_16 for e in block):
             put(CHAN_ROUTE_16, struct.pack("<H", insert))
         else:
             put(CHAN_ROUTE, bytes([insert]))
@@ -511,15 +577,17 @@ class Flp:
         return out
 
     def _record_size(self, data: bytes) -> int:
-        """Playlist records are 32 bytes up to FL 20, 60 in FL 21-24, and 80 from FL 25;
+        """Playlist records are 32 bytes up to FL 20, 60 in FL 21-24, 80 in FL 25, and 88 in FL 26+;
         verify PL_BASE at +4 when non-empty, falling back to version-ordered divisibility."""
         vm = self._version_major()
         order = (
-            (80, 60, 32)
+            (88, 80, 60, 32)
+            if vm >= 26
+            else (80, 88, 60, 32)
             if (vm == 25 or self.version.startswith("24.2.99"))
-            else (60, 80, 32)
+            else (60, 88, 80, 32)
             if vm >= 21
-            else (32, 60, 80)
+            else (32, 60, 80, 88)
         )
         if data:
             for size in order:
@@ -539,9 +607,20 @@ class Flp:
         out = []
         for k in range(0, len(ev.data), size):
             pos, _, idx, length, rv = struct.unpack("<IHHIH", ev.data[k : k + 14])
-            out.append(
-                {"position": pos, "pattern": idx - PL_BASE, "length": length, "track": 500 - rv}
-            )
+            if idx >= PL_BASE:
+                out.append(
+                    {"position": pos, "pattern": idx - PL_BASE, "length": length, "track": 500 - rv}
+                )
+            else:
+                out.append(
+                    {
+                        "position": pos,
+                        "channel": idx,
+                        "kind": "channel",
+                        "length": length,
+                        "track": 500 - rv,
+                    }
+                )
         return out
 
     def _playlist_event(self, arrangement: int) -> Event:
@@ -585,7 +664,13 @@ class Flp:
         return None
 
     def put_pattern(
-        self, iid: int, notes: list[bytes], name: str, color: int | None = None
+        self,
+        iid: int,
+        notes: list[bytes],
+        name: str,
+        color: tuple[int, int, int] | None = None,
+        *,
+        synthesize: bool = False,
     ) -> None:
         """Set a pattern's notes and name; patterns that do not exist yet are cloned from a seed."""
         blob = b"".join(sorted(notes, key=lambda n: struct.unpack_from("<I", n)[0]))
@@ -593,6 +678,19 @@ class Flp:
         if iid not in blocks:
             seed = self._seed_pattern()
             if seed is None:
+                if synthesize and not blocks:
+                    anchor = next(
+                        (idx for idx, ev in enumerate(self.events) if ev.id in (NEW_ARR, PLAYLIST)),
+                        len(self.events),
+                    )
+                    col = color or (153, 153, 153)
+                    self.events[anchor:anchor] = [
+                        Event(NEW_PAT, struct.pack("<H", iid)),
+                        Event(PAT_COLOR, bytes([*col, 0])),
+                        Event(PAT_NAME, _utf16(name)),
+                        Event(NOTES, blob),
+                    ]
+                    return
                 raise FlpError(
                     "the template needs one named pattern that contains a note to build on"
                 )
@@ -622,18 +720,38 @@ class Flp:
             self.events[last:last] = cloned
 
     def set_playlist(
-        self, items: list[tuple[int, int, int, int]], mode: str = "append", arrangement: int = 0
+        self,
+        items: list[tuple[int, int, int, int]],
+        mode: str = "append",
+        arrangement: int = 0,
+        *,
+        synthesize: bool = False,
     ) -> int:
         """items: (position ticks, pattern iid, length ticks, track 1-500); returns the count."""
         ev = self._playlist_event(arrangement)
         size = self._record_size(ev.data)
         old = [ev.data[k : k + size] for k in range(0, len(ev.data), size)]
-        if not old and size in (60, 80):
+        if not old and size in (60, 80, 88) and not synthesize:
             raise FlpError("the template playlist needs one clip to build on")
-        seed = (
-            old[0]
-            if old
-            else OLD_ITEM.pack(
+        if old:
+            seed = old[0]
+        elif size in (60, 80, 88):
+            head = struct.pack(
+                "<IHHIHH2sH4s",
+                0,
+                PL_BASE,
+                PL_BASE,
+                0,
+                0,
+                0,
+                bytes([120, 0]),
+                64,
+                bytes([64, 100, 128, 128]),
+            )
+            tail = _FL24_PL_TAIL if size == 80 else (_FL26_PL_TAIL if size == 88 else b"")
+            seed = head + b"\xff" * 8 + struct.pack("<I", 1) + b"\x00" * 24 + tail
+        else:
+            seed = OLD_ITEM.pack(
                 0,
                 PL_BASE,
                 PL_BASE,
@@ -646,7 +764,6 @@ class Flp:
                 -1.0,
                 -1.0,
             )
-        )
         start = 0
         if mode == "append" and old:
             start = max(
@@ -656,12 +773,14 @@ class Flp:
         elif mode not in ("append", "replace"):
             raise FlpError("playlist mode must be append or replace")
         new = []
-        for pos, iid, length, track in items:
+        for idx, (pos, iid, length, track) in enumerate(items, start=1):
             if not 1 <= track <= 500:
                 raise FlpError("playlist track must be 1-500")
             rec = bytearray(seed)
             struct.pack_into("<IHHI", rec, 0, start + pos, PL_BASE, PL_BASE + iid, length)
             struct.pack_into("<HH", rec, 12, 500 - track, 0)
+            if not old and size >= 60:
+                struct.pack_into("<I", rec, 32, idx)
             new.append(bytes(rec))
         merged = (old if mode == "append" else []) + new
         merged.sort(
@@ -804,6 +923,10 @@ class Flp:
                 f"'end' marker at tick {end_m['position']} cuts off arrangement ending at "
                 f"{max_tick}"
             )
+        if end_m is not None and max_tick > 0 and end_m["position"] > max_tick + 16 * self.ppq:
+            warnings.append(
+                f"'end' marker at tick {end_m['position']} extends past arrangement end {max_tick}"
+            )
         empty_pats = [pid for pid, pinfo in pats.items() if pinfo["notes"] == 0 and pinfo["name"]]
         if len(pats) > 0 and len(empty_pats) == len(pats):
             warnings.append("all patterns have 0 notes")
@@ -909,7 +1032,7 @@ def build(
     that role gets its own channel on a free mixer insert (unless inserts is False)."""
     from fl_mcp.produce import GROUP_COLORS, detect_roles
 
-    flp = Flp.parse(Path(template).read_bytes())
+    flp = Flp.open(template)
     chans = flp.channels()
     found, unmatched = detect_roles([c.name for c in chans])
     iids = {r: chans[i].iid for r, i in found.items()}
@@ -928,7 +1051,7 @@ def build(
         rgb = (int(color[0:2], 16), int(color[2:4], 16), int(color[4:6], 16))
         if inserts:
             insert += 1
-            if insert > 125:
+            if insert > flp._max_insert():
                 raise FlpError("the mixer has no free insert left for another channel")
         target_insert = insert if inserts else 0
         low = sample.lower()
@@ -970,7 +1093,11 @@ def build(
         group = pat.name.rsplit(" - ", 1)[-1]
         hexcolor = GROUP_COLORS.get(group, "#999999").lstrip("#")
         flp.put_pattern(
-            base + 1 + i, notes, pat.name, tuple(int(hexcolor[k : k + 2], 16) for k in (0, 2, 4))
+            base + 1 + i,
+            notes,
+            pat.name,
+            tuple(int(hexcolor[k : k + 2], 16) for k in (0, 2, 4)),
+            synthesize=True,
         )
     flp.set_tempo(plan.bpm)
     written = flp.set_playlist(
@@ -979,6 +1106,7 @@ def build(
             for c in plan.clips
         ],
         playlist,
+        synthesize=True,
     )
     end_tick = max((it["position"] + it["length"] for it in flp.playlist_items()), default=0)
     if end_tick > 0:
