@@ -10,6 +10,7 @@ if DIR.startswith("@"):
 INBOX = os.path.join(DIR, "inbox.json")
 STATE = os.path.join(DIR, "state.json")
 MAX_EXPORT = 2000
+_BAKED = None  # @BAKED@
 
 
 def apply(form=None):
@@ -24,14 +25,91 @@ def _queue():
         with open(INBOX, encoding="utf-8") as f:
             return json.load(f)
     except FileNotFoundError:
-        return None
+        return _BAKED
+    except OSError:
+        return _BAKED
+
+
+def _prev_state():
+    try:
+        with open(STATE, encoding="utf-8") as f:
+            data = json.load(f)
+            return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _queue_sig(queue):
+    return json.dumps(queue, sort_keys=True, separators=(",", ":"))
+
+
+def _note_spec(item, ppq):
+    if isinstance(item, dict):
+        pitch = int(item.get("n", item.get("pitch", 60)))
+        start = float(item.get("t", item.get("start", 0.0)))
+        length = float(item.get("l", item.get("len", 0.25)))
+        vel = int(item.get("v", item.get("vel", 100)))
+        extra = item
+    else:
+        pitch, start, length, vel = int(item[0]), float(item[1]), float(item[2]), float(item[3])
+        extra = item[4] if len(item) > 4 and isinstance(item[4], dict) else {}
+    return {
+        "number": pitch,
+        "time": int(round(start * ppq)),
+        "length": max(1, int(round(length * ppq))),
+        "velocity": max(0.0, min(1.0, float(vel) / 127.0)),
+        "color": max(0, min(15, int(extra.get("color", extra.get("c", 0))))) if extra else 0,
+        "slide": bool(extra.get("slide", False)) if extra else False,
+        "porta": bool(extra.get("porta", False)) if extra else False,
+        "pan": extra.get("pan"),
+        "release": extra.get("release", extra.get("rel")),
+        "fcut": extra.get("fcut"),
+        "fres": extra.get("fres"),
+        "pitchofs": extra.get("pitchofs"),
+        "repeats": extra.get("repeats"),
+    }
+
+
+def _apply_attrs(note, spec):
+    note.number = spec["number"]
+    note.time = spec["time"]
+    note.length = spec["length"]
+    note.velocity = spec["velocity"]
+    if spec["color"]:
+        note.color = spec["color"]
+    if spec["slide"]:
+        note.slide = True
+    if spec["porta"]:
+        note.porta = True
+    for attr in ("pan", "release", "fcut", "fres", "pitchofs", "repeats"):
+        val = spec[attr]
+        if val is not None:
+            setattr(note, attr, val)
+
+
+def _extra_out(n):
+    out = {}
+    if getattr(n, "color", 0):
+        out["c"] = int(n.color)
+    if getattr(n, "slide", False):
+        out["slide"] = True
+    if getattr(n, "porta", False):
+        out["porta"] = True
+    if getattr(n, "pitchofs", 0):
+        out["pitchofs"] = int(n.pitchofs)
+    if getattr(n, "repeats", 0):
+        out["repeats"] = int(n.repeats)
+    return out
 
 
 def _run():
     score = flp.score
     ppq = score.PPQ
     queue = _queue()
-    if queue:
+    prev = _prev_state()
+    sig = _queue_sig(queue) if queue is not None else None
+    already_applied = bool(queue) and sig is not None and prev.get("sig") == sig
+    if queue and not already_applied:
         if queue.get("replace"):
             score.clearNotes(True)
         for spec in queue.get("delete") or []:
@@ -50,25 +128,72 @@ def _run():
                 if has_l and abs(n.length - l_ticks) > tol:
                     continue
                 score.deleteNote(idx)
-        have = set()
+        by_pos = {}
         for i in range(score.noteCount):
             n = score.getNote(i)
-            have.add((n.number, n.time, n.length))
-        for pitch, start, length, velocity in queue.get("notes") or []:
-            key = (int(pitch), int(round(start * ppq)), max(1, int(round(length * ppq))))
-            if key in have:
+            by_pos[(n.number, n.time, getattr(n, "color", 0))] = n
+        for item in queue.get("notes") or []:
+            spec = _note_spec(item, ppq)
+            key = (spec["number"], spec["time"], spec["color"])
+            existing = by_pos.get(key)
+            if existing is not None:
+                _apply_attrs(existing, spec)
                 continue
-            have.add(key)
             note = flp.Note()
-            note.number, note.time, note.length = key
-            note.velocity = max(0.0, min(1.0, velocity / 127.0))
+            _apply_attrs(note, spec)
             score.addNote(note)
+            by_pos[key] = note
+        if queue.get("markers") and hasattr(flp, "Marker") and hasattr(score, "addMarker"):
+            for m_spec in queue["markers"]:
+                m = flp.Marker()
+                m.time = int(round(float(m_spec[0]) * ppq))
+                m.name = str(m_spec[1])
+                if len(m_spec) > 2 and m_spec[2] is not None:
+                    m.mode = int(m_spec[2])
+                if len(m_spec) > 4 and m_spec[3] is not None and m_spec[4] is not None:
+                    m.tsnum = int(m_spec[3])
+                    m.tsden = int(m_spec[4])
+                score.addMarker(m)
     notes = []
+    extras = {}
     for i in range(min(score.noteCount, MAX_EXPORT)):
         n = score.getNote(i)
-        notes.append([n.number, round(n.time / ppq, 4), round(n.length / ppq, 4),
-                      int(round(n.velocity * 127))])
-    state = {"ts": time.time(), "ppq": ppq, "count": score.noteCount,
-             "serial": queue.get("serial") if queue else None, "notes": notes}
-    with open(STATE, "w", encoding="utf-8") as f:  # os.replace raises a SystemError in FL 2025's embedded Python
-        json.dump(state, f, separators=(",", ":"))
+        notes.append(
+            [
+                n.number,
+                round(n.time / ppq, 4),
+                round(n.length / ppq, 4),
+                int(round(n.velocity * 127)),
+            ]
+        )
+        ex = _extra_out(n)
+        if ex:
+            extras[str(i)] = ex
+    markers = []
+    mc = int(getattr(score, "markerCount", 0) or 0)
+    if mc and hasattr(score, "getMarker"):
+        for idx in range(min(mc, 64)):
+            mk = score.getMarker(idx)
+            markers.append(
+                [round(mk.time / ppq, 4), str(mk.name), int(getattr(mk, "mode", 0))]
+            )
+    state = {
+        "ts": time.time(),
+        "ppq": ppq,
+        "count": score.noteCount,
+        "serial": queue.get("serial") if queue else None,
+        "sig": sig,
+        "notes": notes,
+    }
+    if hasattr(score, "tsnum") and hasattr(score, "tsden"):
+        state["tsig"] = [int(score.tsnum), int(score.tsden)]
+    if extras:
+        state["extras"] = extras
+    if markers:
+        state["markers"] = markers
+    try:
+        with open(STATE, "w", encoding="utf-8") as f:  # os.replace raises a SystemError in FL 2025's embedded Python
+            json.dump(state, f, separators=(",", ":"))
+    except OSError:
+        if _BAKED is None:
+            raise
