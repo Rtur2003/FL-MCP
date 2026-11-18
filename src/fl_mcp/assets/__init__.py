@@ -6,6 +6,7 @@ MIME_TYPES = {
     ".png": "image/png",
     ".svg": "image/svg+xml",
     ".webp": "image/webp",
+    ".woff2": "font/woff2",
     ".ico": "image/x-icon",
     ".icns": "image/x-icns",
     ".webmanifest": "application/manifest+json",
