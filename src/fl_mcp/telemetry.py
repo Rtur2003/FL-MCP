@@ -383,3 +383,66 @@ def clear_traffic() -> int:
         except OSError:
             pass
     return n
+
+
+def _project_slug(title: str | None) -> str:
+    import re
+
+    cleaned = re.sub(r"\s*-\s*FL Studio.*$", "", (title or "").strip(), flags=re.IGNORECASE)
+    slug = re.sub(r"[^a-z0-9_-]+", "-", cleaned.lower()).strip("-")
+    return slug or "untitled"
+
+
+def load_context_layers(project_title: str | None = None) -> dict[str, Any]:
+    """Read 3-layer producer memory: global studio.md, project brief, and sparse memory index."""
+    cdir = paths.context_dir()
+    mdir = paths.memory_dir()
+    studio_file = cdir / "studio.md"
+    proj_file = cdir / f"project-{_project_slug(project_title)}.md" if project_title else None
+
+    def _read_trimmed(p: Path | None, limit: int = 1600) -> str:
+        if p is None or not p.is_file():
+            return ""
+        try:
+            return p.read_text(encoding="utf-8").strip()[:limit]
+        except OSError:
+            return ""
+
+    memories: list[dict[str, Any]] = []
+    if mdir.is_dir():
+        for f in sorted(mdir.glob("*.md"), key=lambda x: x.stat().st_mtime, reverse=True)[:24]:
+            try:
+                head = f.read_text(encoding="utf-8", errors="replace").splitlines()[:2]
+                memories.append(
+                    {
+                        "name": f.stem,
+                        "path": str(f),
+                        "preview": " ".join(h.strip("# ") for h in head if h.strip())[:140],
+                    }
+                )
+            except OSError:
+                continue
+
+    return {
+        "context_dir": str(cdir),
+        "memory_dir": str(mdir),
+        "studio": _read_trimmed(studio_file),
+        "project": _read_trimmed(proj_file),
+        "memory_index": memories,
+    }
+
+
+def save_memory_note(name: str, content: str, *, layer: str = "memory") -> Path:
+    """Persist a global studio note, project brief, or topic memory markdown file."""
+    import re
+
+    slug = re.sub(r"[^a-z0-9_-]+", "-", name.strip().lower()).strip("-") or "note"
+    if layer == "studio":
+        target = paths.context_dir() / "studio.md"
+    elif layer == "project":
+        target = paths.context_dir() / f"project-{slug}.md"
+    else:
+        target = paths.memory_dir() / f"{slug}.md"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(content.strip() + "\n", encoding="utf-8")
+    return target
