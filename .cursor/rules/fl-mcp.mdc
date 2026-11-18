@@ -1,0 +1,195 @@
+---
+description: FL-MCP Autonomous FL Studio Production, Mixing, Mastering & Studio UI Rules
+globs: *
+alwaysApply: true
+---
+
+---
+description: FL-MCP Autonomous FL Studio Production, Mixing, Mastering & Studio UI Rules
+globs: *
+alwaysApply: true
+---
+
+<!-- BEGIN FL-MCP RULES -->
+# FL-MCP Autonomous Studio & Production Rules
+
+# FL-MCP Production & Arrangement Rulebook
+
+## 1. Autonomous Workflow Pipeline
+1. **Inspect First (`fl_state`)**: Always read the active project state (`status`, `channels`, `mixer`, `patterns`, `plugins`) before adding or modifying patterns, notes, or channels.
+2. **Choose or Seed Template (`fl_produce`)**:
+   - FL Studio MIDI scripts cannot spawn generator channels from thin air without desktop UI interaction or a pre-seeded `.flp` template.
+   - Discover available `.flp` templates via `fl_produce(action="templates")` or seed a multi-channel project from `~/.fl-mcp/templates/` before writing multi-instrument arrangements.
+3. **Library & Vault First (`fl_library`)**:
+   - Search indexed drum kits, `~/.fl-mcp/assets/samples/` (TR-808, TR-909, Dirt-Samples), `~/.fl-mcp/assets/soundfonts/` (`TimGM6mb.sf2`, `FluidR3_GM.sf2`), and `~/.fl-mcp/assets/midi/` before asking the user for external packs.
+   - Match samples by spectral centroid, attack time, decay profile, and RMS energy (`fl_library(action="similar")`).
+
+## 2. Piano Roll vs. Step Sequencer Routing
+- **Step Sequencer (`fl_steps`)**: Use for 16-step percussive triggers (kick, snare, clap, closed/open hats, rimshots) when pitch is static.
+- **Piano Roll (`fl_notes` / `fl_score`)**:
+  - Mandatory for pitched 808 basslines, chord progressions, arpeggios, counter-melodies, and 32nd/triplet hi-hat rolls.
+  - **FL Studio 2025/2026 Sandbox Rule**: Piano roll scripts execute inside `Settings/Piano roll scripts` and read/write `inbox.json` and `state.json` in that folder when `FL_MCP_DIR` is not overridden.
+
+## 3. Arrangement Arc & Energy Curve Framework
+| Section | Bars | Energy | Core Arrangement Rules |
+| :--- | :--- | :--- | :--- |
+| **Intro** | 4–8 | 25–40% | Establish harmonic motif or filtered pad; keep sub-bass silent so the drop has contrast. |
+| **Verse / A** | 8–16 | 55–70% | Introduce main groove (kick, snare, bassline) with restrained upper-mid density for vocal pocket. |
+| **Pre-Chorus / Build** | 4–8 | 70–85% | High-pass low end (`90–150 Hz`) in final 2 bars; add snare rolls, risers, or tension voicings. |
+| **Drop / Chorus** | 8–16 | 95–100% | Full sub weight (`35–60 Hz`), wide chord layers, open hats/rides, and primary hook motif. |
+| **Bridge / Breakdown** | 4–8 | 35–50% | Strip drums; re-voice chords (inversions or borrowed modal mixture) and introduce spatial FX. |
+| **Outro** | 4–8 | 20–30% | Decay rhythmic layers every 2 bars; leave clean reverb/delay tail for DJ or playlist transition. |
+
+## 4. Voice-Leading & Low-End Discipline
+- **Sub & 808 Mono Anchor**: Keep all fundamentals below `120 Hz` strictly monophonic and phase-centered. Never stack chorus or wide unison detune on sub-bass.
+- **Chord Voicing Spread**: Keep bass intervals wider than a fifth below `C3` (`MIDI 48`) to prevent low-mid mud (`180–320 Hz`). Use 7th/9th tensions above `C4` (`MIDI 60`).
+- **Humanization**: Vary note velocities (`±6–14`) and micro-timing on off-beats (`5–18 ms` for Lo-Fi/Boom Bap/R&B) so arrangements never sound mechanically flat.
+
+# FL-MCP Mixing, Gain-Staging & Spectral Unmasking Rulebook
+
+## 1. Gain-Staging & Headroom Hierarchy
+1. **Pre-Mix Diagnostic (`fl_mix(action="doctor")`)**: Audit unrouted channels, clipping inserts (`>= 0.0 dBFS`), muted buses, and missing master safety limiters before moving faders.
+2. **Anchor-First Balance (`fl_mix(action="stage")`)**:
+   - **Kick & 808/Sub**: Anchor at `-9.0` to `-6.0 dBFS` individual peak so their summed bus sits near `-5.0 dBFS`.
+   - **Snare / Clap / Lead Vocal**: Match perceived foreground punch (`-8.0` to `-6.5 dBFS`).
+   - **Harmonic Bed (Keys, Pads, Guitars)**: Tuck `-14.0` to `-11.0 dBFS` with stereo width leaving center space for lead/vocal.
+   - **Percussion & Ear Candy**: Place `-18.0` to `-13.0 dBFS` with transient control.
+   - **Master Pre-Limiter Target**: Maintain `-6.0` to `-3.0 dBFS` peak headroom before the final dynamics stage.
+
+## 2. Six-Zone Spectral Unmasking Matrix (`fl_audio(action="masking")`)
+When comparing a foreground stem (vocal, lead synth, or kick) against a backing bed:
+- **Neural VAD Gating (`silero_vad.onnx`)**: When available in `~/.fl-mcp/models/silero_vad.onnx`, measure foreground vocal energy strictly across active voiced frames (`p >= 0.45`) so silent gaps never skew the masking delta.
+- **Zone 1 — Low Warmth (`120–250 Hz`, Q `1.4`)**: High-pass non-bass instruments and dip fundamental buildup on pads/guitars.
+- **Zone 2 — Boxy Mud (`250–500 Hz`, Q `1.5`)**: Carve `-2.0` to `-4.5 dB` on backing buses when masking index exceeds `25`.
+- **Zone 3 — Midrange Body (`500–1200 Hz`, Q `1.2`)**: Pocket chord instruments so lead fundamentals remain authoritative.
+- **Zone 4 — Intelligibility & Clarity (`1200–2800 Hz`, Q `1.4`)**: Notch backing synths/guitars by `-1.5` to `-3.5 dB` where vocal consonants sit.
+- **Zone 5 — Presence & Bite (`2800–5200 Hz`, Q `1.5`)**: Protect ear-canal sensitivity zone (`3.5 kHz`); use dynamic EQ or dip backing presence rather than over-boosting the lead.
+- **Zone 6 — Sibilance & Air (`5200–10000 Hz`, Q `1.2`)**: De-ess harsh transients before adding high-shelf air above `10 kHz`.
+
+## 3. Spatial Bus & Send Engineering
+- Prefer shared **Short Room** (`0.4–0.8 s`, `~/.fl-mcp/assets/irs/Room_*.wav`), **Vocal Plate** (`1.4–2.2 s`, `Plate_*.wav`), and **Concert Hall** (`2.4–3.8 s`, `Hall_*.wav`) convolution sends over placing 15 separate reverb instances on individual inserts.
+- High-pass all reverb and delay return buses at `180–250 Hz` and low-pass at `7.5–10 kHz` so spatial tails never cloud the sub or clash with lead air.
+
+# FL-MCP Mastering & Loudness Verification Rulebook
+
+## 1. Closed-Loop Render & Verification (`fl_render` + `fl_audio`)
+Never declare a mix or master complete based solely on mixer fader positions. Always execute the closed verification loop:
+1. Render a bounce via `fl_render` (or analyze the latest exported WAV/FLAC).
+2. Measure ITU-R BS.1770-4 loudness (`lufs_i`, `lufs_s_max`, `lufs_m_max`, `lra`), 4x oversampled `true_peak_db`, `crest_db`, stereo correlation (`corr`, `low_side_db`, `mono_loss_db`), and 7-band energy shares (`sub`, `bass`, `low_mid`, `mid`, `high_mid`, `high`, `air`).
+3. Apply corrective moves one parameter at a time and re-verify.
+
+## 2. Release & Streaming Targets
+| Delivery Target / Genre | Integrated LUFS (`lufs_i`) | Max True Peak (`dBTP`) | Target Crest (`dB`) | Max Low-Side (`<120 Hz`) |
+| :--- | :--- | :--- | :--- | :--- |
+| **Streaming Standard (Spotify / Apple / YouTube)** | `-14.0 LUFS` (`±1.0`) | `-1.0 dBTP` | `8.5–12.5 dB` | `<= -14.0 dB` |
+| **Trap / Drill / Hip-Hop Club** | `-8.5` to `-7.5 LUFS` | `-0.8 dBTP` | `6.5–9.5 dB` | `<= -16.0 dB` |
+| **House / Techno / Club Master** | `-8.0` to `-6.5 LUFS` | `-0.8 dBTP` | `6.5–9.0 dB` | `<= -18.0 dB` |
+| **Drum & Bass / Hyperpop** | `-7.5` to `-6.0 LUFS` | `-0.8 dBTP` | `6.0–8.5 dB` | `<= -16.0 dB` |
+| **Lo-Fi / Boom Bap / R&B** | `-12.0` to `-10.0 LUFS` | `-1.0 dBTP` | `9.0–13.0 dB` | `<= -14.0 dB` |
+| **Ambient / Cinematic / Orchestral** | `-18.0` to `-14.0 LUFS` | `-1.5 dBTP` | `12.0–18.0 dB` | `<= -12.0 dB` |
+
+## 3. Mandatory Quality Gates
+- **True Peak Ceiling**: Must not exceed `ceiling_db + 0.05 dBTP` (default `-1.0 dBTP`) to prevent inter-sample clipping in AAC/MP3/Opus transcoders.
+- **Crest Factor Guardrail**:
+  - `< 6.0 dB`: Over-limited / crushed transients — back off limiter threshold or lengthen compressor attack (`20–35 ms`).
+  - `> 16.0 dB` (non-ambient): Under-glued dynamics — apply `1.5–2.5 dB` bus compression (`2:1`, slow attack, auto release).
+- **Phase & Mono Compatibility**:
+  - Stereo correlation `corr` must stay `>= 0.20`.
+  - Mono fold-down loss `mono_loss_db` must stay `>= -3.0 dB`.
+  - Low-frequency side energy `low_side_db` (`< 120 Hz`) must stay `<= -14.0 dB`.
+- **DC Offset & Clipping**: Zero flat-top clipped sample triplets (`clipped == 0`) and DC offset `< 0.002`.
+
+# FL-MCP Hardware-Calibrated Dark Studio UI & Visual Rulebook
+
+## 1. Anti-AI-Slop Industrial Design Mandate
+All FL-MCP Studio interfaces (`fl-mcp app`, `dashboard.html`, native Tkinter fallback, and documentation visuals) follow hardware-calibrated mastering console ergonomics inspired by **FL Studio 25 Graphite**, **FabFilter Pro-Q 4**, and **Ableton Live 12 Dark**:
+- **Zero Neon Cyberpunk Clichés**: Ban purple-to-cyan gradients, glowing sci-fi orbs, decorative glassmorphism blur that hurts legibility, or diffusion-generated fake UI text.
+- **Precision Hardware Surfaces**: Rely on 1px machined borders (`#2A2D34`), recessed meter wells (`#0E1013`), tabular numeric readouts (`font-variant-numeric: tabular-nums`), and high-contrast functional signal LEDs.
+
+## 2. Calibrated Color Token Specification
+| Token | Hex | Role | WCAG Contrast (vs `#141518`) |
+| :--- | :--- | :--- | :--- |
+| `--bg` | `#141518` | Primary matte graphite chassis background | — |
+| `--bg-elev` | `#1C1E22` | Elevated module / rack card surface | — |
+| `--bg-pane` | `#23262B` | Interactive control well / hover surface | — |
+| `--line` | `#2A2D34` | Hairline 1px structural divider | — |
+| `--line-hi` | `#3A3F4B` | Active / focused border contour | — |
+| `--ink` | `#ECEEF2` | Primary titanium readout typography | `14.8 : 1` (AAA) |
+| `--muted` | `#9CA3B0` | Secondary parameter labels | `6.7 : 1` (AA) |
+| `--dim` | `#8790A0` | Sub-labels, units (`dB`, `LUFS`, `Hz`, `ms`) | `5.1 : 1` (AA) |
+| `--accent` | `#FF7A2F` | Active signal amber (fader caps, focus ring) | `6.4 : 1` (AA) |
+| `--ok` | `#2CC878` | Nominal headroom / connected LED green | `7.9 : 1` (AA) |
+| `--warn` | `#E5A93B` | Pre-clip caution / drift amber-gold | `8.2 : 1` (AA) |
+| `--err` | `#E04A4A` | True-peak clip / fault indicator red | `4.6 : 1` (AA) |
+
+## 3. Typography, Iconography & Accessibility Standards
+- **Self-Hosted Font Stack**:
+  - UI Sans: `'Inter'` (`inter-400.woff2`, `inter-500.woff2`, `inter-600.woff2`, `inter-700.woff2`) with `font-size-adjust: from-font` to eliminate Cumulative Layout Shift (CLS).
+  - Telemetry & DSP Mono: `'JetBrains Mono'` (`jetbrains-mono-400.woff2`, `jetbrains-mono-500.woff2`, `jetbrains-mono-600.woff2`) with `font-variant-numeric: tabular-nums`.
+- **Crisp Vector Iconography**:
+  - 1.75px stroke monochrome SVG symbols (`lucide-sprite.svg`) inheriting `currentColor`, marked `aria-hidden="true"` when paired with visible labels.
+- **Keyboard & Screen Reader Ergonomics**:
+  - WAI-ARIA tabs (`role="tablist"`, `role="tab"`, `role="tabpanel"`) with roving `tabindex` and ArrowLeft/ArrowRight/Home/End navigation.
+  - Explicit `:focus-visible` `2px solid var(--accent)` ring (`outline-offset: 2px`) on every interactive control.
+  - `min-block-size` instead of fixed `height` on text controls so 200% zoom and WCAG 1.4.12 text-spacing overrides never clip labels.
+
+# FL-MCP Bridge, Binary & Desktop Safety Rulebook
+
+## 1. SysEx MIDI Bridge Protocol Invariants
+- **Non-Commercial SysEx ID (`0x7D`)**: All bridge frames between `fl_mcp` and `device_fl_mcp.py` use SysEx header `F0 7D <msg_id> <seq> <total> <payload_7bit> F7`.
+- **Single-Flight Serialized I/O**: A virtual MIDI port handles one request-response transaction at a time. When multiple AI clients (Claude, Cursor, Antigravity, Studio UI) run concurrently, route through the persistent `fl-mcp service` daemon (`http://127.0.0.1:8765/mcp`) so MIDI access is serialized safely.
+- **7-Bit Payload Budget**: Keep individual command payloads compact; paginate large channel/mixer/plugin queries (`s`, `n`) rather than requesting unbounded dumps.
+
+## 2. Non-Destructive `.flp` Binary Surgery (`fl_flp`)
+- **Read-Only Inspection Default**: `summary`, `channels`, `patterns`, `notes`, `arrangements`, `mixer`, and `verify` never mutate the source `.flp`.
+- **Mandatory Backup Before Write**: Whenever cloning or patching a binary `.flp` project (`clone`, `set_tempo`, `swap_samples`), write to a distinct output path or create an automatic `.bak` copy first, and run structural chunk verification (`FLhd` + `FLdt` event stream integrity) before returning success.
+
+## 3. Desktop Automation Guardrails (`fl_desk`)
+- **Opt-In Kill Switch**: Desktop UI automation (`fl_desk`) is disabled unless `~/.fl-mcp/desktop.on` exists (`fl-mcp desktop polite|stealth|foreground`).
+- **Stealth & Polite First**:
+  - Always prefer background Win32 `PrintWindow` / `PostMessage` (`stealth`) so FL Studio never steals focus from the user's active window.
+  - In `polite` mode, wait for user input idle (`>= 1.5 s` since last mouse/keyboard event) before any foreground fallback, and restore the user's previous foreground window immediately afterward.
+  - Emergency abort: moving the cursor to the top-left screen corner `(0, 0)` aborts any active desktop sequence immediately.
+
+# FL Studio Formula Controller, Patcher, WaveShaper & Piano Roll Scripting Rulebook
+
+## 1. Fruity Formula Controller — Mathematical Expression Bank
+Use these verified expressions in **Fruity Formula Controller** (variables `a`, `b`, `c` in `[0.0, 1.0]`, `SongTime` in quarter-note beats, `Time` in milliseconds):
+
+| Application | Formula Expression | Parameters (`a`, `b`, `c`) |
+| :--- | :--- | :--- |
+| **Tempo-Synced Sine LFO (1/4 Beat)** | `0.5 + Sin(SongTime * Pi * 2) * 0.5 * a` | `a` = LFO Depth (`0..1`) |
+| **Sidechain Ducking Envelope (4-on-the-floor)** | `1 - (1 - Frac(SongTime)) ^ (2 + a * 6) * b` | `a` = Curve Tension, `b` = Duck Depth |
+| **Bipolar Center-Detent Scaling** | `0.5 + (a - 0.5) * b` | `a` = Input Signal, `b` = Range Multiplier |
+| **Quantized Step Sequencer (8 Steps)** | `Int(a * 8) / 7` | `a` = Ramp or LFO Input |
+| **Inverse Crossfade Macro (`A -> B`)** | `a * (1 - c) + b * c` | `a` = Source A, `b` = Source B, `c` = Morph |
+| **Soft-Knee Ceiling Clamp** | `Min(a, b) + Max(0, a - b) * 0.25` | `a` = Input, `b` = Knee Threshold |
+| **Random Sample & Hold (Per Beat)** | `SeededRand(Int(SongTime * (1 + Int(b * 4)))) * a` | `a` = Depth, `b` = Subdivision (`1..4`) |
+| **Logarithmic Filter Cutoff Mapper** | `(a ^ 2.4) * (c - b) + b` | `a` = Macro Knob, `b` = Min Cutoff, `c` = Max |
+
+## 2. Fruity WaveShaper — Saturation & Clipping Transfer Curves
+- **Warm Tube Asymmetric Drive (`808` / Bass)**:
+  - Keep `0.0 -> 0.0` linear up to `0.45`, gentle convex S-curve `+1.8 dB` tension from `0.45 -> 0.85`, soft ceiling knee at `0.96`.
+  - Enable **2x–4x Oversampling** and **Center (DC Block)** whenever driving sub-bass harmonics (`70–220 Hz`) so fundamentals never drift off zero.
+- **Hard Digital Drum Clipper (Kick / Snare Transients)**:
+  - Unity `1:1` diagonal up to `-2.5 dBFS` (`0.75`), flat horizontal ceiling from `0.75 -> 1.0`. Shaves `2–3 dB` of transient needle peaks without dulling punch like a slow-release limiter.
+
+## 3. Native `.fsc` Groove Quantization (`Alt+Q`) & Score Library
+FL-MCP ships **24 binary `.fsc` Score & Groove Quantization files** in `~/.fl-mcp/assets/scores/` and `Presets/Scores/FL-MCP/`:
+- **Hardware Swing & Pocket Grids**: `MPC60_Swing_58pct.fsc`, `MPC60_Swing_62pct.fsc`, `MPC3000_Swing_66pct.fsc`, `SP1200_BoomBap_Pocket.fsc`, `J_Dilla_Lazy_Snare_Feel.fsc`, `House_Garage_Shuffle_16th.fsc`, `Reggaeton_Dembow_Grid.fsc`, `DnB_Amen_Break_Grid.fsc`.
+- **Trap & Drill Articulation Grids**: `Trap_HiHat_Roll_32nd_Stutter.fsc`, `Trap_HiHat_Triplet_Bounce.fsc`, `UK_Drill_Counter_Snare_Grid.fsc`, `808_Octave_Glide_Pattern.fsc`.
+- **12 Genre Harmonic Scores**: `Trap_Minor_140.fsc`, `Drill_Dark_Sliding_142.fsc`, `House_Piano_Stabs_124.fsc`, `Techno_Acid_303_132.fsc`, `LoFi_Rhodes_9ths_82.fsc`, `Synthwave_Arp_112.fsc`, `BoomBap_Soul_Chords_90.fsc`, `DnB_Liquid_Pads_174.fsc`, `RnB_NeoSoul_Voicings_96.fsc`, `Hyperpop_Supersaw_160.fsc`, `Ambient_Cathedral_70.fsc`, `Cinematic_Ostinato_100.fsc`.
+
+## 4. Piano Roll Python Scripting (`flpianoroll` `.pyscript` API)
+FL-MCP installs both **5 Native FL-MCP Piano Roll Scripts** and **130+ Community Piano Roll Scripts** into `~/.fl-mcp/assets/pyscripts/` and `Settings/Piano roll scripts/`:
+- `FL-MCP Euclidean Rhythm.pyscript`: Bjorklund Euclidean rhythm generator (`Pulses`, `Steps`, `Rotation`, `MIDI Note`, `Velocity`).
+- `FL-MCP Trap Hat Roll Generator.pyscript`: Subdivides selected notes into `1/16`, `1/24 Triplet`, `1/32`, or `1/64` rolls with crescendo/decay ramps.
+- `FL-MCP 808 Glide & Sub Anchor.pyscript`: Centers sub-bass pan below `C3` (`MIDI 48`) and inserts octave portamento slide tails (`n.slide = True`).
+- `FL-MCP Humanize & Micro-Swing.pyscript`: Applies deterministic off-beat pocket swing (`ticks`) and velocity humanization.
+- `FL-MCP Voice-Leading Chord Voicer.pyscript`: Automatically opens closed bass intervals below `C3` (`MIDI 48`) up an octave to eliminate `180–320 Hz` mud.
+
+## 5. Single-Cycle Waveforms (`AKWF-FREE`) for 3x Osc, Sytrus & Harmor
+- `~/.fl-mcp/assets/waveforms/` contains **100+ single-cycle `600-sample` oscillator `.wav` files** (`AKWF_bw_blended`, `AKWF_fmsynth`, `AKWF_tb303`, `AKWF_obxd`, `AKWF_NES`, `AKWF_c64`, `AKWF_vgame`, `AKWF_epiano`, `AKWF_aguitar`, `AKWF_altosax`, `AKWF_violin`, `AKWF_cello`, `AKWF_theremin`).
+- Load any `AKWF_*.wav` into **3x Osc** (Osc 1/2/3 ` Custom `?` shape), **Sytrus** (`OSC -> Convert shape to sine harmonics`), or **Harmor** (`IMG / Timbre` dropzone).
+
+<!-- END FL-MCP RULES -->
