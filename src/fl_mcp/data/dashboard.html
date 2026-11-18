@@ -12,6 +12,57 @@
   <link rel="icon" type="image/png" href="/assets/favicon.png?v=3">
   <link rel="preload" as="image" href="/assets/icon-128.png?v=3" fetchpriority="high">
   <style>
+    /* 0. Self-Hosted Studio Typography (Inter + JetBrains Mono WOFF2) */
+    @font-face {
+      font-family: "Inter";
+      font-style: normal;
+      font-weight: 400;
+      font-display: swap;
+      src: url("/assets/inter-400.woff2") format("woff2");
+    }
+    @font-face {
+      font-family: "Inter";
+      font-style: normal;
+      font-weight: 500;
+      font-display: swap;
+      src: url("/assets/inter-500.woff2") format("woff2");
+    }
+    @font-face {
+      font-family: "Inter";
+      font-style: normal;
+      font-weight: 600;
+      font-display: swap;
+      src: url("/assets/inter-600.woff2") format("woff2");
+    }
+    @font-face {
+      font-family: "Inter";
+      font-style: normal;
+      font-weight: 700;
+      font-display: swap;
+      src: url("/assets/inter-700.woff2") format("woff2");
+    }
+    @font-face {
+      font-family: "JetBrains Mono";
+      font-style: normal;
+      font-weight: 400;
+      font-display: swap;
+      src: url("/assets/jetbrains-mono-400.woff2") format("woff2");
+    }
+    @font-face {
+      font-family: "JetBrains Mono";
+      font-style: normal;
+      font-weight: 500;
+      font-display: swap;
+      src: url("/assets/jetbrains-mono-500.woff2") format("woff2");
+    }
+    @font-face {
+      font-family: "JetBrains Mono";
+      font-style: normal;
+      font-weight: 600;
+      font-display: swap;
+      src: url("/assets/jetbrains-mono-600.woff2") format("woff2");
+    }
+
     /* 1. Design Tokens — Neutral Dark Graphite & Calibrated Broadcast Accents */
     :root {
       color-scheme: dark;
@@ -41,6 +92,9 @@
       --scrollbar-thumb: #32363e;
       scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
       font-family: var(--sans);
+      font-size-adjust: from-font;
+      line-height: 1.5;
+      overflow-wrap: break-word;
     }
 
     @supports not (scrollbar-color: auto) {
@@ -1129,6 +1183,7 @@
 
     <div class="header-right">
       <span class="pill" id="flBadge"><span class="state-glyph" aria-hidden="true"></span><span>FL: Idle</span></span>
+      <span class="pill" id="f10Badge"><span class="state-glyph" aria-hidden="true"></span><span>F10: --</span></span>
       <span class="pill" id="svcBadge"><span class="state-glyph" aria-hidden="true"></span><span>Service</span></span>
       <span class="pill" id="deskBadge"><span class="state-glyph" aria-hidden="true"></span><span>Desk: Off</span></span>
       <button type="button" class="compact primary" id="pollBtn">Poll FL</button>
@@ -1290,7 +1345,8 @@
           <h2>Diagnostics &amp; Actions</h2>
           <ul class="checklist" id="doctorList"></ul>
           <div class="toolbar" style="margin-top: 10px; margin-bottom: 0; gap: 5px;">
-            <button type="button" class="compact primary" id="installScriptsBtn">Install FL Scripts</button>
+            <button type="button" class="compact primary" id="autoOnboardBtn">One-Click Auto-Setup</button>
+            <button type="button" class="compact" id="installScriptsBtn">Install FL Scripts</button>
             <button type="button" class="compact" id="installShortcutBtn">Add OS Shortcut</button>
             <button type="button" class="compact" id="toggleAutostartBtn">Autostart: Enable</button>
             <button type="button" class="compact" data-desk-mode="off">Desk: Off</button>
@@ -1322,6 +1378,31 @@
               <tbody id="clientsBody"></tbody>
             </table>
           </div>
+        </div>
+      </div>
+      <div class="grid-equal" style="margin-top: 10px;">
+        <div class="card">
+          <h2>
+            <span style="display:inline-flex;align-items:center;gap:6px">
+              <svg width="13" height="13" aria-hidden="true"><use href="/assets/lucide-sprite.svg#lucide-database"></use></svg>
+              <span>AI Models, Audio Packs &amp; Rulebooks Vault</span>
+            </span>
+            <span style="display:inline-flex;gap:5px">
+              <button type="button" class="compact primary" id="syncVaultBtn">Sync / Verify Vault</button>
+              <button type="button" class="compact" id="installRulesBtn">Install Agent Rules</button>
+            </span>
+          </h2>
+          <ul class="checklist" id="vaultList"></ul>
+        </div>
+        <div class="card">
+          <h2>
+            <span style="display:inline-flex;align-items:center;gap:6px">
+              <svg width="13" height="13" aria-hidden="true"><use href="/assets/lucide-sprite.svg#lucide-cpu"></use></svg>
+              <span>DSP, AI &amp; Desktop Frameworks</span>
+            </span>
+            <span class="meta-note" id="vaultMeta"></span>
+          </h2>
+          <ul class="checklist" id="frameworksList"></ul>
         </div>
       </div>
       <div class="card" style="margin-top: 10px;">
@@ -1442,6 +1523,15 @@
 
       const mode = data.meta?.desktop_mode || "off";
       setPill($("deskBadge"), mode === "off" ? "warn" : "ok", `Desk: ${mode}`);
+
+      const f10 = doc.fl_midi || {};
+      if (f10.configured) {
+        setPill($("f10Badge"), "ok", "F10: Paired");
+      } else if (f10.fl_running) {
+        setPill($("f10Badge"), "warn", "F10: Close FL");
+      } else {
+        setPill($("f10Badge"), "warn", "F10: Unpaired");
+      }
 
       $("kMidi").textContent = String(st.midi_calls || 0);
       $("kMidiSub").textContent = `${st.midi_errors || 0} err · ${st.retries || 0} retry`;
@@ -1772,13 +1862,24 @@
     }
 
     function renderSetup(doc, pths, svc, clientRows, templates) {
+      const f10 = doc.fl_midi || {};
+      const f10Label = f10.configured
+        ? "Paired"
+        : (f10.fl_running ? "Close FL to Pair" : "Needs Pairing");
+      const lm = doc.loopmidi || {};
+      const ctx = latest?.context || {};
+      const memCount = (ctx.memory_index || []).length + (ctx.studio ? 1 : 0) + (ctx.project ? 1 : 0);
       const rows = [
         ["MIDI Port ('" + (doc.port_name || "FL MCP") + "')", doc.midi_port_found ? "Ready" : "Not Found", doc.midi_port_found],
+        ["FL F10 MIDI Binding", f10Label, Boolean(f10.configured)],
         ["Controller Script", doc.fl_script_installed ? "Installed" : "Missing", doc.fl_script_installed],
         ["Piano Roll Script", doc.piano_roll_script_installed ? "Installed" : "Missing", doc.piano_roll_script_installed],
         ["Audio DSP Modules", doc.audio_analysis ? "Installed" : "Optional", doc.audio_analysis],
         ["Desktop Automation", doc.desktop_mode && doc.desktop_mode !== "off" ? `Enabled (${doc.desktop_mode})` : "Disabled", doc.desktop_enabled],
       ];
+      if (lm.installed !== null && lm.installed !== undefined) {
+        rows.splice(1, 0, ["loopMIDI Driver", lm.running ? "Running" : (lm.installed ? "Stopped" : "Missing"), Boolean(lm.running)]);
+      }
       $("doctorList").innerHTML = rows.map(([k, v, ok]) =>
         `<li><span>${esc(k)}</span><span class="badge ${ok ? "ok" : "dim"}">${esc(v)}</span></li>`
       ).join("");
@@ -1786,8 +1887,11 @@
       const poller = svc.poller || {};
       const isDaemon = "poller" in svc;
       const pollState = isDaemon ? (poller.enabled ? `Every ${poller.interval_s}s` : "Paused") : "Manual";
+      const roTag = latest?.meta?.readonly ? " · read-only" : "";
       $("serviceList").innerHTML = [
         kvRow("Platform", `${latest?.meta?.platform || "--"} (${latest?.meta?.arch || "--"}) · ${latest?.meta?.app_runtime || "auto"}`, false),
+        kvRow("Tool Profile", `${latest?.meta?.profile || "full"} (${latest?.meta?.tools_count || 14} tools${roTag})`, false),
+        kvRow("Producer Memory", `${memCount} note(s)`, false),
         kvRow("Daemon Process", svc.running ? `PID ${svc.pid}` : "Foreground mode", false),
         kvRow("HTTP MCP Endpoint", svc.mcp_url || "http://127.0.0.1:8765/mcp", true),
         kvRow("SSE Endpoint", svc.sse_url || "http://127.0.0.1:8765/sse", true),
@@ -1823,8 +1927,9 @@
             ? `<span class="badge ok">${esc(c.transport || "stdio")}</span>`
             : '<span class="badge dim">Unregistered</span>';
         const cliCmd = `fl-mcp config ${c.id} --transport http --write`;
+        const det = c.installed ? '<span class="meta-note"> · detected</span>' : "";
         return `<tr>
-      <td><strong>${esc(c.name)}</strong><span class="meta-note mono client-path" title="${esc(c.path || c.hint)}">${esc(c.path || c.hint)}</span></td>
+      <td><strong>${esc(c.name)}</strong>${det}<span class="meta-note mono client-path" title="${esc(c.path || c.hint)}">${esc(c.path || c.hint)}</span></td>
       <td>${statusBadge}</td>
       <td>
         <div style="display:inline-flex;gap:4px;white-space:nowrap">
@@ -1839,6 +1944,43 @@
       $("tplGrid").innerHTML = templates.length ? templates.map((t) =>
         `<div class="tpl"><div class="tname">${esc(t.name)}</div><div class="tmeta">${esc(t.tempo)} BPM · ${esc(t.channels)} ch · ${t.sampler_ready ? "Sampler" : "MIDI"}</div><div class="tmeta mono" style="margin-top:3px;overflow:hidden;text-overflow:ellipsis">${esc(t.path)}</div></div>`
       ).join("") : '<div class="empty">No .flp templates found.</div>';
+
+      const vlt = data.vault || {};
+      const vs = vlt.summary || {};
+      const vModels = vlt.models || [];
+      const vAudio = vlt.audio || {};
+      const vFl = vlt.fl_studio || {};
+      const vUi = vlt.ui || {};
+      const vRules = vlt.rules || [];
+      const vFws = vlt.frameworks || [];
+      if ($("vaultMeta")) {
+        $("vaultMeta").textContent = `${fmtBytes(vs.total_vault_bytes || 0)} · ${vs.frameworks_installed || 0}/${vs.frameworks_total || 0} active`;
+      }
+      if ($("vaultList")) {
+        const vRows = [
+          ...vModels.map((m) => [m.installed ? "ok" : "warn", m.filename, `${m.installed ? fmtBytes(m.bytes) : "Missing"} · ${m.license}`]),
+          [(vAudio.soundfonts?.count || 0) > 0 ? "ok" : "warn", "GM SoundFonts (.sf2)", `${vAudio.soundfonts?.count || 0} banks (${fmtBytes(vAudio.soundfonts?.bytes || 0)}) · ${(vAudio.soundfonts?.files || []).join(", ") || "none"}`],
+          [(vAudio.samples?.count || 0) > 0 ? "ok" : "warn", "Drum Machines & Synth Samples (.wav)", `${vAudio.samples?.count || 0} files (${fmtBytes(vAudio.samples?.bytes || 0)}) · ${(vAudio.samples?.packs || []).length} packs`],
+          [(vAudio.irs?.count || 0) > 0 ? "ok" : "warn", "Studio, EMT-140 & Voxengo IRs (.wav)", `${vAudio.irs?.count || 0} spaces/plates (${fmtBytes(vAudio.irs?.bytes || 0)})`],
+          [(vAudio.waveforms?.count || 0) > 0 ? "ok" : "warn", "AKWF Single-Cycle Waveforms (.wav)", `${vAudio.waveforms?.count || 0} oscillators (${fmtBytes(vAudio.waveforms?.bytes || 0)}) · 3xOsc/Sytrus/Harmor`],
+          [(vFl.pyscripts?.count || 0) > 0 ? "ok" : "warn", "FL Piano Roll Scripts (.pyscript)", `${vFl.pyscripts?.count || 0} scripts (${fmtBytes(vFl.pyscripts?.bytes || 0)})`],
+          [(vFl.presets?.count || 0) > 0 ? "ok" : "warn", "Native FL Patcher & FX Presets (.fst)", `${vFl.presets?.count || 0} presets (${fmtBytes(vFl.presets?.bytes || 0)})`],
+          [(vFl.scores?.count || 0) > 0 ? "ok" : "warn", "Binary FL Scores & Alt+Q Grooves (.fsc)", `${vFl.scores?.count || 0} score/groove files (${fmtBytes(vFl.scores?.bytes || 0)})`],
+          [(vFl.templates?.count || 0) > 0 ? "ok" : "warn", "Multi-Channel FL Project Templates (.flp)", `${vFl.templates?.count || 0} templates (${fmtBytes(vFl.templates?.bytes || 0)})`],
+          [(vFl.scales?.count || 0) > 0 ? "ok" : "warn", "Scala Microtonal Scales (.scl)", `${vFl.scales?.count || 0} tuning definitions`],
+          [(vAudio.midi?.count || 0) > 0 ? "ok" : "warn", "Multi-Genre MIDI Starter Pack (.mid)", `${vAudio.midi?.count || 0} progressions`],
+          [(vUi.fonts_count || 0) >= 7 && vUi.sprite_installed ? "ok" : "warn", "Self-Hosted UI Fonts & Lucide Icons", `${vUi.fonts_count || 0} WOFF2 · ${vUi.sprite_installed ? "25 SVG symbols" : "no sprite"}`],
+          [vRules.length >= 6 ? "ok" : "warn", "Autonomous Rulebooks (fl://rules/*)", vRules.map((r) => r.id).join(", ") || "none"],
+        ];
+        $("vaultList").innerHTML = vRows.map(([stCls, name, val]) =>
+          `<li><span class="chk ${stCls}" aria-hidden="true">${stCls === "ok" ? "OK" : "!"}</span><span><strong>${esc(name)}</strong> <span class="mono" style="color:var(--muted)">${esc(val)}</span></span></li>`
+        ).join("");
+      }
+      if ($("frameworksList")) {
+        $("frameworksList").innerHTML = vFws.map((f) =>
+          `<li><span class="chk ${f.installed ? "ok" : "warn"}" aria-hidden="true">${f.installed ? "OK" : "-"}</span><span><strong class="mono">${esc(f.package)}</strong> <span class="mono" style="color:var(--accent-soft)">${esc(f.version ? "v" + f.version : "")}</span> <span style="color:var(--muted)">— ${esc(f.role)}</span></span></li>`
+        ).join("") || '<li class="empty">No framework metadata.</li>';
+      }
     }
 
     async function runAction(payload, summary) {
@@ -1913,7 +2055,11 @@
         return;
       }
       if (ev.target.closest("#connectAllClientsBtn")) {
-        await runAction({ action: "install_client", client: "all", transport: "http" }, "Registered all clients (HTTP)");
+        await runAction({ action: "install_client", client: "all", transport: "http", only_installed: true, start_service: true }, "Registered installed clients (HTTP)");
+        return;
+      }
+      if (ev.target.closest("#autoOnboardBtn")) {
+        await runAction({ action: "onboard", install_midi: true, configure_midi: true, transport: "http", source: "auto" }, "Auto-Setup");
         return;
       }
       if (ev.target.closest("#installScriptsBtn")) {
@@ -1922,6 +2068,14 @@
       }
       if (ev.target.closest("#installShortcutBtn")) {
         await runAction({ action: "app_shortcut" }, "Created OS shortcut");
+        return;
+      }
+      if (ev.target.closest("#syncVaultBtn")) {
+        await runAction({ action: "vault_download", target: "all" }, "Vault sync & verification");
+        return;
+      }
+      if (ev.target.closest("#installRulesBtn")) {
+        await runAction({ action: "vault_rules" }, "Installed autonomous agent rulebooks");
         return;
       }
       if (ev.target.closest("#toggleAutostartBtn")) {
