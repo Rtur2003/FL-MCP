@@ -633,3 +633,74 @@ async def test_command_line_render_refuses_when_parallel_unavailable(wired, monk
     monkeypatch.setattr(server.render, "find_fl", lambda: None)
     error = await run("fl_audio", {"action": "render", "project": str(flp)}, expect_error=True)
     assert "FL Studio is open" in error and "fl_desk" in error
+
+
+async def test_status_include_bar_beat_transform_steps_param_cat_and_profiles(wired, monkeypatch):
+    from fl_mcp import telemetry
+
+    # 1. 3-layer Producer Context & 1-call fl_status(include="summary,probe,log,memory")
+    telemetry.save_memory_note("studio", "Prefer 128 BPM house in F#m.", layer="studio")
+    telemetry.save_memory_note("arrangement", "Keep verse chords sparse.", layer="memory")
+    st = await run("fl_status", {"include": "summary,probe,log,memory"})
+    assert "summary" in st and "channels" in st["summary"]
+    assert st["probe"]["has"]["ui.navigateBrowser"] is True
+    assert "log" in st and "traffic" in st
+    assert (
+        "128 BPM club" not in st["memory"]["studio"] and "128 BPM house" in st["memory"]["studio"]
+    )
+    assert any(m["name"] == "arrangement" for m in st["memory"]["memory_index"])
+
+    async with Client(server.mcp) as client:
+        studio_res = json.loads((await client.read_resource("fl://live/studio")).contents[0].text)
+    assert "context" in studio_res and "studio" in studio_res["context"]
+
+    # 2. fl_notes bar|beat timing + transform DSL + readback summary
+    n_res = await run(
+        "fl_notes",
+        {
+            "chords": "Am7@1|1:n/8, G7@1|2:1/4@90",
+            "transform": "transpose=+2,swing=60,humanize=5,legato=0.95,ramp=60..110,ratchet=2@0.5",
+            "replace": True,
+        },
+    )
+    assert n_res["queued"] > 0
+    inbox = json.loads((wired.dir / "inbox.json").read_text(encoding="utf-8"))
+    assert len(inbox["notes"]) > 6
+    (wired.dir / "state.json").write_text(
+        json.dumps(
+            {
+                "ts": __import__("time").time(),
+                "serial": inbox["serial"],
+                "count": len(inbox["notes"]),
+                "notes": inbox["notes"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    rd = await run("fl_notes", {"read": True})
+    assert rd["applied"] is True and rd["summary"]["count"] == len(inbox["notes"])
+
+    # 3. fl_steps grid tiling (*2) & short-grid warning
+    s_res = await run("fl_steps", {"channel": 0, "grid": "x...x...x...x...*2"})
+    assert len(s_res["on"]) == 8 and s_res["on"][-1] == 28
+    short_res = await run("fl_steps", {"channel": 0, "grid": "x...", "length": 32})
+    assert "warning" in short_res
+
+    # 4. fl_param semantic category filter (cat:Filter)
+    wired.fake.params[("c", 2, -1)] = [
+        ["Filter Cutoff Frequency", 0.5, "hz"],
+        ["LFO Rate", 0.3, "hz"],
+        ["Filter Resonance", 0.2, "%"],
+    ]
+    cat_res = await run("fl_param", {"target": "channel", "index": 2, "find": "cat:Filter"})
+    assert [r[1] for r in cat_res["rows"]] == ["Filter Cutoff Frequency", "Filter Resonance"]
+
+    # 5. Tool profiles & FL_MCP_READONLY guard
+    compact = [t.name for t in server._tools(False, profile="compact")]
+    ro_tools = [t.name for t in server._tools(True, profile="read-only")]
+    assert len(compact) == 7 and "fl_desk" not in ro_tools and "fl_set" not in ro_tools
+    monkeypatch.setenv("FL_MCP_READONLY", "1")
+    err = await run("fl_set", {"kind": "mixer", "index": 1, "volume": 0.4}, expect_error=True)
+    assert "read-only mode active" in err
+    assert (await run("fl_status"))["bpm"] > 0
+    monkeypatch.delenv("FL_MCP_READONLY", raising=False)
