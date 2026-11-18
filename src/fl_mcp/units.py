@@ -76,6 +76,10 @@ def parse_value(text: str) -> tuple[float, str] | None:
     if s[:1] in "LlRr" and s[1:2] in " 0123456789" and s[1:2] != "":
         value = -abs(value) if s[0] in "Ll" else abs(value)
     rest = s[found.end() :].lower().replace(" ", "")
+    if value == 1.0 and rest.startswith(":"):
+        rhs = _FIRST_NUMBER.match(rest[1:])
+        if rhs and not rest[1 + rhs.end() :]:
+            return float(rhs.group()), "ratio"
     for key in _UNIT_KEYS:
         if rest.startswith(key):
             unit, scale = UNITS[key]
