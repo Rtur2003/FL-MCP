@@ -1,6 +1,7 @@
 """Music theory helpers. Pitches are MIDI numbers with C4 = 60."""
 
 import re
+from typing import Any
 
 NOTE_NAMES = ("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
 _FLATS = {"DB": "C#", "EB": "D#", "GB": "F#", "AB": "G#", "BB": "A#"}
@@ -203,8 +204,40 @@ def parse_named_chord(name: str, default_octave: int = 4) -> list[int]:
     return [p for p in (base + iv for iv in intervals) if 0 <= p <= 127]
 
 
-def chords_to_notes(spec: str) -> list[list[float]]:
-    """Expand 'Am7@0:4, Dm7@4:2, G7@6:2@95' (or 'Cmaj7, Am7, F, G') into note rows."""
+def parse_timing_pos(token: str, beats_per_bar: int = 4) -> float:
+    """Parse beat offset ('0', '4.5') or 1-based bar|beat ('1|1' -> 0.0, '2|3' -> 6.0)."""
+    raw = token.strip()
+    if "|" in raw:
+        bar_s, beat_s = raw.split("|", 1)
+        bar = float(bar_s.strip())
+        beat = float(beat_s.strip())
+        if bar < 1 or beat < 1:
+            raise ValueError(f"bar|beat must be >= 1|1, got '{token}'")
+        return (bar - 1.0) * beats_per_bar + (beat - 1.0)
+    val = float(raw)
+    if val < 0:
+        raise ValueError(f"timing position must be >= 0, got '{token}'")
+    return val
+
+
+def parse_duration(token: str, beats_per_bar: int = 4) -> float:
+    """Parse beat duration ('4', '0.5') or note value ('n/8', '1/8', '1/16', '3/8')."""
+    raw = token.strip().lower()
+    if "/" in raw:
+        num_s, den_s = raw.split("/", 1)
+        num = 1.0 if num_s.strip() in ("", "n") else float(num_s.strip())
+        den = float(den_s.strip())
+        if num <= 0 or den <= 0:
+            raise ValueError(f"invalid note duration '{token}'")
+        return beats_per_bar * num / den
+    val = float(raw)
+    if val <= 0:
+        raise ValueError(f"note duration must be > 0, got '{token}'")
+    return val
+
+
+def chords_to_notes(spec: str, beats_per_bar: int = 4) -> list[list[float]]:
+    """Expand 'Am7@0:4, Dm7@1|1:n/8, G7@6:2@95' into [midi, start, length, vel] rows."""
     rows: list[list[float]] = []
     cursor = 0.0
     for raw in filter(None, (p.strip() for p in re.split(r"[,;]+", spec))):
@@ -215,9 +248,9 @@ def chords_to_notes(spec: str) -> list[list[float]]:
         vel = 100
         if len(parts) >= 2 and parts[1].strip():
             timing = parts[1].strip().split(":")
-            start = float(timing[0])
+            start = parse_timing_pos(timing[0], beats_per_bar)
             if len(timing) >= 2 and timing[1].strip():
-                length = float(timing[1])
+                length = parse_duration(timing[1], beats_per_bar)
         if len(parts) >= 3 and parts[2].strip():
             vel = int(float(parts[2].strip()))
         if start < 0 or length <= 0 or not 1 <= vel <= 127:
@@ -228,3 +261,154 @@ def chords_to_notes(spec: str) -> list[list[float]]:
     if not rows:
         raise ValueError("chords string is empty")
     return rows
+
+
+def transform_notes(
+    rows: list[list[float]],
+    spec: str,
+    *,
+    key: str | None = None,
+    seed: int = 0,
+    beats_per_bar: int = 4,
+) -> list[list[float]]:
+    """Apply comma-separated non-destructive transforms to [midi, start, len, vel] notes.
+
+    Supported ops: transpose=+/-st, snap[=key], quantize=step, swing=0..1|pct,
+    humanize=vel[,dt], legato[=factor], ramp=lo..hi, ratchet=n[@beats],
+    vel_scale=f, dur_scale=f.
+    """
+    import random
+
+    if not rows:
+        return []
+    out = [
+        [int(r[0]), float(r[1]), float(r[2]), int(r[3]) if len(r) > 3 else 100, *r[4:]]
+        for r in rows
+    ]
+    rng = random.Random(seed)
+    ops = [op.strip() for op in re.split(r"[,;]+", spec) if op.strip()]
+    if not ops:
+        raise ValueError("transform is empty")
+
+    for op in ops:
+        if "=" in op:
+            name, has_eq, arg = op.partition("=")
+        else:
+            name, has_eq, arg = op.partition(":")
+        cmd = name.strip().lower()
+        val = arg.strip()
+
+        if cmd == "transpose":
+            if not has_eq or not val:
+                raise ValueError("transpose needs semitones, e.g. transpose=-12 or transpose=+7")
+            st = int(float(val))
+            for n in out:
+                n[0] = max(0, min(127, int(n[0]) + st))
+        elif cmd == "snap":
+            target_key = val or key
+            if not target_key:
+                raise ValueError("snap needs a key like snap=A minor")
+            tonic, scale = parse_key(target_key)
+            allowed = scale_pitches(tonic, scale, 0, 127)
+            for n in out:
+                n[0] = min(allowed, key=lambda p, cur=n[0]: abs(p - cur))
+        elif cmd == "quantize":
+            if not has_eq or not val:
+                raise ValueError("quantize needs grid step, e.g. quantize=0.25 or quantize=1/16")
+            step = parse_duration(val, beats_per_bar)
+            for n in out:
+                n[1] = round(max(0.0, round(n[1] / step) * step), 4)
+        elif cmd == "swing":
+            if not has_eq or not val:
+                raise ValueError("swing needs amount, e.g. swing=0.6 or swing=62")
+            amt = float(val)
+            frac = amt / 100.0 if amt > 1.0 else amt
+            if not 0.5 <= frac <= 0.78:
+                raise ValueError("swing must be between 0.50..0.78 (or 50..78)")
+            shift = (frac - 0.5) * 0.5  # up to ~1/8th beat push on offbeat 16ths/8ths
+            for n in out:
+                pos_in_half = n[1] % 0.5
+                if abs(pos_in_half - 0.25) < 0.04:
+                    n[1] = round(n[1] + shift, 4)
+        elif cmd == "humanize":
+            parts = [p.strip() for p in val.split(":") if p.strip()] if val else ["10"]
+            dv = min(32, max(0, int(float(parts[0]))))
+            dt = min(0.08, max(0.0, float(parts[1]))) if len(parts) > 1 else 0.025
+            for n in out:
+                t_eff = dt * (0.25 if abs(n[1] % beats_per_bar) < 0.02 else 1.0)
+                n[1] = round(max(0.0, n[1] + rng.uniform(-t_eff, t_eff)), 4)
+                n[3] = max(1, min(127, int(n[3]) + rng.randint(-dv, dv)))
+        elif cmd == "legato":
+            factor = float(val) if has_eq and val else 0.98
+            factor = max(0.5, min(1.0, factor))
+            by_time = sorted(range(len(out)), key=lambda idx: (out[idx][1], out[idx][0]))
+            distinct_starts = sorted({out[i][1] for i in by_time})
+            for i in range(len(distinct_starts) - 1):
+                cur_t, next_t = distinct_starts[i], distinct_starts[i + 1]
+                span = max(0.03125, (next_t - cur_t) * factor)
+                for idx in by_time:
+                    if abs(out[idx][1] - cur_t) < 1e-6:
+                        out[idx][2] = round(span, 4)
+        elif cmd == "ramp":
+            if ".." not in val:
+                raise ValueError("ramp needs range like ramp=55..115")
+            lo_s, hi_s = val.split("..", 1)
+            v0 = max(1, min(127, int(float(lo_s.strip()))))
+            v1 = max(1, min(127, int(float(hi_s.strip()))))
+            t_min = min(n[1] for n in out)
+            t_max = max(n[1] for n in out)
+            span = max(1e-6, t_max - t_min)
+            for n in out:
+                frac = (n[1] - t_min) / span if len(out) > 1 and t_max > t_min else 1.0
+                n[3] = max(1, min(127, round(v0 + (v1 - v0) * frac)))
+        elif cmd == "ratchet":
+            sub_s, _, win_s = val.partition("@")
+            sub = max(2, min(8, int(float(sub_s or "2"))))
+            win = float(win_s) if win_s else 0.0
+            end_t = max(n[1] for n in out)
+            new_out: list[list[float]] = []
+            for n in out:
+                if win <= 0 or n[1] >= end_t - win - 1e-6:
+                    step = max(0.03125, n[2] / sub)
+                    base_v = int(n[3])
+                    for k in range(sub):
+                        nv = max(1, min(127, round(base_v * (0.72 + 0.28 * k / max(1, sub - 1)))))
+                        new_out.append(
+                            [n[0], round(n[1] + k * step, 4), round(step * 0.9, 4), nv, *n[4:]]
+                        )
+                else:
+                    new_out.append(n)
+            out = new_out
+        elif cmd == "vel_scale":
+            factor = float(val)
+            for n in out:
+                n[3] = max(1, min(127, round(n[3] * factor)))
+        elif cmd == "dur_scale":
+            factor = float(val)
+            for n in out:
+                n[2] = round(max(0.03125, n[2] * factor), 4)
+        else:
+            raise ValueError(
+                f"unknown transform '{cmd}'; use transpose, snap, quantize, swing, humanize, "
+                "legato, ramp, ratchet, vel_scale, or dur_scale"
+            )
+    return out
+
+
+def notes_summary(rows: list[list[Any]], beats_per_bar: int = 4) -> dict[str, Any]:
+    """Compact summary statistics for a note list (readback)."""
+    if not rows:
+        return {"count": 0, "bars": 0.0}
+    pitches = [int(r[0]) for r in rows]
+    starts = [float(r[1]) for r in rows]
+    ends = [float(r[1]) + float(r[2]) for r in rows]
+    vels = [int(r[3]) if len(r) > 3 else 100 for r in rows]
+    bars = round(max(ends) / beats_per_bar, 2)
+    return {
+        "count": len(rows),
+        "bars": bars,
+        "span_beats": [round(min(starts), 2), round(max(ends), 2)],
+        "pitch_range": [note_name(min(pitches)), note_name(max(pitches))],
+        "vel_range": [min(vels), max(vels)],
+        "avg_vel": round(sum(vels) / len(vels), 1),
+    }
