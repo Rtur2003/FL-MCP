@@ -20,6 +20,7 @@ from typing import Any
 from fl_mcp import paths
 
 FORMATS = ("wav", "mp3", "ogg", "flac")
+EXPORT_FORMATS = (*FORMATS, "mid", "zip")
 _RENDER_DIR_LOCK = threading.Lock()
 _RENDER_SEQ = itertools.count(1)
 _STARTF_USESHOWWINDOW = 0x00000001
@@ -244,10 +245,14 @@ def _siblings(project: Path) -> list[Path]:
 
 
 def command_line(exe: Path, fmt: str, source: Path, out: Path) -> str:
-    """FL's documented batch render: /R renders, /E<format>, /F<source folder>, /O<output folder>.
-
-    The quotes go around the path only (`/F"C:\\My Projects"`), as FL's own examples have them."""
-    return f'"{exe}" /R /E{fmt} /F"{source}" /O"{out}"'
+    """FL's documented batch render: /R renders, /E<fmt> or /M (MIDI) or /Z (zipped package)."""
+    if fmt == "mid":
+        mode = "/M"
+    elif fmt == "zip":
+        mode = "/Z"
+    else:
+        mode = f"/E{fmt}"
+    return f'"{exe}" /R {mode} /F"{source}" /O"{out}"'
 
 
 def _alloc_render_dir(root: Path, ts: int) -> tuple[Path, Path]:
@@ -278,8 +283,8 @@ def render(
     project = Path(flp).expanduser().resolve()
     if project.suffix.lower() != ".flp" or not project.is_file():
         raise ValueError(f"not an existing .flp project: {project}")
-    if fmt not in FORMATS:
-        raise ValueError(f"format must be one of {', '.join(FORMATS)}")
+    if fmt not in EXPORT_FORMATS:
+        raise ValueError(f"format must be one of {', '.join(EXPORT_FORMATS)}")
     exe = exe or find_fl()
     if exe is None:
         why = (
