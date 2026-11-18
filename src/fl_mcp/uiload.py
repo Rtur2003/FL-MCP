@@ -5,12 +5,106 @@ focused item loaded. Whether that worked is decided by what appeared in the proj
 browser's answer: the plugin inventory is read before and after."""
 
 import inspect
+import json
+import subprocess
+import sys
 import time
 from collections import Counter
 from collections.abc import Callable
 from typing import Any
 
 from fl_mcp import desk, popupkeys
+
+Call = Callable[[dict[str, Any]], Any]
+
+_MAC_ADD_MENU_JXA = r"""
+function run(argv) {
+    var req = JSON.parse(argv[0]);
+    var se = Application('System Events');
+    var denied = {'More plugins...':1,'Categories':1,'Simple':1,'Tree':1,'Plugin picker':1,
+        'View plugin picker':1,'Plugin database':1,'Browse plugin database':1,
+        'Browse all installed plugins':1,'Browse presets':1,'Refresh plugin list (fast scan)':1,
+        'Manage plugins':1,'Manage FL Cloud plugins...':1,'Pattern':1,
+        'Automation for last tweaked parameter':1};
+    var opened = false, attempted = false;
+    try {
+        var procs = se.applicationProcesses.whose({bundleIdentifier:'com.image-line.flstudio'})();
+        if (!procs.length) procs = se.applicationProcesses.whose({name:'FL Studio'})();
+        if (!procs.length) return JSON.stringify({ok:false, error:'FL Studio process not found'});
+        var proc = procs[0];
+        proc.frontmost = true;
+        var mb = proc.menuBars()[0].menuBarItems();
+        var addItem = mb.filter(function(x){return x.name()==='Add';})[0];
+        if (!addItem) return JSON.stringify({ok:false, error:'Add menu unavailable'});
+        addItem.click(); opened = true;
+        var want = req.query.toLowerCase();
+        var wantKind = req.kind;
+        var matches = [];
+        function walk(menu, kind) {
+            menu.menuItems().forEach(function(item) {
+                var name = item.name();
+                if (!name || !item.enabled() || denied[name]) return;
+                var nk = (name === 'Effect') ? 'effect' : (name === 'Channel' ? 'channel' : kind);
+                var subs = item.menus();
+                if (subs.length) walk(subs[0], nk);
+                else if (nk === wantKind && name.toLowerCase().indexOf(want) !== -1) {
+                    matches.push({item:item, name:name});
+                }
+            });
+        }
+        walk(addItem.menus()[0], 'channel');
+        if (!matches.length) {
+            se.keyCode(53); opened = false;
+            return JSON.stringify({ok:false, error:'No matching plugin in Add menu'});
+        }
+        matches.sort(function(a, b) {
+            var ae = a.name.toLowerCase() === want ? 0 : 1;
+            var be = b.name.toLowerCase() === want ? 0 : 1;
+            if (ae !== be) return ae - be;
+            return a.name.length - b.name.length;
+        });
+        attempted = true;
+        matches[0].item.click(); opened = false;
+        return JSON.stringify({ok:true, via:matches[0].name});
+    } catch (e) {
+        if (opened && !attempted) { try { se.keyCode(53); } catch (_) {} }
+        return JSON.stringify({ok:false, error:String(e)});
+    }
+}
+"""
+
+
+def _mac_add_menu_load(
+    call: Call, name: str, track: int | None, before: list[list[Any]]
+) -> dict[str, Any] | None:
+    """Use macOS System Events JXA `Add` menu when available and verified by inventory delta."""
+    kind = "effect" if track is not None else "channel"
+    try:
+        res = subprocess.run(
+            [
+                "osascript",
+                "-l",
+                "JavaScript",
+                "-e",
+                _MAC_ADD_MENU_JXA,
+                json.dumps({"query": name, "kind": kind}),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=False,
+        )
+        if res.returncode != 0 or not res.stdout.strip():
+            return None
+        payload = json.loads(res.stdout)
+    except Exception:
+        return None
+    if not isinstance(payload, dict) or not payload.get("ok"):
+        return None
+    fresh = _settle(call, before, True)
+    if fresh:
+        return {"loaded": fresh, "via": str(payload.get("via") or name)}
+    return None
 
 
 def _call_popup(fn: Callable[..., bool], allow_cursor: bool) -> bool:
@@ -31,8 +125,13 @@ CHUNKS = 10  # the browser is walked in pieces of `steps` items, this many at mo
 
 def inventory(call: Call) -> list[list[Any]]:
     """Every plugin in the project as [at, index, slot, plugin] (at: c channel rack, m mixer)."""
-    out = call({"o": "list", "k": "plugins", "s": 0, "n": 200, "a": 1})
-    return [[r[1], r[2], r[3], r[4]] for r in out["rows"]]
+    rows: list[list[Any]] = []
+    start: int | None = 0
+    while start is not None:
+        out = call({"o": "list", "k": "plugins", "s": start, "n": 60, "a": 1})
+        rows.extend([r[1], r[2], r[3], r[4]] for r in out["rows"])
+        start = out.get("next")
+    return rows
 
 
 def _new(before: list[list[Any]], after: list[list[Any]]) -> list[dict[str, Any]]:
@@ -111,6 +210,7 @@ def load(
     to the selected mixer track, an instrument to a new channel) and dismiss closes the menu."""
     if not name.strip():
         raise ValueError("load needs query: the plugin or sample name")
+    custom_confirm = confirm is not None
     confirm = confirm or popupkeys.confirm
     dismiss = dismiss or popupkeys.dismiss
     mode = getattr(desk, "mode", lambda: "foreground" if desk.enabled() else "off")()
@@ -135,9 +235,13 @@ def load(
         except Exception:
             old_fx = None
     before = inventory(call)
-    call({"o": "ui", "a": "win", "w": "browser", "v": "show"})
     stops: list[str] = []
     try:
+        if sys.platform == "darwin" and not custom_confirm:
+            mac_loaded = _mac_add_menu_load(call, name, track, before)
+            if mac_loaded:
+                return mac_loaded
+        call({"o": "ui", "a": "win", "w": "browser", "v": "show"})
         for tab in ("plugins", "all"):
             _select_tab(call, tab)
             for _chunk in range(CHUNKS):  # to the top of the tree, however long it is
