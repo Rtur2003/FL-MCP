@@ -19,9 +19,27 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-audio = ["numpy>=1.24", "scipy>=1.10", "soundfile>=0.12"]
+audio = [
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "soundfile>=0.12",
+    "pedalboard>=0.9.9",
+    "pyloudnorm>=0.1.1",
+    "soxr>=0.5",
+]
+ai = [
+    "onnxruntime>=1.19",
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "soundfile>=0.12",
+    "pretty_midi>=0.2.10",
+    "soxr>=0.5",
+]
 service = ["fastapi>=0.115", "uvicorn>=0.30"]
-app = ["pywebview>=5.3"]
+app = ["pywebview>=5.3", "pillow>=10.0"]
+all = [
+    "fl-mcp[audio,ai,service,app]",
+]
 dev = [
     "pytest>=8",
     "ruff>=0.6",
