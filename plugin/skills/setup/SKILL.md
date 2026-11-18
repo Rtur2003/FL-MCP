@@ -6,42 +6,44 @@ when_to_use: "Use when the user is installing the FL Studio MCP, a tool says 'No
 
 # Set up and fix the FL Studio link
 
-The server talks to FL Studio through a virtual MIDI port called `FL MCP`. Three things must hold: the port exists, FL's controller script is installed and assigned to it, and the server finds the port. `fl-mcp setup` does the parts a program can do and prints the rest.
+The server talks to FL Studio through a virtual MIDI port called `FL MCP`. Three things must hold: the port exists, FL's controller script is installed and assigned to it, and the server finds the port. `fl-mcp onboard` automates every layer on one command.
 
-## First time
+## Fastest onboarding (`fl-mcp onboard`)
 
-1. Create the port. Windows: install loopMIDI and add a port named `FL MCP`. macOS: Audio MIDI Setup > MIDI Studio > IAC Driver > "Device is online", add a port.
-2. Run `fl-mcp setup --write --client <client>` (default `claude-desktop`; or `fl-mcp config <client> --write`). It copies the controller script and the piano roll script into FL's user data folder, checks the port, and registers the server directly in your AI client config (with a `.bak` backup if the file already exists; omit `--write` to inspect snippets first).
-3. In FL Studio open Options > MIDI Settings. Under Input select the `FL MCP` port, set Controller type to `FL MCP`, enable it. Under Output select the same port and give it the same port number as the input.
-4. Restart FL Studio. Run `fl-mcp doctor` (each layer in one line), then `fl-mcp selftest` (every feature, small writes put back, report saved to `selftest.json`).
+Run `fl-mcp onboard --install-midi --desktop` (or click **One-Click Auto-Setup** in `fl-mcp-studio`):
+1. Ensures the virtual MIDI port (`FL MCP`): checks/configures `loopMIDI` on Windows (and installs via `winget` when `--install-midi` is passed, restarting detached if the port isn't live yet) or checks CoreMIDI IAC Driver on macOS.
+2. Installs the controller script (`device_FLMCP.py`) and piano roll script (`FL MCP.pyscript`) into FL Studio's user data folder (resolving FL 20–26+ numerically so FL 26 > FL 25).
+3. On Windows, **if FL Studio is closed**, writes the F10 MIDI Input/Output & `'FL MCP'` Controller Type bindings into `HKCU\Software\Image-Line\FL Studio <N>` automatically. (If FL is open, close it once and re-run `onboard` so FL does not overwrite settings on exit.)
+4. Starts the persistent background Studio + HTTP MCP daemon (`http://127.0.0.1:8765/mcp`) and registers detected AI clients (`claude-desktop`, `claude-code`, `cursor`, `vscode`, `windsurf`, `gemini`, `antigravity`, `codex`, `cline`, `roo-code`, `zed`, `opencode`).
 
-`fl-mcp selftest --deep` additionally loads Fruity Balance through FL's browser onto a mixer track and undoes it: it tells you whether adding plugins works on your FL build (save the project first; if undo does not take it back, delete the plugin by hand).
+## Manual / per-client steps
 
-Optional: `fl-mcp desktop on` (or `stealth`, `polite`, `foreground`, `status`) lets the model see FL's screen and drive shortcuts (`fl_desk`), and `fl-mcp setup --desktop` enables `polite` mode automatically. `polite` (default when on) captures via background `PrintWindow` and waits for you to be idle before focusing FL, restoring your previous window afterwards; `stealth` never steals focus. Browser popup confirmation (`fl_ui`) avoids moving your mouse cursor unless in `foreground` mode. The audio tools need the audio extra: `uv tool install "fl-mcp[audio]"`.
+- `fl-mcp setup --write --client <client>` (or `fl-mcp setup --auto` for full onboarding).
+- `fl-mcp config <client|all> --source <auto|pypi|git|local> --transport <stdio|http> --write` (`--status` shows all 12 clients).
+- `fl-mcp doctor` checks every layer including FL Registry F10 bindings (`loopMIDI` / CoreMIDI IAC).
+- `fl-mcp selftest` (`--deep` to test browser loading + undo).
+- Tool profiles & safety: `fl-mcp serve --profile <full|compact|produce|mix|read-only>` (`FL_MCP_PROFILE`) or `FL_MCP_READONLY=1` for strict read-only inspection. The audio tools need `uv tool install "fl-mcp[audio]"`.
 
-Live monitoring, background daemon & troubleshooting tools:
-- `fl-mcp app` (or `fl-mcp-studio`): launches FL-MCP Studio as a native desktop app window (`--native` for built-in tkinter, `--install-shortcut` for Start Menu / `.app` / `.desktop`) and ensures the background service is running.
-- `fl-mcp service start`: launches the detached background service hosting both the Studio App backend (`http://127.0.0.1:8765/`) and persistent HTTP/SSE MCP endpoints (`/mcp`, `/sse`) plus a non-intrusive telemetry poller (`service stop`, `service status`, `service autostart enable`).
-- `fl-mcp config <client> --transport http --write`: registers your AI client (including `claude-desktop`, `cursor`, `vscode`, `windsurf`, `gemini`, `antigravity`, `codex`) against the background service endpoint instead of spawning stdio per session.
-- `fl-mcp dashboard`: opens the Studio desktop app (`--browser` to open in a browser tab instead; shows MIDI TX/RX frames, latency, mixer meters, Channel Rack, Piano Roll canvas, 7-band audio spectrum, universal paths, and discovered `.flp` templates).
-- `fl-mcp traffic --follow`: streams live MIDI & MCP traffic counters and failures in the terminal.
-- `fl-mcp templates`: lists auto-discovered `.flp` project templates on disk (`fl_produce action=flp template=auto`).
+Live monitoring & Studio tools:
+- `fl-mcp app` (or `fl-mcp-studio`): launches FL-MCP Studio as a native desktop app window (`--native` tkinter fallback, `--install-shortcut` Start Menu / `.app` / `.desktop`).
+- `fl-mcp service start`: persistent Studio UI + `/mcp` + `/sse` endpoints + telemetry poller (`service stop|status|autostart enable`).
+- `fl-mcp dashboard`: opens Studio UI (`--browser` opens a browser tab).
+- `fl-mcp traffic --follow`: streams live MIDI & MCP traffic.
+- `fl-mcp templates`: lists auto-discovered `.flp` project templates on disk.
 
 ## When something does not work
 
-Call `fl_status probe=true log=true` first (or read `fl://info/paths`): it lists the API functions this FL build has, resolved universal paths (`FL_MCP_FL_USER_DIR`, `FL_MCP_FL_DIR`), the controller script's last errors, and recent MIDI TX/RX telemetry (also available as `fl://live/traffic` and `fl://live/studio`). Then:
+Call `fl_status include="summary,probe,log,memory"` first (or read `fl://info/paths` / `fl://live/studio`):
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| "No answer from FL Studio" | FL closed, port not assigned, script not loaded, wrong port name | `fl-mcp doctor`; check MIDI Settings (step 3); set `FL_MCP_PORT` if the port has another name |
-| selftest: "script in FL is vN" | old script copy | `fl-mcp install`, restart FL |
-| `fl_notes` queued, nothing in the piano roll | the piano roll script never ran | in the piano roll: Tools > Scripting > FL MCP, press Accept once; afterwards `fl_desk macro=script` (or Ctrl+Alt+Y) repeats it |
-| `fl_param` says a parameter has no text | plugin does not report value strings | set 0-1 `value`, or read it on screen with `fl_desk` |
-| `fl_param real=` cannot reach a value | the parameter's range does not contain it | read `text` after the call: it shows what FL really set |
-| `fl_audio render`: "FL Studio is open" | Rendering the *open* project needs `fl_desk` (`polite`/`foreground`) unless a `.flp` path is given | Pass `project=<file.flp>` on Windows to render in a hidden background desktop alongside open FL, use `fl_desk`, or save and close FL |
-| `fl_desk`: "Windows blocked the input" | FL runs as administrator | start Claude as administrator too, or run FL normally |
-| Credits | `fl_status` shows the balance; `fl-mcp account` shows prices | tell the user instead of retrying |
+| "No answer from FL Studio" | FL closed, port not assigned, F10 mismatch | Run `fl-mcp doctor`; close FL and run `fl-mcp onboard` on Windows (or check IAC Driver on macOS) |
+| selftest: "script in FL is vN" | old script copy | Run `fl-mcp install` and restart FL |
+| `fl_notes` queued, nothing in piano roll | piano roll script never armed in this FL session | Run **Tools > Scripting > FL MCP** once (applies immediately — no Accept dialog; afterwards `mod+alt+y` or `fl_desk macro=script` arms/repeats automatically, with WinRT OCR & `_BAKED` script fallback) |
+| `fl_param` has no unit text | plugin omits formatted strings | Set 0–1 `value`, filter with `find="cat:Filter"`, or inspect via `fl_desk` |
+| `fl_audio render`: "FL Studio is open" | Rendering the open project needs `fl_desk` unless `.flp` path given | Pass `project=<file.flp>` on Windows for hidden-desktop render, or use `fl_desk` |
+| `fl_desk`: "Windows blocked the input" | FL runs as Administrator | Run AI client/Studio normally alongside non-admin FL |
 
 ## What the API cannot do
 
-FL's scripting API cannot create channels or plugins, place playlist clips, or export audio. The other layers cover that: a generated `.flp` (`fl_produce template=`), FL's own browser driven from inside FL (`fl_ui`), the command line render (`fl_audio render`) and the desktop tier (`fl_desk`). The automation guide says which to use when.
+FL's scripting API cannot create plugins, write arbitrary piano roll notes directly, or render audio files. FL-MCP covers these through `_BAKED`/pyscript queue + WinRT OCR arming (`fl_notes`), FL browser + macOS JXA menu automation (`fl_ui`), offline `.flp`/`.zip`/`.fsc` engine (`fl_produce`), CLI hidden-desktop rendering (`fl_audio render`), and opt-in stealth/polite screen control (`fl_desk`).
