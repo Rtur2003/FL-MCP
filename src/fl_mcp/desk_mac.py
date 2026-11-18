@@ -172,3 +172,21 @@ class MacBackend(Backend):
         if kind == "scroll":
             raise DeskError("scrolling is not available on macOS: use the keyboard or the mouse")
         raise DeskError(f"'{kind}' needs cliclick on macOS: brew install cliclick")
+
+    def arm_piano_roll_script(self, script_name: str = "FL MCP", win: Win | None = None) -> bool:
+        """Attempt first-run Piano Roll script invocation via macOS System Events."""
+        try:
+            res = _osa(
+                f'''
+                tell application "System Events"
+                    set p to first application process whose name is "FL Studio"
+                    set frontmost of p to true
+                    set t to menu item "Tools" of menu 1 of menu bar item "Patterns" of menu bar 1 of p
+                    click menu item "{script_name}" of menu 1 of menu item "Scripting" of menu 1 of t
+                end tell
+                return "ok"
+                '''  # noqa: E501
+            )
+            return res.strip() == "ok"
+        except Exception:
+            return False
