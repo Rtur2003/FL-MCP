@@ -298,3 +298,57 @@ def test_interactive_studio_action_endpoint(fl, monkeypatch, tmp_path):
 
         r_scr = client.post("/api/action", json={"action": "install_scripts"}).json()
         assert r_scr["ok"] is True and len(r_scr["installed"]) == 2
+
+
+def test_install_all_and_install_client_action(monkeypatch, tmp_path):
+    fake_home = tmp_path / "home"
+    fake_appdata = tmp_path / "appdata"
+    fake_codex = tmp_path / "codex"
+    fake_home.mkdir()
+    fake_appdata.mkdir()
+    fake_codex.mkdir()
+    monkeypatch.setenv("FL_MCP_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("HOME", str(fake_home))
+    monkeypatch.setenv("USERPROFILE", str(fake_home))
+    monkeypatch.setenv("APPDATA", str(fake_appdata))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    monkeypatch.setenv("CODEX_HOME", str(fake_codex))
+    monkeypatch.setattr(clients.shutil, "which", lambda _name: None)
+
+    batch = clients.install_all(source="local", transport="http", url="http://127.0.0.1:9123/mcp")
+    by_id = {row["client"]: row for row in batch}
+    assert by_id["cursor"]["written"] is True
+    assert by_id["cursor"]["label"] == "Cursor"
+    assert by_id["windsurf"]["written"] is True
+    assert by_id["gemini"]["written"] is True
+    assert by_id["antigravity"]["written"] is True
+    assert by_id["codex"]["written"] is True
+    assert by_id["claude-desktop"]["written"] is True
+    assert by_id["claude-code"]["ok"] is True and by_id["claude-code"]["skipped"] is True
+    assert by_id["vscode"]["ok"] is True and by_id["vscode"]["skipped"] is True
+
+    app = service_daemon.create_asgi_app(poll=False)
+    with TestClient(app) as client:
+        r_single = client.post(
+            "/api/action",
+            json={
+                "action": "install_client",
+                "client": "cursor",
+                "transport": "http",
+                "http_url": "http://127.0.0.1:9200/mcp",
+            },
+        ).json()
+        assert r_single["ok"] is True
+        assert r_single["result"]["label"] == "Cursor"
+        cursor_cfg = json.loads((fake_home / ".cursor" / "mcp.json").read_text(encoding="utf-8"))
+        assert cursor_cfg["mcpServers"]["fl-studio"] == {"url": "http://127.0.0.1:9200/mcp"}
+
+        r_all = client.post(
+            "/api/action",
+            json={"action": "install_client", "client": "all", "transport": "http"},
+        ).json()
+        assert r_all["ok"] is True
+        assert isinstance(r_all["result"], list)
+        statuses = {row["id"]: row for row in r_all["clients"]}
+        assert statuses["cursor"]["configured"] is True
+        assert statuses["codex"]["configured"] is True
