@@ -12,7 +12,7 @@ from fl_mcp import __version__
 
 def _doctor() -> int:
     from fl_mcp.bridge import Bridge, FLError, match_port
-    from fl_mcp.install import targets
+    from fl_mcp.install import diagnose_fl_midi, find_loopmidi, targets
 
     print(f"fl-mcp {__version__} | python {platform.python_version()} | {platform.platform()}")
     bridge = Bridge()
@@ -25,12 +25,20 @@ def _doctor() -> int:
         return 1
     print(f"MIDI inputs : {ins or 'none'}\nMIDI outputs: {outs or 'none'}")
     found = match_port(ins, bridge.port) and match_port(outs, bridge.port)
-    print(f"port '{bridge.port}': " + ("found" if found else "NOT FOUND (see README, step 2)"))
+    print(f"port '{bridge.port}': " + ("found" if found else "NOT FOUND (run `fl-mcp onboard`)"))
+    if sys.platform == "win32":
+        lm = find_loopmidi()
+        print(f"loopMIDI    : {lm if lm else 'not found'}")
     device, script = targets()
     print(
         f"FL script   : {'ok' if device.exists() else 'missing, run `fl-mcp install`'} ({device})"
     )
     print(f"piano roll  : {'ok' if script.exists() else 'missing, run `fl-mcp install`'}")
+    midi_diag = diagnose_fl_midi(bridge.port)
+    if midi_diag.get("configured"):
+        print("FL MIDI F10 : ok")
+    elif midi_diag.get("issues"):
+        print(f"FL MIDI F10 : {', '.join(midi_diag['issues'])}")
     try:
         info = bridge.call({"o": "ping"})
     except FLError as exc:
@@ -60,6 +68,17 @@ def _extras() -> None:
     print(f"render      : {exe_msg}")
     print(f"desktop     : {mode if mode != 'off' else 'off, `fl-mcp desktop on` to allow'}")
     print(f"service     : {svc_msg}")
+    try:
+        from fl_mcp import vault
+
+        vs = vault.status()["summary"]
+        print(
+            f"vault       : models={vs['models_installed']}/{vs['models_total']}, "
+            f"sf2={vs['soundfonts_count']}, samples={vs['samples_count']}, "
+            f"irs={vs['irs_count']}, midi={vs['midi_count']}, rules={vs['rules_count']}"
+        )
+    except Exception:
+        pass
     st = telemetry.read_traffic(limit=0)["stats"]
     if st["total"]:
         print(
@@ -221,11 +240,26 @@ def _config(args: argparse.Namespace) -> int:
     if getattr(args, "write", False):
         if not args.client:
             print(
-                "config --write requires a client name (e.g. fl-mcp config claude-desktop --write)",
+                "config --write requires a client name (e.g. fl-mcp config claude-desktop --write, "
+                "or 'all')",
                 file=sys.stderr,
             )
             return 2
         proj = Path(args.project) if getattr(args, "project", None) else None
+        if args.client == "all":
+            rows = clients.install_all(
+                args.source,
+                not args.no_audio,
+                project=proj,
+                transport=transport,
+                url=url,
+                only_installed=True,
+            )
+            for row in rows:
+                status = "ok" if row.get("ok") else f"ERR ({row.get('error')})"
+                where_txt = row.get("path") or " ".join(row.get("command", ())) or row.get("id")
+                print(f"[{status}] {row.get('label', row.get('id'))} -> {where_txt}")
+            return 0 if all(r.get("ok", True) for r in rows) else 1
         try:
             res = clients.install_client(
                 args.client,
@@ -247,7 +281,7 @@ def _config(args: argparse.Namespace) -> int:
         else:
             print(f"{title} already up to date in {res['path']}")
         return 0
-    names = [args.client] if args.client else list(clients.CLIENTS)
+    names = list(clients.CLIENTS) if args.client in (None, "all") else [args.client]
     for name in names:
         where, text = clients.snippet(
             name, args.source, not args.no_audio, transport=transport, url=url
@@ -256,9 +290,54 @@ def _config(args: argparse.Namespace) -> int:
     return 0
 
 
+def _onboard(args: argparse.Namespace) -> int:
+    from fl_mcp import install
+
+    res = install.onboard(
+        fl_dir=getattr(args, "fl_dir", None),
+        notes_dir=getattr(args, "notes_dir", None),
+        auto_install_midi=bool(getattr(args, "install_midi", False)),
+        configure_midi=not bool(getattr(args, "no_fl_midi", False)),
+        client=getattr(args, "client", "all") or "all",
+        transport=getattr(args, "transport", "http") or "http",
+        source=getattr(args, "source", "auto") or "auto",
+        start_service=not bool(getattr(args, "no_service", False)),
+        autostart_service=bool(getattr(args, "autostart", False)),
+        desktop_mode=getattr(args, "desktop", None),
+        prewarm=bool(getattr(args, "prewarm", False)),
+    )
+    if getattr(args, "json", False):
+        print(json.dumps(res, indent=2, ensure_ascii=False, default=str))
+        return 0 if res.get("ok") else 1
+    for name, step in (res.get("steps") or {}).items():
+        if isinstance(step, dict):
+            ok = bool(step.get("ok", True))
+            detail = step.get("error") or (
+                f"{len(step.get('files', []))} files" if "files" in step else ""
+            )
+            if not detail and "mcp_url" in step:
+                detail = str(step["mcp_url"])
+            elif not detail and "port_found" in step:
+                detail = "port ok" if step["port_found"] else "port missing"
+            elif not detail and "updated" in step:
+                detail = f"configured {len(step['updated'])} FL version(s)"
+            print(f"[{'ok' if ok else '!!'}] {name:<13} {detail}".rstrip())
+    diag = res.get("fl_diagnostics") or {}
+    if diag.get("issues"):
+        print("\nRemaining FL Studio MIDI steps:")
+        for issue in diag["issues"]:
+            print(f"  - {issue}")
+    else:
+        print("\nFL Studio MIDI bindings look ready. Run `fl-mcp doctor` or open FL Studio.")
+    return 0 if res.get("ok") else 1
+
+
 def _setup(args: argparse.Namespace) -> int:
     from fl_mcp import clients, desk, install, paths, service_daemon
     from fl_mcp.bridge import Bridge, FLError, match_port
+
+    if getattr(args, "auto", False):
+        return _onboard(args)
 
     transport = getattr(args, "transport", "stdio") or "stdio"
     url = getattr(args, "url", None)
@@ -461,6 +540,12 @@ def clients_names() -> list[str]:
     return list(clients.CLIENTS)
 
 
+def clients_sources() -> list[str]:
+    from fl_mcp import clients
+
+    return list(clients.SOURCES)
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="fl-mcp", description="MCP server for FL Studio.")
     sub = parser.add_subparsers(dest="cmd")
@@ -470,6 +555,11 @@ def main(argv: list[str] | None = None) -> None:
     )
     serve_p.add_argument("--host", default="127.0.0.1")
     serve_p.add_argument("--port", type=int, default=8765)
+    serve_p.add_argument(
+        "--profile",
+        choices=["full", "compact", "produce", "mix", "read-only"],
+        help="tool profile preset (sets FL_MCP_PROFILE)",
+    )
     inst = sub.add_parser("install", help="copy the scripts into FL Studio's user data folder")
     inst.add_argument("--fl-dir", help="FL Studio user data folder (contains Settings)")
     inst.add_argument("--notes-dir", help="folder shared with the piano roll script")
@@ -499,8 +589,8 @@ def main(argv: list[str] | None = None) -> None:
     conf = sub.add_parser(
         "config", help="print or write the config that registers this server with a client"
     )
-    conf.add_argument("client", nargs="?", choices=sorted(clients_names()))
-    conf.add_argument("--source", choices=["pypi", "git", "local"], default="pypi")
+    conf.add_argument("client", nargs="?", choices=[*sorted(clients_names()), "all"])
+    conf.add_argument("--source", choices=clients_sources(), default="pypi")
     conf.add_argument("--no-audio", action="store_true", help="leave out the audio extra")
     conf.add_argument(
         "--write", action="store_true", help="write the registration directly to the client config"
@@ -521,8 +611,10 @@ def main(argv: list[str] | None = None) -> None:
     setup = sub.add_parser("setup", help="install the scripts, check MIDI and show what is left")
     setup.add_argument("--fl-dir", help="FL Studio user data folder (contains Settings)")
     setup.add_argument("--notes-dir", help="folder shared with the piano roll script")
-    setup.add_argument("--client", choices=sorted(clients_names()), default="claude-desktop")
-    setup.add_argument("--source", choices=["pypi", "git", "local"], default="pypi")
+    setup.add_argument(
+        "--client", choices=[*sorted(clients_names()), "all"], default="claude-desktop"
+    )
+    setup.add_argument("--source", choices=clients_sources(), default="pypi")
     setup.add_argument("--no-audio", action="store_true", help="leave out the audio extra")
     setup.add_argument(
         "--transport", choices=["stdio", "http"], default="stdio", help="client transport mode"
@@ -539,12 +631,43 @@ def main(argv: list[str] | None = None) -> None:
         help="write the MCP registration directly to --client config",
     )
     setup.add_argument(
+        "--auto",
+        action="store_true",
+        help="run full autonomous onboarding (same as `fl-mcp onboard`)",
+    )
+    setup.add_argument("--json", action="store_true", help="output JSON report when using --auto")
+    setup.add_argument(
         "--desktop",
         nargs="?",
         const="polite",
         choices=["stealth", "polite", "foreground"],
         help="also enable desktop control (default mode: polite)",
     )
+    onb = sub.add_parser(
+        "onboard", help="autonomous one-shot setup: scripts, virtual MIDI, FL F10, daemon, clients"
+    )
+    onb.add_argument("--fl-dir", help="FL Studio user data folder (contains Settings)")
+    onb.add_argument("--notes-dir", help="folder shared with the piano roll script")
+    onb.add_argument("--client", choices=[*sorted(clients_names()), "all"], default="all")
+    onb.add_argument("--source", choices=clients_sources(), default="auto")
+    onb.add_argument("--transport", choices=["stdio", "http"], default="http")
+    onb.add_argument(
+        "--install-midi",
+        action="store_true",
+        help="auto-install loopMIDI via winget on Windows if missing",
+    )
+    onb.add_argument("--no-fl-midi", action="store_true", help="skip FL F10 registry pairing")
+    onb.add_argument("--no-service", action="store_true", help="do not start background daemon")
+    onb.add_argument("--autostart", action="store_true", help="enable OS login autostart")
+    onb.add_argument(
+        "--desktop",
+        nargs="?",
+        const="polite",
+        choices=["stealth", "polite", "foreground"],
+        help="also enable desktop mode",
+    )
+    onb.add_argument("--prewarm", action="store_true", help="prewarm uvx/tool package cache")
+    onb.add_argument("--json", action="store_true", help="output structured JSON report")
     svc = sub.add_parser(
         "service", help="manage persistent background daemon (Studio UI + HTTP/SSE MCP + poller)"
     )
@@ -603,6 +726,25 @@ def main(argv: list[str] | None = None) -> None:
     traf.add_argument("--clear", action="store_true", help="clear recorded traffic log")
     tpl = sub.add_parser("templates", help="list auto-discovered FL Studio .flp templates")
     tpl.add_argument("--json", action="store_true", help="output JSON")
+    vlt = sub.add_parser(
+        "vault", help="manage offline AI models, SoundFonts, drum/IR packs, frameworks & rules"
+    )
+    vlt.add_argument(
+        "action",
+        nargs="?",
+        default="status",
+        choices=["status", "download", "rules"],
+        help="status (default), download assets/models, or install agent rulebooks",
+    )
+    vlt.add_argument(
+        "--target",
+        default="all",
+        choices=["all", "models", "soundfonts", "samples", "irs", "midi"],
+        help="download category target (default: all)",
+    )
+    vlt.add_argument("--workspace", help="target project directory for `vault rules`")
+    vlt.add_argument("--force", action="store_true", help="re-download even if present")
+    vlt.add_argument("--json", action="store_true", help="output structured JSON")
     args = parser.parse_args(argv)
 
     logging.basicConfig(
@@ -625,6 +767,8 @@ def main(argv: list[str] | None = None) -> None:
         raise SystemExit(_config(args))
     elif args.cmd == "setup":
         raise SystemExit(_setup(args))
+    elif args.cmd == "onboard":
+        raise SystemExit(_onboard(args))
     elif args.cmd == "dashboard":
         from fl_mcp.dashboard import serve_dashboard
 
@@ -668,11 +812,55 @@ def main(argv: list[str] | None = None) -> None:
         raise SystemExit(_traffic(args))
     elif args.cmd == "templates":
         raise SystemExit(_templates(args))
+    elif args.cmd == "vault":
+        from fl_mcp import vault
+
+        if args.action == "download":
+            res = vault.download(target=args.target, force=args.force)
+            if args.json:
+                print(json.dumps(res, indent=2, ensure_ascii=False))
+            else:
+                print(
+                    f"Vault download ({args.target}): downloaded={len(res['downloaded'])}, "
+                    f"skipped={len(res['skipped'])}, errors={len(res['errors'])}"
+                )
+            raise SystemExit(0 if res["ok"] else 1)
+        if args.action == "rules":
+            res = vault.install_rules(workspace=args.workspace)
+            if args.json:
+                print(json.dumps(res, indent=2, ensure_ascii=False))
+            else:
+                for w in res["written"]:
+                    print(f"[{w['action']}] {w['target']}: {w['path']}")
+            raise SystemExit(0)
+        st = vault.status()
+        if args.json:
+            print(json.dumps(st, indent=2, ensure_ascii=False))
+        else:
+            s = st["summary"]
+            mb = round(s["total_vault_bytes"] / (1024 * 1024), 1)
+            print(
+                f"Vault ({mb} MB) | models={s['models_installed']}/{s['models_total']} | "
+                f"sf2={s['soundfonts_count']} | samples={s['samples_count']} | "
+                f"irs={s['irs_count']} | waveforms={s.get('waveforms_count', 0)} | "
+                f"midi={s['midi_count']} | pyscripts={s.get('pyscripts_count', 0)} | "
+                f"presets={s.get('presets_count', 0)} | scores={s.get('scores_count', 0)} | "
+                f"templates={s.get('templates_count', 0)} | scales={s.get('scales_count', 0)} | "
+                f"fonts={s['ui_fonts_count']} | "
+                f"frameworks={s['frameworks_installed']}/{s['frameworks_total']} | "
+                f"rules={s['rules_count']}"
+            )
+            for m in st["models"]:
+                tag = "OK" if m["installed"] else "MISSING"
+                print(f"  [model:{tag}] {m['filename']} ({m['bytes']} B) - {m['title']}")
+        raise SystemExit(0)
     elif args.cmd == "service":
         raise SystemExit(_service(args))
     elif args.cmd in ("login", "logout", "account"):
         raise SystemExit(_licence(args))
     elif args.cmd == "serve":
+        if getattr(args, "profile", None):
+            os.environ["FL_MCP_PROFILE"] = args.profile
         from fl_mcp.server import mcp, serve
 
         if args.transport == "stdio":
