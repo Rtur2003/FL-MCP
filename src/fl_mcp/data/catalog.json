@@ -1,0 +1,179 @@
+{
+  "version": "0.3.0",
+  "models": [
+    {
+      "id": "basic_pitch",
+      "filename": "basic_pitch.onnx",
+      "category": "models",
+      "title": "Spotify Basic Pitch (ICASSP 2022 NMP ONNX)",
+      "role": "Polyphonic & monophonic Audio-to-MIDI note/onset/contour transcription (22050 Hz, 43844-frame window, 88 piano pitches MIDI 21-108).",
+      "license": "Apache-2.0",
+      "bytes": 230444,
+      "sha256": "2c3c1d144bfa61ad236e92e169c13535c880469a12a047d4e73451f2c059a0ec",
+      "urls": [
+        "https://raw.githubusercontent.com/spotify/basic-pitch/main/basic_pitch/saved_models/icassp_2022/nmp.onnx"
+      ]
+    },
+    {
+      "id": "silero_vad",
+      "filename": "silero_vad.onnx",
+      "category": "models",
+      "title": "Silero Voice Activity Detector (ONNX)",
+      "role": "Neural vocal/speech activity gating (16 kHz / 8 kHz) for foreground vocal unmasking and stem silence rejection.",
+      "license": "MIT",
+      "bytes": 2327524,
+      "sha256": "1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3",
+      "urls": [
+        "https://github.com/snakers4/silero-vad/raw/master/src/silero_vad/data/silero_vad.onnx"
+      ]
+    }
+  ],
+  "soundfonts": [
+    {
+      "id": "timgm6mb",
+      "filename": "TimGM6mb.sf2",
+      "category": "soundfonts",
+      "title": "TimGM6mb General MIDI SoundFont",
+      "role": "Compact 6 MB General MIDI 128-program SoundFont bank for Fruity SoundFont Player & offline MIDI preview.",
+      "license": "GPL-2.0",
+      "bytes": 5969788,
+      "sha256": "c5378b62028c920cb11e4803327983fee2f2cdff5dc89c708e39da417e51c854",
+      "urls": [
+        "https://github.com/craffel/pretty_midi/raw/main/TimGM6mb.sf2",
+        "https://github.com/deepin-community/timgm6mb-soundfont/raw/master/TimGM6mb.sf2"
+      ]
+    },
+    {
+      "id": "fluidr3_gm",
+      "filename": "FluidR3_GM.sf2",
+      "category": "soundfonts",
+      "title": "FluidR3 GM Studio SoundFont (Frank Wen)",
+      "role": "Full 148 MB studio-grade General MIDI SoundFont bank covering orchestral, keys, bass, guitars, pads, and drum kits.",
+      "license": "MIT",
+      "bytes": 148398306,
+      "sha256": "74594e8f4250680adf590507a306655a299935343583256f3b722c48a1bc1cb0",
+      "urls": [
+        "https://github.com/pianobooster/fluid-soundfont/releases/download/v3.1/FluidR3_GM.sf2"
+      ]
+    }
+  ],
+  "sample_packs": [
+    {
+      "id": "dirt_808_909_synths",
+      "category": "samples",
+      "title": "Dirt-Samples Classic 808 / 909 / Moog / Synth Pack",
+      "role": "81 curated 16-bit/44.1kHz drum & synth one-shots (Dirt-808, 808bd, 808sd, 808oh, 808cy, 909, hh, sn, bass3, moog, pad, arpy).",
+      "license": "CC0-1.0 / Public Domain",
+      "repo_api": "https://api.github.com/repos/tidalcycles/Dirt-Samples/contents",
+      "folders": ["808", "808bd", "808sd", "808oh", "808cy", "909", "hh", "sn", "bass3", "moog", "pad", "arpy"]
+    },
+    {
+      "id": "oramics_vintage_drum_machines",
+      "category": "samples",
+      "title": "Oramics Vintage Drum Machines & Pearl Acoustic Kit",
+      "role": "Roland TR-909 (Detroit Neve/API & E-mu SP-1200), TR-808, TR-505, CompuRhythm CR-78, LinnDrum LM-2, Maestro MRK-2, and Pearl Master Studio acoustic drums.",
+      "license": "CC-BY / Public Domain",
+      "repo": "https://github.com/oramics/sampled"
+    }
+  ],
+  "ir_packs": [
+    {
+      "id": "zamaudio_studio_irs",
+      "category": "irs",
+      "title": "ZamAudio 48kHz Studio Hall, Plate & Room Impulse Responses",
+      "role": "18 calibrated 48 kHz mono, stereo, and true-stereo convolution reverb IRs (Hall, Plate, Room) for Fruity Convolver.",
+      "license": "GPL-2.0+",
+      "repo_api": "https://api.github.com/repos/zamaudio/impulses/contents"
+    },
+    {
+      "id": "emt140_voxengo_irs",
+      "category": "irs",
+      "title": "Greg Hopkins EMT-140 Plate & Voxengo Acoustic Space IRs",
+      "role": "53 hardware plate (EMT-140 bright/medium/dark) and acoustic hall/opera/sanctuary/cabinet impulse responses.",
+      "license": "Royalty-Free / CC-BY",
+      "repo": "https://github.com/oramics/sampled"
+    }
+  ],
+  "fl_resources": {
+    "pyscripts": {
+      "title": "FL Studio Piano Roll Scripts (.pyscript + flpianoroll.pyi)",
+      "role": "5 Native FL-MCP scripts (Euclidean, Trap Hat Roll, 808 Glide, Humanize, Chord Voicer) + 340+ community Piano Roll scripts.",
+      "repos": [
+        "https://github.com/flp-community-scripts/community-scripts",
+        "https://github.com/discokalle/FL-Studio-Piano-Roll-Scripts"
+      ]
+    },
+    "presets": {
+      "title": "Native FL Studio Patcher & Effect Presets (.fst)",
+      "role": "Custom Patcher, 3-Band Vocoder, Doom Compressor, Proxima Disperser, Microtonal Intonation & Piano Roll tracking .fst presets.",
+      "repos": [
+        "https://github.com/MysteryPancake/FL-Studio-Presets",
+        "https://github.com/Windows81/FL-Custom-Intonation",
+        "https://github.com/kisoqual/proxima"
+      ]
+    },
+    "scores": {
+      "title": "Binary FL Studio Score & Alt+Q Groove Quantization Library (.fsc)",
+      "role": "24 binary .fsc files: 12 genre harmonic scores + 12 hardware swing/groove/roll templates (MPC60, MPC3000, SP-1200, J-Dilla, 32nd Hat Rolls, Drill Grid)."
+    },
+    "templates": {
+      "title": "Multi-Channel FL Studio Project Templates (.flp)",
+      "role": "13 ready-to-build .flp project templates (12 genre-calibrated 12-channel sampler-ready templates + Patchstep 2022 template)."
+    },
+    "waveforms": {
+      "title": "Adventure Kid Single-Cycle Waveforms (AKWF-FREE .wav)",
+      "role": "130+ CC0 single-cycle 600-sample oscillator waveforms (TB-303, OB-Xd, FM, NES, C64, Blends, Strings, Winds) for 3x Osc, Sytrus, Harmor & DirectWave.",
+      "repo": "https://github.com/KristofferKarlAxelEkstrand/AKWF-FREE"
+    },
+    "scales": {
+      "title": "Scala Microtonal Scale Definitions (.scl)",
+      "role": "Microtonal and non-western tuning scales (.scl) for FL Studio custom intonation & synths.",
+      "repo": "https://github.com/Windows81/FL-Custom-Intonation"
+    }
+  },
+  "ui_assets": {
+    "fonts": [
+      "inter-400.woff2",
+      "inter-500.woff2",
+      "inter-600.woff2",
+      "inter-700.woff2",
+      "jetbrains-mono-400.woff2",
+      "jetbrains-mono-500.woff2",
+      "jetbrains-mono-600.woff2"
+    ],
+    "icons_sprite": "lucide-sprite.svg",
+    "hardware_graphics": [
+      "logo.svg",
+      "knob-ring.svg",
+      "studio-backdrop.webp",
+      "icon-256.png",
+      "icon-128.png",
+      "icon-64.png",
+      "favicon.png",
+      "icon.ico",
+      "icon.icns"
+    ]
+  },
+  "frameworks": [
+    {"module": "onnxruntime", "extra": "ai", "role": "ONNX neural inference engine (Basic Pitch AMT + Silero VAD)"},
+    {"module": "pedalboard", "extra": "audio", "role": "Spotify C++ studio DSP effects & VST3/AU audio processing"},
+    {"module": "pretty_midi", "extra": "ai", "role": "Multi-track MIDI engraving, tempo/chord analysis & SF2 rendering"},
+    {"module": "pyloudnorm", "extra": "audio", "role": "ITU-R BS.1770-4 loudness normalization reference meter"},
+    {"module": "soxr", "extra": "audio", "role": "High-precision SIMD sample-rate conversion (16kHz/22.05kHz/48kHz)"},
+    {"module": "webview", "extra": "app", "role": "Native OS WebView2 / WKWebView / WebKitGTK desktop window host"},
+    {"module": "PIL", "extra": "app", "role": "Pillow raster graphics & desktop screenshot processing"},
+    {"module": "numpy", "extra": "audio", "role": "Vectorized audio buffer, FFT & matrix math"},
+    {"module": "scipy", "extra": "audio", "role": "Welch PSD, K-weighting biquads & polyphase true-peak oversampling"},
+    {"module": "soundfile", "extra": "audio", "role": "libsndfile WAV/FLAC/OGG lossless audio I/O"},
+    {"module": "fastapi", "extra": "service", "role": "Persistent HTTP/SSE daemon & REST studio server"},
+    {"module": "uvicorn", "extra": "service", "role": "ASGI server for persistent background daemon"}
+  ],
+  "rules": [
+    {"id": "production", "file": "production.md", "title": "Production & Arrangement Rulebook"},
+    {"id": "mixing", "file": "mixing.md", "title": "Mixing, Gain-Staging & Spectral Unmasking Rulebook"},
+    {"id": "mastering", "file": "mastering.md", "title": "Mastering & Loudness Verification Rulebook"},
+    {"id": "ui_design", "file": "ui_design.md", "title": "Hardware-Calibrated Dark Studio UI & Visual Rulebook"},
+    {"id": "fl_safety", "file": "fl_safety.md", "title": "Bridge, Binary & Desktop Safety Rulebook"},
+    {"id": "fl_formulas", "file": "fl_formulas.md", "title": "FL Studio Formula Controller, Patcher, WaveShaper & Piano Roll Scripting Rulebook"}
+  ]
+}
