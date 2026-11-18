@@ -230,6 +230,14 @@ class Run:
         age = (time.time() - state.stat().st_mtime) / 3600
         return f"installed; last run {age:.1f} h ago"
 
+    def fl_midi(self) -> str:
+        diag = install.diagnose_fl_midi()
+        if not diag.get("configured"):
+            issues = "; ".join(diag.get("issues") or []) or "not configured"
+            raise Skip(issues)
+        key = diag.get("fl_key") or diag.get("platform") or "ok"
+        return f"F10 MIDI binding verified ({key})"
+
     def library_index(self) -> str:
         try:
             index = library.load()
@@ -279,6 +287,7 @@ def run(call: Call, deep: str | None = None) -> dict[str, Any]:
         if deep:
             t.check("browser load + undo", lambda: t.deep_load(deep))
     t.check("piano roll script", t.piano_roll)
+    t.check("FL MIDI settings", t.fl_midi)
     t.check("library", t.library_index)
     t.check("audio analysis", t.audio_tools)
     t.check("command-line render", t.renderer)
