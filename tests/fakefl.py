@@ -46,6 +46,24 @@ MODULES = [
 # (paramIndex, index, slotIndex=-1, useGlobalIndex=False).
 plugins.getParamValueString.__signature__ = inspect.signature(plugins.getParamValue)
 
+# fl-studio-api-stubs v37.0.1 omits the middle `value: int = -1` arg on soloChannel;
+# real FL Studio (verified on API v30+ through v45) is (index, value=-1, useGlobalIndex=False).
+channels.soloChannel.__signature__ = inspect.Signature(
+    [
+        inspect.Parameter("index", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=int),
+        inspect.Parameter(
+            "value", inspect.Parameter.POSITIONAL_OR_KEYWORD, default=-1, annotation=int
+        ),
+        inspect.Parameter(
+            "useGlobalIndex",
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            default=False,
+            annotation=bool,
+        ),
+    ],
+    return_annotation=None,
+)
+
 
 def _checked(stub, impl, label):
     sig = inspect.signature(stub)
@@ -123,6 +141,12 @@ class FakeFL:
         self.out_voices = {}
         self.semitones = {}
         self.focused_editor = None
+        self.forwarded_midi = []
+        self.linked_params = {}
+        self.last_tweaked_eid = midi.REC_Chan_Mute
+        self.selection_range = None
+        self.clipboard_range = None
+        self.pastes = []
 
     @staticmethod
     def _chan(name, kind, plugin=""):
@@ -211,6 +235,20 @@ class FakeFL:
             self.saves += 1
         elif command == midi.FPT_SaveNew:
             self.saves += 10
+        elif command in (
+            midi.FPT_Cut,
+            midi.FPT_Copy,
+            midi.FPT_Paste,
+            midi.FPT_Insert,
+            midi.FPT_Delete,
+        ):
+            self.keys.append(command)
+            if command == midi.FPT_Copy and self.selection_range is not None:
+                self.clipboard_range = self.selection_range
+            elif command == midi.FPT_Cut and self.selection_range is not None:
+                self.clipboard_range = self.selection_range
+            elif command == midi.FPT_Paste and self.clipboard_range is not None:
+                self.pastes.append((self.ticks, self.clipboard_range))
         elif (
             command in (midi.FPT_Menu, midi.FPT_ItemMenu) or midi.FPT_F1 <= command <= midi.FPT_F12
         ):
@@ -484,6 +522,22 @@ class FakeFL:
             return "Off" if st["muted"] else "On"
         return f"{round(st['mix'] * 100)}%"
 
+    def device_findEventID(self, controlId, flags=0):
+        return self.linked_params.get((controlId, flags), -1)
+
+    def device_linkToLastTweaked(
+        self, controlIndex, channel, global_link=False, eventId=2147483647
+    ):
+        eid = self.last_tweaked_eid if eventId == 2147483647 else eventId
+        self.linked_params[(controlIndex, 1 if global_link else 0)] = eid
+        return 0
+
+    def device_getLinkedParamName(self, eventID):
+        return f"Event {eventID}"
+
+    def device_forwardMIDICC(self, message, mode=1):
+        self.forwarded_midi.append((message, mode))
+
     # ---- mixer
 
     def mixer_getCurrentTempo(self, asInt):
@@ -642,9 +696,9 @@ class FakeFL:
     def channels_isChannelSolo(self, index, useGlobalIndex):
         return bool(self._ch(index, useGlobalIndex)["solo"])
 
-    def channels_soloChannel(self, index, useGlobalIndex):
+    def channels_soloChannel(self, index, value=-1, useGlobalIndex=False):
         c = self._ch(index, useGlobalIndex)
-        c["solo"] = 1 - c["solo"]
+        c["solo"] = 1 - c["solo"] if value == -1 else int(bool(value))
 
     def channels_getTargetFxTrack(self, index, useGlobalIndex):
         return self._ch(index, useGlobalIndex)["fx"]
