@@ -279,6 +279,9 @@ def sample_roots() -> list[Path]:
         ):
             roots.append(install / rel)
     roots.append(paths.fl_user_dir() / "Presets" / "Samples")
+    roots.append(paths.assets_dir() / "samples")
+    roots.append(paths.assets_dir() / "irs")
+    roots.append(paths.assets_dir() / "waveforms")
     seen, out = set(), []
     for r in roots:
         if r.is_dir() and r.resolve() not in seen:
@@ -322,14 +325,19 @@ def _scan_plugins_and_presets() -> tuple[list[dict[str, Any]], list[dict[str, An
                 if key not in seen_presets:
                     seen_presets.add(key)
                     presets.append({**entry, "path": fp})
-    user_presets = paths.fl_user_dir() / "Presets" / "Plugin presets"
-    if user_presets.is_dir():
-        for f in user_presets.rglob("*.fst"):
-            fp = str(f)
-            key = fp.lower()
-            if key not in seen_presets:
-                seen_presets.add(key)
-                presets.append({**_classify_plugin_path(f, user_presets, "preset"), "path": fp})
+    for extra_presets in (
+        paths.fl_user_dir() / "Presets" / "Plugin presets",
+        paths.assets_dir() / "presets",
+    ):
+        if extra_presets.is_dir():
+            for f in extra_presets.rglob("*.fst"):
+                fp = str(f)
+                key = fp.lower()
+                if key not in seen_presets:
+                    seen_presets.add(key)
+                    presets.append(
+                        {**_classify_plugin_path(f, extra_presets, "preset"), "path": fp}
+                    )
     seen, uniq = set(), []
     for p in out:
         key = (p["name"].lower(), p["kind"])
@@ -347,11 +355,15 @@ def _plugins() -> list[dict[str, Any]]:
 
 
 def _soundfont_roots(samples: list[Path]) -> list[Path]:
-    extra = paths.fl_user_dir() / "Presets" / "SoundFonts"
     seen = {r.resolve() for r in samples}
     out = list(samples)
-    if extra.is_dir() and extra.resolve() not in seen:
-        out.append(extra)
+    for extra in (
+        paths.fl_user_dir() / "Presets" / "SoundFonts",
+        paths.assets_dir() / "soundfonts",
+    ):
+        if extra.is_dir() and extra.resolve() not in seen:
+            seen.add(extra.resolve())
+            out.append(extra)
     return out
 
 
@@ -481,16 +493,21 @@ def find(
     limit: int = 10,
     measure: int = 40,
 ) -> list[dict[str, Any]]:
-    """Best-matching samples: name first, then measured features of the top candidates."""
+    """Best-matching samples: name first, then measured features of the top candidates.
+
+    ``role`` may be a comma-separated list (e.g. ``'kick,snare,hat'``) for multi-role queries.
+    """
     index = load()
+    roles = {r.strip().lower() for r in (role or "").split(",") if r.strip()}
     words = [w for q in (query or "").lower().split() for w in [q]] + GENRE_WORDS.get(
         genre or "", []
     )
     scored = []
     for s in index["samples"]:
-        if role and s["r"] != role:
-            continue
-        if not role and s["r"] in ("loop", "other"):
+        if roles:
+            if s["r"] not in roles:
+                continue
+        elif s["r"] in ("loop", "other"):
             continue
         hay = " ".join(tokens(s["p"]))
         hits = sum(1 for w in words if w in hay)
@@ -504,6 +521,58 @@ def find(
     _save_cache(cache)
     out.sort(key=lambda r: -r["score"])
     return out[:limit]
+
+
+def find_similar(
+    path: str | Path,
+    role: str | None = None,
+    limit: int = 10,
+    measure: int = 80,
+) -> dict[str, Any]:
+    """Rank indexed samples by weighted acoustic distance from a seed sample WAV."""
+    seed_path = Path(path).expanduser()
+    if not seed_path.is_file():
+        raise ValueError(f"seed sample not found: {path}")
+    seed_feat = analyze(seed_path)
+    if seed_feat is None:
+        raise ValueError(f"could not measure audio features from '{seed_path.name}' (needs .wav)")
+    index = load()
+    roles = (
+        {r.strip().lower() for r in role.split(",") if r.strip()}
+        if role
+        else ({classify_name(seed_path)} - {"other"})
+    )
+    cache = _features_cache()
+    pool = [
+        s
+        for s in index["samples"]
+        if (not roles or s["r"] in roles) and Path(s["p"]).resolve() != seed_path.resolve()
+    ]
+    if not pool and roles:
+        pool = [
+            s
+            for s in index["samples"]
+            if s["r"] not in ("loop", "other") and Path(s["p"]).resolve() != seed_path.resolve()
+        ]
+    scales = (
+        ("dur", max(0.08, seed_feat["dur"]), 1.2),
+        ("decay_ms", max(25.0, float(seed_feat["decay_ms"])), 1.4),
+        ("zcr_hz", max(200.0, float(seed_feat["zcr_hz"])), 1.3),
+        ("low", 0.25, 1.5),
+        ("rms_db", 10.0, 0.4),
+    )
+    ranked: list[dict[str, Any]] = []
+    for s in pool[: max(measure, limit * 4)]:
+        f = features(s["p"], cache)
+        if not f:
+            continue
+        dist_sq = sum(w * (((f[k] - seed_feat[k]) / scale) ** 2) for k, scale, w in scales)
+        dist = dist_sq**0.5
+        sim = round(1.0 / (1.0 + dist), 3)
+        ranked.append({**s, "similarity": sim, "distance": round(dist, 3), "f": f})
+    _save_cache(cache)
+    ranked.sort(key=lambda r: (-r["similarity"], r["distance"]))
+    return {"seed": str(seed_path), "seed_features": seed_feat, "matches": ranked[:limit]}
 
 
 def pick_kit(
