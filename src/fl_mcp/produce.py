@@ -472,10 +472,172 @@ def inspect_flp(template: str | Path) -> dict[str, Any]:
             "param_bytes": len(info["params"]),
             "sf2": info["sf2"],
         }
+    if cand.suffix.lower() == ".fsc":
+        if not cand.is_file():
+            raise ValueError("score must be an existing .fsc file")
+        score = flp.read_fsc(cand)
+        return {
+            "kind": "score",
+            "file": str(cand),
+            "ppq": score["ppq"],
+            "count": len(score["notes"]),
+            "notes": score["notes"][:80],
+        }
+    if cand.suffix.lower() == ".zip" and cand.is_file():
+        project = flp.Flp.open(cand)
+        summary = project.summary()
+        summary["kind"] = "zip"
+        summary["template"] = str(cand)
+        summary["roles"], summary["unmatched"] = detect_roles([c[1] for c in summary["channels"]])
+        summary["verify"] = project.verify()
+        return summary
     path = _template(raw)
-    project = flp.Flp.parse(path.read_bytes())
+    project = flp.Flp.open(path)
     summary = project.summary()
     summary["template"] = str(path)
     summary["roles"], summary["unmatched"] = detect_roles([c[1] for c in summary["channels"]])
     summary["verify"] = project.verify()
     return summary
+
+
+def arrange_flp(
+    template: str | Path,
+    length: str = "short",
+    replace_playlist: bool = False,
+) -> dict[str, Any]:
+    """Expand an existing .flp/.zip loop into a multi-section arrangement, keeping patterns."""
+    import struct
+    import time
+
+    arrangements = {
+        "sketch": [("Intro", 4), ("Verse", 4), ("Chorus", 8), ("Outro", 4)],
+        "short": [
+            ("Intro", 4),
+            ("Verse A", 8),
+            ("Chorus A", 8),
+            ("Breakdown", 4),
+            ("Chorus B", 8),
+            ("Outro", 4),
+        ],
+        "full": [
+            ("Intro", 8),
+            ("Verse A", 8),
+            ("Pre", 4),
+            ("Chorus A", 8),
+            ("Verse B", 8),
+            ("Breakdown", 8),
+            ("Chorus B", 8),
+            ("Outro", 8),
+        ],
+    }
+
+    src = Path(str(template)).expanduser()
+    if not src.is_file():
+        src = _template(str(template))
+    project = flp.Flp.open(src)
+    ppq = project.ppq
+    bar_ticks = 4 * ppq
+    chans = project.channels()
+    chan_roles, _ = detect_roles([c.name for c in chans])
+    iid_to_role = {chans[idx].iid: role for role, idx in chan_roles.items()}
+
+    pats = project.patterns()
+    pat_blocks = project._pattern_blocks()
+    non_empty = {pid: info for pid, info in pats.items() if info["notes"] > 0}
+    if not non_empty:
+        raise ValueError("source project has no pattern notes to arrange")
+
+    pat_roles: dict[int, set[str]] = {}
+    pat_lengths: dict[int, int] = {}
+    for pid, info in non_empty.items():
+        roles_here: set[str] = set()
+        max_end = bar_ticks
+        for s, e in pat_blocks[pid]["notes"]:
+            for ev in project.events[s:e]:
+                if ev.id != flp.NOTES:
+                    continue
+                for off in range(0, len(ev.data) - flp.NOTE.size + 1, flp.NOTE.size):
+                    pos, _fl, ch_iid, nlen, _k, _g, *_ = flp.NOTE.unpack_from(ev.data, off)
+                    max_end = max(max_end, pos + nlen)
+                    if ch_iid in iid_to_role:
+                        roles_here.add(iid_to_role[ch_iid])
+        if not roles_here and info.get("name"):
+            guessed, _ = detect_roles([info["name"]])
+            roles_here = set(guessed)
+        pat_roles[pid] = roles_here
+        pat_lengths[pid] = max_end
+
+    full_pids = sorted(non_empty)
+    drum_pids = [
+        p for p in full_pids if pat_roles[p] & {"kick", "snare", "clap", "hat", "ohat", "perc"}
+    ]
+    bass_pids = [p for p in full_pids if "bass" in pat_roles[p]]
+    melodic_pids = [
+        p
+        for p in full_pids
+        if (pat_roles[p] & {"chords", "pad", "lead", "arp", "vocal"})
+        or (p not in drum_pids and p not in bass_pids)
+    ]
+    if not melodic_pids:
+        melodic_pids = full_pids
+
+    mode_key = length if length in arrangements else "short"
+    form = arrangements[mode_key]
+    clips: list[tuple[int, int, int, int]] = []
+    markers: list[tuple[int, str]] = []
+    bar_cursor = 0
+
+    for sec_name, sec_bars in form:
+        markers.append((bar_cursor * bar_ticks, sec_name))
+        low = sec_name.lower()
+        if "intro" in low or "outro" in low or "break" in low:
+            use = melodic_pids
+        elif "verse" in low or "pre" in low:
+            use = list(dict.fromkeys([*melodic_pids, *bass_pids]))
+        else:
+            use = full_pids
+        for lane, pid in enumerate(use[:12], start=1):
+            step_bars = max(1, (pat_lengths[pid] + bar_ticks - 1) // bar_ticks)
+            off = 0
+            while off < sec_bars:
+                span_bars = min(step_bars, sec_bars - off)
+                clips.append(((bar_cursor + off) * bar_ticks, pid, span_bars * bar_ticks, lane))
+                off += step_bars
+        bar_cursor += sec_bars
+
+    playlist_mode = "replace" if replace_playlist else "replace"
+    written = project.set_playlist(clips, playlist_mode, synthesize=True)
+    _, arr_hi = project._arrangement_bounds(0)
+    insert_at = next(
+        (i + 1 for i in range(arr_hi) if project.events[i].id == flp.PLAYLIST),
+        arr_hi,
+    )
+    existing_marks = project.markers(0)
+    if existing_marks:
+        insert_at = max(m["idx_name"] or m["idx_pos"] for m in existing_marks) + 1
+    for tick, title in markers:
+        if tick == 0 and any(m["position"] == 0 for m in existing_marks):
+            continue
+        block = [
+            flp.Event(flp.TIME_MARKER_POS, struct.pack("<I", tick)),
+            flp.Event(33, b"\x04"),
+            flp.Event(34, b"\x04"),
+            flp.Event(flp.TIME_MARKER_NAME, flp._utf16(title)),
+        ]
+        project.events[insert_at:insert_at] = block
+        insert_at += len(block)
+    project.set_end_marker(bar_cursor * bar_ticks, create=True)
+    slug = re.sub(r"[^a-z0-9_-]+", "-", src.stem.lower()).strip("-") or "project"
+    out_path = paths.data_dir() / "out" / f"arranged-{slug}-{int(time.time())}.flp"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_bytes(project.dumps())
+    ver = flp.Flp.parse(out_path.read_bytes()).verify()
+    return {
+        "file": str(out_path),
+        "source": str(src),
+        "bars": bar_cursor,
+        "sections": [[name, bars] for name, bars in form],
+        "preserved_patterns": full_pids,
+        "clips": written,
+        "verify": ver,
+    }
