@@ -20,21 +20,21 @@ Confidence: **verified** = tested against real FL files or a reference implement
 | Presets: list names, load by name, step | API | verified (FL 2025) | Depends on the plugin reporting presets to the API |
 | Plugin chains by role: check order, set compressor/limiter/reverb/delay values by meaning | API | verified (FL 2025) | Works on plugins already loaded |
 | Drum patterns in the Channel Rack | API | verified (FL 2025) | Step sequencer: steps, velocity, pitch |
-| Melodies, chords, bass lines | File + UI | verified (FL 2025) | Dialogless piano roll script in `Settings/Piano roll scripts`; `fl_desk macro=script` repeats it with FL's shortcut and verifies |
-| Whole song as notes | File | verified | Standard MIDI File, a track per part, section markers |
-| Whole song as a project, with samples | File | verified | `.flp` authoring on a template: channels, samplers, `.fst` presets, `.sf2` SoundFonts, playlist clips, `end` markers, and `verify()` offline checks; checked against FL 20.8.4, FL 2025 `.flp`/`.fst`, and an independent parser |
+| Melodies, chords, bass lines | File + UI | verified (FL 2025) | Dialogless piano roll script in `Settings/Piano roll scripts` (`inbox.json` + `_BAKED` fallback for sealed FL builds); supports `bar\|beat` timing, `transform=` DSL (`humanize`, `swing`, `transpose`, `snap`, `legato`, `ramp`, `ratchet`), content-digest idempotency, and WinRT OCR auto-arming |
+| Whole song as notes | File | verified | Standard MIDI File + `.fsc` score read/write (`FSC_FORMAT = 16`), a track per part, section markers |
+| Whole song / expand existing loop | File | verified | `.flp` & `.zip` authoring/arrangement (`flp`, `arrange`): channels, samplers, `.fst` presets, `.sf2` SoundFonts, contrasting multi-section expansion keeping user patterns untouched, playlist clips (`FL 20..26+` 32/60/80/88-byte records), up to 500 inserts, `end` markers, and `verify()` offline checks |
 | Open or save a project | Desktop | verified (FL 2025) | `fl_desk macro=open` / `save` (waits for idle and restores focus in `polite` mode) |
-| Create a channel, load a plugin or sample | UI, then Desktop | verified (FL 2025) | `fl_ui action=load` confirms `TQuickPopupMenuWindow` via `PostMessageW`/client coords without moving the cursor (cursor fallback only in `foreground` mode); `fl-mcp selftest --deep` tests it on your FL |
+| Create a channel, load a plugin or sample | UI, then Desktop | verified (FL 2025) | `fl_ui action=load` confirms `TQuickPopupMenuWindow` via `PostMessageW`/client coords on Windows without moving the cursor, or JXA `Add` menu automation on macOS; `fl-mcp selftest --deep` tests it on your FL |
 | Place playlist clips | File | verified | In a written `.flp` (auto-updates arrangement `end` marker) |
 | Window state, key presses, browser walking | UI | verified (FL 2025) | Uses `ui.navigateBrowser` and friends (`probe` confirms 13/13 on FL 2025 API 40) |
-| Render or export audio | Command line, Desktop | verified (FL 2025) | `FL64.exe /R /E<fmt> /F... /O...` in an isolated hidden Win32 desktop when `project=` is given on Windows, or `fl_desk macro=export` in `polite`/`foreground` for the open project |
-| Loudness (LUFS), loudness range, true peak, crest, clipping, DC | File | verified | BS.1770-4 / EBU 3342 on the rendered file |
+| Render or export audio, MIDI, ZIP | Command line, Desktop | verified (FL 2025) | `FL64.exe /R /E<fmt>` / `/M` (MIDI) / `/Z` (Zipped Loop Package) in an isolated hidden Win32 desktop when `project=` is given on Windows, or `fl_desk macro=export` in `polite`/`foreground` for the open project |
+| Loudness, transcription & vocal masking | File | verified / tested | BS.1770-4 / EBU 3342 loudness + active-region RMS; `transcribe` (BPM, Krumhansl key, F0 melody); `masking` (STFT vocal vs bed collision + EQ cuts) |
 | Spectrum, stereo width, correlation, mono loss, low-end width | File | tested | 7 bands; correlation and mid/side from the channels |
 | Compare with a reference track | File | tested | Band differences with advice |
 | Master to a loudness target | API + Desktop | verified (FL 2025) | `fl_audio master`: export, measure, move the limiter's gain by the error, repeat (3 adjustments at most) |
-| Level balance by measurement | API | verified (FL 2025) | `fl_mix`: plays, reads peaks, moves faders; needs audible playback |
+| Level balance, auto-fix & bus routing | API | verified (FL 2025) | `fl_mix balance`, `fix` (role pan, HPF/mud EQ, clip gain), `bus` (send routing + levels); chunked >64-track peak metering |
 | Problem finding: clipping, headroom, routing, pan, missing plugins | API | verified (FL 2025) | `fl_mix doctor`, worst first |
-| Find sounds: sample packs, installed plugins; rank by role and by measured sound; pick a coherent kit | File | verified (FL 2025) | `fl_library`; samples measured for length, decay, brightness, low end |
+| Find sounds & similar samples | File | verified (FL 2025) | `fl_library`: multi-role CSV search, weighted Euclidean audio similarity (`similar`), genre drum kits, presets/SoundFonts |
 | See the screen, click, type | Desktop | verified (Windows 11) / tested (macOS) | `stealth` (`PrintWindow` + `PostMessage`, zero focus steal), `polite` (background first, idle gate + restore window), and `foreground`; opt-in |
 | Recording by MIDI, plugin sidechain source, automation clips | not done | | Possible through the desktop tier case by case; no tool of its own yet |
 
