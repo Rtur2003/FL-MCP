@@ -580,3 +580,206 @@ class WindowsBackend(Backend):
             self._send(INPUT(type=INPUT_MOUSE, mi=wheel))
         elif kind != "move":
             raise DeskError(f"unknown mouse action '{kind}'")
+
+    def ocr_window(self, win: Win, max_width: int = 1600) -> list[dict[str, Any]]:
+        """Run built-in Windows WinRT OCR on a window's PrintWindow capture."""
+        if not win or not win.handle:
+            return []
+        cap = self.capture_window(win, max_width, allow_unminimize=False)
+        if cap is None:
+            return []
+        png_bytes, cap_w, _cap_h = cap
+        scale = (cap_w / win.rect[2]) if win.rect[2] > 0 else 1.0
+        inv = (1.0 / scale) if scale > 0 else 1.0
+        words = ocr_png(png_bytes)
+        out: list[dict[str, Any]] = []
+        for item in words:
+            out.append(
+                {
+                    **item,
+                    "x": round(item["x"] * inv),
+                    "y": round(item["y"] * inv),
+                    "w": round(item["w"] * inv),
+                    "h": round(item["h"] * inv),
+                }
+            )
+        return out
+
+    def arm_piano_roll_script(self, script_name: str = "FL MCP", win: Win | None = None) -> bool:
+        """Open Piano Roll popup menu and use WinRT OCR to trigger Scripting > FL MCP."""
+        from fl_mcp import popupkeys
+
+        target = win
+        if target is None:
+            fl_wins = [
+                w
+                for w in self.windows()
+                if "FL" in (w.process or w.title) and "piano roll" in w.title.lower()
+            ]
+            target = fl_wins[0] if fl_wins else None
+        if target is None or not target.handle:
+            return False
+        self.focus(target)
+        time.sleep(0.08)
+
+        # Probe the Piano Roll top toolbar menu icons ([▼] and wrench [🔧]) right under titlebar.
+        x0, y0, width, height = target.rect
+        if width < 200 or height < 120:
+            return False
+        probes = [
+            (x0 + 22, y0 + 44),
+            (x0 + 48, y0 + 44),
+            (x0 + 20, y0 + 54),
+            (x0 + 46, y0 + 54),
+        ]
+        for px, py in probes:
+            popupkeys.dismiss()
+            self.mouse("click", px, py)
+            hwnd = popupkeys.wait_window(0.55)
+            if not hwnd:
+                continue
+            menu_win = self._win(hwnd)
+            words = self.ocr_window(menu_win)
+            lines_low = [w.get("line", w["text"]).lower() for w in words]
+            hit_direct = _find_ocr_target(words, script_name)
+            if hit_direct is not None:
+                self.mouse(
+                    "click", menu_win.rect[0] + hit_direct[0], menu_win.rect[1] + hit_direct[1]
+                )
+                time.sleep(0.12)
+                popupkeys.dismiss()
+                return True
+            if not any(
+                k in line for line in lines_low for k in ("scripting", "tools", "file", "edit")
+            ):
+                popupkeys.dismiss()
+                continue
+            hit_tools = _find_ocr_target(words, "tools")
+            if hit_tools is not None and _find_ocr_target(words, "scripting") is None:
+                self.mouse("move", menu_win.rect[0] + hit_tools[0], menu_win.rect[1] + hit_tools[1])
+                time.sleep(0.35)
+                hwnd = popupkeys.window() or hwnd
+                menu_win = self._win(hwnd)
+                words = self.ocr_window(menu_win)
+            hit_script = _find_ocr_target(words, "scripting")
+            if hit_script is None:
+                popupkeys.dismiss()
+                continue
+            self.mouse("move", menu_win.rect[0] + hit_script[0], menu_win.rect[1] + hit_script[1])
+            time.sleep(0.35)
+            sub_hwnd = popupkeys.window()
+            if sub_hwnd:
+                sub_win = self._win(sub_hwnd)
+                sub_words = self.ocr_window(sub_win)
+                hit_target = _find_ocr_target(sub_words, script_name)
+                if hit_target is not None:
+                    self.mouse(
+                        "click",
+                        sub_win.rect[0] + hit_target[0],
+                        sub_win.rect[1] + hit_target[1],
+                    )
+                    time.sleep(0.15)
+                    popupkeys.dismiss()
+                    return True
+            popupkeys.dismiss()
+        return False
+
+
+_WINRT_OCR_PS = r"""
+param([string]$ImgPath)
+Add-Type -AssemblyName System.Runtime.WindowsRuntime
+$null = [Windows.Media.Ocr.OcrEngine, Windows.Foundation, ContentType=WindowsRuntime]
+$null = [Windows.Graphics.Imaging.BitmapDecoder, Windows.Foundation, ContentType=WindowsRuntime]
+$null = [Windows.Storage.StorageFile, Windows.Foundation, ContentType=WindowsRuntime]
+$asTask = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object {
+    $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and
+    $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1'
+})[0]
+function Await($op, $t) {
+    $m = $asTask.MakeGenericMethod($t)
+    $task = $m.Invoke($null, @($op))
+    $task.Wait() | Out-Null
+    $task.Result
+}
+$engine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages()
+if ($null -eq $engine) { '[]'; exit 0 }
+$st = [Windows.Storage.StorageFile]::GetFileFromPathAsync($ImgPath)
+$file = Await $st ([Windows.Storage.StorageFile])
+$acc = [Windows.Storage.FileAccessMode]::Read
+$stream = Await ($file.OpenAsync($acc)) ([Windows.Storage.Streams.IRandomAccessStream])
+$dec = [Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync($stream)
+$decoder = Await $dec ([Windows.Graphics.Imaging.BitmapDecoder])
+$bmp = Await ($decoder.GetSoftwareBitmapAsync()) ([Windows.Graphics.Imaging.SoftwareBitmap])
+$res = Await ($engine.RecognizeAsync($bmp)) ([Windows.Media.Ocr.OcrResult])
+$items = foreach ($line in $res.Lines) {
+    foreach ($w in $line.Words) {
+        $r = $w.BoundingRect
+        [PSCustomObject]@{
+            text = $w.Text
+            line = $line.Text
+            x = [int][Math]::Round($r.X)
+            y = [int][Math]::Round($r.Y)
+            w = [int][Math]::Round($r.Width)
+            h = [int][Math]::Round($r.Height)
+        }
+    }
+}
+@($items) | ConvertTo-Json -Compress
+""".strip()
+
+
+def _find_ocr_target(words: list[dict[str, Any]], needle: str) -> tuple[int, int] | None:
+    """Return window-relative center (cx, cy) for the OCR word or line matching `needle`."""
+    q = needle.strip().lower()
+    if not q or not words:
+        return None
+    for w in words:
+        if w.get("text", "").strip().lower() == q:
+            return w["x"] + w["w"] // 2, w["y"] + w["h"] // 2
+    for w in words:
+        if q in w.get("line", "").strip().lower():
+            return w["x"] + w["w"] // 2, w["y"] + w["h"] // 2
+    return None
+
+
+def ocr_png(png_bytes: bytes, *, timeout: float = 8.0) -> list[dict[str, Any]]:
+    """Recognize text boxes in PNG bytes using built-in Windows WinRT OCR (no external deps)."""
+    if sys.platform != "win32" or not png_bytes:
+        return []
+    import json
+    import subprocess
+    import tempfile
+    from pathlib import Path
+
+    try:
+        with tempfile.TemporaryDirectory(prefix="flmcp_ocr_") as tmp:
+            root = Path(tmp)
+            img = root / "cap.png"
+            ps1 = root / "ocr.ps1"
+            img.write_bytes(png_bytes)
+            ps1.write_text(_WINRT_OCR_PS, encoding="utf-8")
+            proc = subprocess.run(
+                [
+                    "powershell",
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    str(ps1),
+                    str(img),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                check=False,
+            )
+        if proc.returncode != 0 or not proc.stdout.strip():
+            return []
+        raw = json.loads(proc.stdout)
+        if isinstance(raw, dict):
+            return [raw]
+        return [r for r in raw if isinstance(r, dict) and "text" in r]
+    except Exception:
+        return []
