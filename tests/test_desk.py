@@ -482,3 +482,26 @@ def test_windows_v030_structures_match_win32_abi():
 
     assert ctypes.sizeof(w.LASTINPUTINFO) == 8
     assert ctypes.sizeof(w.GUITHREADINFO) == 72
+
+
+def test_desk_script_arms_first_run_fallback_when_shortcut_inactive(tmp_path):
+    notes = tmp_path / "notes"
+    notes.mkdir()
+    (notes / "inbox.json").write_text(json.dumps({"serial": 99}))
+
+    class ArmableFake(StealthFakeDesk):
+        def __init__(self, **kw):
+            super().__init__(**kw)
+            self.armed_with = []
+
+        def arm_piano_roll_script(self, script_name="FL MCP", win=None):
+            self.armed_with.append((script_name, win.handle if win else None))
+            (notes / "state.json").write_text(json.dumps({"serial": 99, "ts": 5}))
+            return True
+
+    fake = ArmableFake(front=BROWSER, idle_s=2.0, bg_post=False)
+    clock = Time()
+    d = Desk(fake, clock.sleep, clock.now, platform="win32", mode="polite")
+    res = d.script(folder=notes, timeout=0.6)
+    assert res["applied"] is True and res.get("armed") is True
+    assert fake.armed_with == [("FL MCP", FL.handle)]
