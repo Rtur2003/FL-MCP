@@ -64,6 +64,8 @@ def _active_port() -> str:
 
 def doctor_info() -> dict[str, Any]:
     """Quick non-destructive host layer check (no MIDI ping side-effects)."""
+    from fl_mcp.install import diagnose_fl_midi, find_loopmidi, is_loopmidi_running
+
     port = _active_port()
     info: dict[str, Any] = {
         "version": __version__,
@@ -100,6 +102,11 @@ def doctor_info() -> dict[str, Any]:
     info["piano_roll_script_installed"] = scr.is_file()
     info["fl_user_dir"] = str(fl_user)
     info["paths"] = paths.diagnostics()
+    info["loopmidi"] = {
+        "installed": find_loopmidi() is not None if sys.platform == "win32" else None,
+        "running": is_loopmidi_running() if sys.platform == "win32" else None,
+    }
+    info["fl_midi"] = diagnose_fl_midi(port)
     try:
         info["audio_analysis"] = all(
             sys.modules.get(mod, False) is not None and importlib.util.find_spec(mod) is not None
@@ -174,9 +181,11 @@ def build_state(
     refresh_templates: bool = False,
 ) -> dict[str, Any]:
     """Combined payload for `/api/state` and CLI JSON diagnostics."""
-    from fl_mcp import app, clients, service_daemon
+    from fl_mcp import app, clients, server, service_daemon, vault
 
     rt = app.detect_runtime()
+    snap = telemetry.read_snapshot()
+    proj_title = (snap.get("status") or {}).get("title")
     return {
         "meta": {
             "version": __version__,
@@ -187,16 +196,21 @@ def build_state(
             "app_runtime": rt["default_backend"],
             "desktop_enabled": desk.enabled(),
             "desktop_mode": desk.mode(),
+            "profile": os.environ.get("FL_MCP_PROFILE", "full"),
+            "readonly": server._is_readonly(),
+            "tools_count": len(server._tools(desk.enabled())),
             "data_dir": str(paths.data_dir()),
             "notes_dir": str(paths.notes_dir()),
         },
         "traffic": telemetry.read_traffic(limit=limit, kind=kind, only_errors=only_errors),
-        "studio": telemetry.read_snapshot(),
+        "studio": snap,
+        "context": telemetry.load_context_layers(proj_title),
         "doctor": doctor_info(),
         "paths": paths.diagnostics(),
         "clients": clients.client_statuses(),
         "service": service_daemon.service_status(),
         "templates": cached_templates(force=refresh_templates),
+        "vault": vault.status(),
     }
 
 
@@ -214,20 +228,62 @@ def _act_install_scripts(_body: dict[str, Any], _http_port: int) -> dict[str, An
 
 
 def _act_install_client(body: dict[str, Any], http_port: int) -> dict[str, Any]:
-    from fl_mcp import clients
+    from fl_mcp import clients, service_daemon
 
     target = str(body.get("client") or "all").strip()
     transport = str(body.get("transport") or "http").strip()
-    source = str(body.get("source") or "local").strip()
-    http_url = str(body.get("http_url") or f"http://127.0.0.1:{http_port}/mcp")
+    source = str(body.get("source") or "auto").strip()
+    proj = Path(str(body["project"])) if body.get("project") else None
+    endpoint = str(body.get("url") or body.get("http_url") or "")
+    if transport == "http" and not endpoint and bool(body.get("start_service")):
+        try:
+            svc = service_daemon.start_daemon(port=http_port)
+            endpoint = str(svc.get("mcp_url") or "")
+        except Exception:
+            pass
+    endpoint = endpoint or f"http://127.0.0.1:{http_port}/mcp"
     if target == "all":
-        res: Any = clients.install_all(source=source, transport=transport, http_url=http_url)
+        res: Any = clients.install_all(
+            source=source,
+            project=proj,
+            transport=transport,
+            url=endpoint,
+            only_installed=bool(body.get("only_installed", False)),
+        )
+        ok = all(r.get("ok", True) for r in res)
     else:
-        res = clients.install_client(target, source=source, transport=transport, http_url=http_url)
+        res = clients.install_client(
+            target, source=source, project=proj, transport=transport, url=endpoint
+        )
+        ok = True
     return {
-        "ok": True,
+        "ok": ok,
         "action": "install_client",
         "result": res,
+        "clients": clients.client_statuses(project=proj),
+    }
+
+
+def _act_onboard(body: dict[str, Any], _http_port: int) -> dict[str, Any]:
+    from fl_mcp import clients, install
+
+    res = install.onboard(
+        fl_dir=body.get("fl_dir") or None,
+        notes_dir=body.get("notes_dir") or None,
+        auto_install_midi=bool(body.get("install_midi", True)),
+        configure_midi=bool(body.get("configure_midi", True)),
+        client=str(body.get("client") or "all"),
+        transport=str(body.get("transport") or "http"),
+        source=str(body.get("source") or "auto"),
+        start_service=bool(body.get("start_service", True)),
+        autostart_service=bool(body.get("autostart", False)),
+        desktop_mode=body.get("desktop_mode") or "polite",
+        prewarm=bool(body.get("prewarm", False)),
+    )
+    return {
+        "action": "onboard",
+        **res,
+        "doctor": doctor_info(),
         "clients": clients.client_statuses(),
     }
 
@@ -260,6 +316,22 @@ def _act_app_shortcut(_body: dict[str, Any], _http_port: int) -> dict[str, Any]:
     from fl_mcp import app as studio_app
 
     return {"ok": True, "action": "app_shortcut", "shortcut": studio_app.install_app_shortcut()}
+
+
+def _act_vault_download(body: dict[str, Any], _http_port: int) -> dict[str, Any]:
+    from fl_mcp import vault
+
+    target = str(body.get("target") or "all").strip()
+    res = vault.download(target=target, force=bool(body.get("force", False)))
+    return {"ok": res["ok"], "action": "vault_download", "result": res, "vault": vault.status()}
+
+
+def _act_vault_rules(body: dict[str, Any], _http_port: int) -> dict[str, Any]:
+    from fl_mcp import vault
+
+    ws = body.get("workspace") or None
+    res = vault.install_rules(workspace=ws)
+    return {"ok": res["ok"], "action": "vault_rules", "result": res}
 
 
 def _act_produce_plan(body: dict[str, Any], _http_port: int) -> dict[str, Any]:
@@ -366,6 +438,9 @@ _HOST_ACTIONS = {
     "autostart": _act_autostart,
     "app_shortcut": _act_app_shortcut,
     "produce_plan": _act_produce_plan,
+    "onboard": _act_onboard,
+    "vault_download": _act_vault_download,
+    "vault_rules": _act_vault_rules,
 }
 
 
@@ -481,6 +556,11 @@ def make_handler(bridge_factory: Any = Bridge) -> type[BaseHTTPRequestHandler]:
                 return
             if parsed.path == "/api/service":
                 self._send_json(service_daemon.service_status())
+                return
+            if parsed.path == "/api/vault":
+                from fl_mcp import vault
+
+                self._send_json(vault.status())
                 return
             self._send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
 
