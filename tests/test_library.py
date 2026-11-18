@@ -299,3 +299,26 @@ def test_non_dict_features_cache_is_rebuilt_cleanly(packs):
     found = library.find(role="kick", limit=2)
     assert len(found) >= 1
     assert isinstance(json.loads(cache_file.read_text(encoding="utf-8")), dict)
+
+
+async def test_multi_role_find_and_audio_similarity(packs):
+    library.scan()
+    multi = library.find(role="kick,snare", limit=10)
+    assert {r["r"] for r in multi} >= {"kick", "snare"}
+
+    seed_kick = str(packs / "Drums" / "Kicks" / "Kick Dark 01.wav")
+    from mcp import Client
+
+    async with Client(server.mcp) as client:
+        res = json.loads(
+            (
+                await client.call_tool(
+                    "fl_library",
+                    {"action": "similar", "path": seed_kick, "role": "kick", "limit": 5},
+                )
+            )
+            .content[0]
+            .text
+        )
+    assert res["seed"] == seed_kick and len(res["rows"]) >= 1
+    assert res["rows"][0][0].endswith("BD House.wav")
