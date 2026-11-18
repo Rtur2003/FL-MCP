@@ -5,11 +5,15 @@ Order matters: level and balance, then tone, then dynamics, then space, then the
 ## The loop
 
 1. `fl_mix action=doctor`: problems worst first (clipping, headroom, routing, pan, missing plugins). Fix the worst before anything else.
-2. `fl_mix action=balance`: moves faders so each role peaks at its target while the project plays `seconds` (default 6) from `bar`. Targets in dBFS peak: kick -8, snare -10, clap -12, hat -20, open hat -22, bass -9, chords -16, pad -20, lead -14, arp -18, fx -16; the master peaks under -3 before its limiter. `targets="1=-8,2=-9"` overrides by mixer track. `action=meter` only reads.
-3. `fl_mix action=chain` shows each track's plugins against what its role wants and in what order; `apply=true` sets compressor, limiter, reverb and delay values by meaning on plugins already there, and names the ones missing (load them: automation guide).
-4. Tone and dynamics by hand with `fl_param` (plugins guide): high-pass per role (kick 25 Hz, bass 30, chords 120, pad 150, hat 300), small EQ moves, compression starting points below.
-5. Hear it: `fl_audio action=render` (exports the open project in `polite`/`foreground` desktop mode, renders a saved `.flp` via `project=<file>` in an isolated hidden background desktop on Windows, or uses the command line when FL is closed), or export from FL and `fl_audio action=analyze`. Read the numbers and the advice, change one thing, render again. Stop when the advice list is empty or only taste remains.
-6. Compare with a finished track of the same genre: `fl_audio action=compare reference=<file>`. Bands within about 1.5 dB and loudness within 2 LU is close.
+2. `fl_mix action=fix`: one-call cleanup — sets role stereo spread (hats/perc/keys panned, kick/bass/snare centered), applies clean low-shelf HPF + mud dips (`260–320 Hz`), flags unrouted `fx=0` channels, and pulls down clipping inserts.
+3. `fl_mix action=balance`: moves faders so each role peaks at its target while the project plays `seconds` (default 6) from `bar`. Targets in dBFS peak: kick -8, snare -10, clap -12, hat -20, open hat -22, bass -9, chords -16, pad -20, lead -14, arp -18, fx -16; the master peaks under -3 before its limiter. `targets="1=-8,2=-9"` overrides by mixer track. `action=meter` only reads (supports >64 inserts seamlessly in chunked batches).
+4. `fl_mix action=bus targets="1,2,3->10@0.35" role="Drum Bus"`: creates and balances send routing to reverb, delay, or stem buses in one call.
+5. `fl_mix action=chain`: shows each track's plugins against what its role wants and in what order; `apply=true` sets compressor, limiter, reverb and delay values by meaning on plugins already there, and names missing ones.
+6. Hear & inspect deeper:
+   - `fl_audio action=render fmt=<wav|mp3|ogg|flac|mid|zip>` (`/M` MIDI export, `/Z` Zipped Loop Package supported alongside audio renders, including parallel hidden-desktop render on Windows while FL stays open).
+   - `fl_audio action=masking path=<vocal.wav> reference=<beat.wav>`: measures critical-band spectral collision and returns exact `freq_hz` / `gain_db` / `q` carving suggestions.
+   - `fl_audio action=compare reference=<file>`: compares loudness, crest, width, and 7-band spectrum.
+   - `fl_audio action=transcribe path=<audio.wav>`: extracts BPM, Krumhansl key/mode, and F0 melody notes (`fl_notes` tuples).
 
 ## Reading the measurements
 
