@@ -106,3 +106,57 @@ def match_intents(
         taken.add(best[3])
         items.append({"p": best[3], "r": target})
     return items, missing
+
+
+_PARAM_CATEGORIES: dict[str, tuple[str, ...]] = {
+    "filter": ("cut", "freq", "res", "lp", "hp", "bp", "filter", "notch", "shelf", "slope", "q"),
+    "env": ("attack", "decay", "sustain", "release", "hold", "adsr", "env", "amt", "punch"),
+    "comp": ("thresh", "ratio", "knee", "attack", "release", "gain", "comp", "limit", "ceil"),
+    "space": (
+        "reverb",
+        "verb",
+        "delay",
+        "time",
+        "feedback",
+        "damp",
+        "decay",
+        "size",
+        "mix",
+        "wet",
+        "dry",
+    ),
+    "drive": ("drive", "dist", "sat", "gain", "fuzz", "clip", "crush", "bit", "warm", "tone"),
+    "mod": ("rate", "depth", "lfo", "phase", "chorus", "flang", "width", "spread", "detune", "pan"),
+    "osc": ("osc", "pitch", "tune", "fine", "coarse", "wave", "shape", "pwm", "sync", "sub", "fm"),
+    "level": ("vol", "level", "gain", "trim", "out", "mix", "pan", "mute"),
+}
+
+
+def fx_prefs() -> dict[str, Any]:
+    """Load optional ~/.fl-mcp/fx_prefs.json overrides/preferences cleanly."""
+    import json
+
+    from fl_mcp import paths
+
+    pref_file = paths.data_dir() / "fx_prefs.json"
+    try:
+        raw = json.loads(pref_file.read_text(encoding="utf-8"))
+        return raw if isinstance(raw, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def filter_params_by_category(rows: list[list[Any]], spec: str) -> list[list[Any]]:
+    """Filter param rows when `spec` is 'cat:Filter' (or comma categories)."""
+    raw_cats = [c.strip().lower() for c in spec[4:].split(",") if c.strip()]
+    prefs = fx_prefs()
+    custom = (
+        prefs.get("param_categories") if isinstance(prefs.get("param_categories"), dict) else {}
+    )
+    keywords: list[str] = []
+    for c in raw_cats:
+        extra = custom.get(c, ()) if isinstance(custom.get(c), list) else ()
+        keywords.extend([*(_PARAM_CATEGORIES.get(c, ())), *(str(x).lower() for x in extra), c])
+    if not keywords:
+        return rows
+    return [r for r in rows if any(k in str(r[1]).lower() for k in keywords)]
