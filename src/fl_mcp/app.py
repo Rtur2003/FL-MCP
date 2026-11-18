@@ -404,12 +404,33 @@ def _run_native_tk(url: str, *, host: str, port: int, runtime: dict[str, Any]) -
             from fl_mcp import clients
 
             results = clients.install_all(
-                source="local", transport="http", http_url=f"http://{host}:{port}/mcp"
+                source="local", transport="http", url=f"http://{host}:{port}/mcp"
             )
+            active = [r for r in results if r.get("ok") and not r.get("skipped")]
+            skipped = [r for r in results if r.get("skipped")]
+            errors = [r for r in results if not r.get("ok")]
+            lines = [
+                f"• {r.get('label', r.get('client'))}: "
+                f"{r.get('path') or ' '.join(r.get('command', ()))}"
+                for r in active
+            ]
+            if skipped:
+                lines.append("")
+                lines.append("Skipped:")
+                lines.extend(
+                    f"• {r.get('label', r.get('client'))}: "
+                    f"{r.get('reason') or r.get('error') or 'optional'}"
+                    for r in skipped
+                )
+            if errors:
+                lines.append("")
+                lines.append("Errors:")
+                lines.extend(
+                    f"• {r.get('label', r.get('client'))}: {r.get('error')}" for r in errors
+                )
             messagebox.showinfo(
                 "AI Clients Connected",
-                "Registered HTTP MCP endpoint for:\n"
-                + "\n".join(f"• {r['label']}: {r['config_path']}" for r in results),
+                "Registered HTTP MCP endpoint:\n" + "\n".join(lines),
             )
         except Exception as exc:
             messagebox.showerror("AI Clients", str(exc))
