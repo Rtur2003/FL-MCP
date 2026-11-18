@@ -71,9 +71,37 @@ gate = Gate()
 Beats = Annotated[float, Field(ge=0)]
 Index = Annotated[int, Field(ge=0)]
 Genre = Literal[tuple(GENRES)]  # type: ignore[valid-type]
+_PROBE_CACHE: dict[tuple[Any, ...], dict[str, Any]] = {}
+
+
+def _is_readonly() -> bool:
+    if os.environ.get("FL_MCP_READONLY", "").strip().lower() in ("1", "true", "yes", "on"):
+        return True
+    return os.environ.get("FL_MCP_PROFILE", "").strip().lower() == "read-only"
+
+
+def _require_writable(action: str) -> None:
+    if _is_readonly():
+        raise ToolError(f"read-only mode active (FL_MCP_READONLY=1): cannot {action}")
 
 
 async def _fl(req: dict[str, Any]) -> Any:
+    op = req.get("o")
+    ro_op = (
+        op in ("ping", "status", "probe", "diag", "summary", "list", "peaks", "roll")
+        or (op == "param" and req.get("a") in ("list", "info", "presets", "io"))
+        or (op == "steps" and not req.get("on") and not req.get("off") and not req.get("clear"))
+        or (
+            op == "ui"
+            and (
+                req.get("a") == "form"
+                or (req.get("a") == "win" and req.get("v") == "?")
+                or (req.get("a") == "browser" and req.get("b") in ("caption", "scan"))
+            )
+        )
+    )
+    if not ro_op:
+        _require_writable(f"execute '{op}'")
     try:
         return await anyio.to_thread.run_sync(bridge.call, req)
     except FLError as exc:
@@ -99,21 +127,31 @@ async def fl_status(
     log: Annotated[
         bool, Field(description="include script errors and TX/RX traffic telemetry")
     ] = False,
+    include: Annotated[
+        str | None, Field(description="comma list: 'summary,probe,log,memory'")
+    ] = None,
 ) -> str:
-    """Project snapshot: FL version, title, tempo, play/record state, loop mode, position,
-    current pattern/channel/mixer track, counts (plus credits when licensed). probe lists API
-    features; log shows script errors plus MIDI TX/RX telemetry."""
+    """Project snapshot: FL version, title, tempo, play/record, loop, position, current slots.
+    include='summary' returns channels+mixer+patterns+plugins in 1 call; 'memory' adds notes."""
+    inc = {x.strip().lower() for x in (include or "").split(",") if x.strip()}
     status = await _fl({"o": "status"})
     status["desktop"] = desk.mode()
     telemetry.update_snapshot(status=status)
-    if probe:
+    if "summary" in inc:
+        status["summary"] = await _fl({"o": "summary"})
+    if probe or "probe" in inc:
         from fl_mcp import paths
 
-        status["probe"] = await _fl({"o": "probe"})
+        cache_key = (status.get("fl"), status.get("api"), status.get("ver"))
+        if probe or cache_key not in _PROBE_CACHE:
+            _PROBE_CACHE[cache_key] = await _fl({"o": "probe"})
+        status["probe"] = _PROBE_CACHE[cache_key]
         status["paths"] = paths.diagnostics()
-    if log:
+    if log or "log" in inc:
         status["log"] = await _fl({"o": "diag"})
         status["traffic"] = telemetry.brief()
+    if "memory" in inc:
+        status["memory"] = telemetry.load_context_layers(status.get("title"))
     if gate.metered:
         status["account"] = await anyio.to_thread.run_sync(gate.status)
     return _out(status)
@@ -233,10 +271,18 @@ async def fl_steps(
     grid: Annotated[str | None, Field(description="velocity grid (. 0-9 a-z; | ignored)")] = None,
     swing: Annotated[int, Field(ge=0, le=48, description="off-16th swing ticks")] = 0,
 ) -> str:
-    """Step sequencer of one channel. Pass on/off/clear or a velocity grid ('z.o.|x.z.') with
-    swing. Returns active steps and a bar-grouped visual strip."""
+    """Step sequencer of one channel. Pass on/off/clear or a velocity grid ('z.o.|x.z.' or
+    '*4' to tile) with swing. Returns active steps and a bar-grouped visual strip."""
+    if clear or on or off or grid is not None:
+        _require_writable("edit steps")
     if grid is not None:
-        clean = re.sub(r"[\s|-]+", "", grid).lower()
+        raw_grid = grid.strip()
+        if "*" in raw_grid:
+            base_g, _, rep_s = raw_grid.rpartition("*")
+            if rep_s.strip().isdigit():
+                reps = max(1, min(16, int(rep_s.strip())))
+                raw_grid = base_g * reps
+        clean = re.sub(r"[\s|-]+", "", raw_grid).lower()
         if (
             not clean
             or len(clean) > 512
@@ -250,6 +296,12 @@ async def fl_steps(
         )
         readback["bad"] = res.get("bad", 0)
         readback["view"] = produce.step_view(readback["on"], len(clean), grid=clean)
+        if readback.get("n", len(clean)) > len(clean):
+            mult = max(2, readback["n"] // max(1, len(clean)))
+            readback["warning"] = (
+                f"pattern is {readback['n']} steps long while grid had {len(clean)} steps "
+                f"(append '*{mult}' to grid to tile across bars)"
+            )
         return _out(readback)
     req = {"o": "steps", "c": channel, "p": pattern, "n": length, "clear": int(clear)}
     req.update({"on": on or [], "off": off or []})
@@ -317,9 +369,13 @@ async def fl_notes(
         list[list[float]] | None,
         Field(description="[midi_note, start_beat, length_beats, vel?]; 4/4 bar=4"),
     ] = None,
-    chords: Annotated[str | None, Field(description="'Am7@0:4, G7@4:4'")] = None,
+    chords: Annotated[str | None, Field(description="'Am7@0:4, G7@1|1:n/8'")] = None,
     delete: Annotated[
         list[list[float]] | None, Field(description="[midi] or [midi,start] remove")
+    ] = None,
+    transform: Annotated[
+        str | None,
+        Field(description="'humanize=10,swing=60,transpose=-2,snap=A minor,legato,ratchet=3'"),
     ] = None,
     clear: Literal["roll", "queue"] | None = None,
     replace: Annotated[bool, Field(description="clear existing notes first")] = False,
@@ -329,10 +385,11 @@ async def fl_notes(
     apply: Annotated[bool, Field(description="run desktop script now")] = False,
     preview: Annotated[bool, Field(description="trigger live MIDI preview")] = False,
 ) -> str:
-    """Piano roll & live notes: queue/apply notes or chords, delete specific notes, clear roll
-    or queue, read state.json, or preview live via MIDI note."""
+    """Piano roll & live notes: queue/apply notes or chords (beat or bar|beat), transform
+    grooves/scales, delete notes, clear roll/queue, read state.json, or preview live."""
     folder = notes_dir()
     if clear == "queue":
+        _require_writable("clear note queue")
         inbox = folder / "inbox.json"
         existed = inbox.exists()
         inbox.unlink(missing_ok=True)
@@ -361,6 +418,7 @@ async def fl_notes(
                 and queued.get("serial") == state["serial"],
                 "age_s": round(time.time() - state["ts"]),
                 "truncated": len(shown) < state["count"],
+                "summary": theory.notes_summary(state["notes"]),
                 "queued": {
                     "count": len(queued.get("notes") or []),
                     "delete_count": len(queued.get("delete") or []),
@@ -370,14 +428,25 @@ async def fl_notes(
                 "notes": shown,
             }
         )
+    _require_writable("edit piano roll notes")
     rows = [_note(n) for n in (notes or [])]
     if chords:
         try:
             rows.extend(theory.chords_to_notes(chords))
         except ValueError as exc:
             raise ToolError(str(exc)) from None
-    del_rows = [_delete_spec(d) for d in (delete or [])]
     replace_flag = bool(replace or clear == "roll")
+    if transform and not rows and not delete and not replace_flag:
+        state = _read_json(folder / "state.json")
+        if state and isinstance(state.get("notes"), list) and state["notes"]:
+            rows = [_note(n[:4]) for n in state["notes"][:1000]]
+            replace_flag = True
+    if transform and rows:
+        try:
+            rows = theory.transform_notes(rows, transform)
+        except ValueError as exc:
+            raise ToolError(str(exc)) from None
+    del_rows = [_delete_spec(d) for d in (delete or [])]
     if preview:
         if not rows:
             raise ToolError("preview needs notes or chords")
@@ -404,6 +473,9 @@ async def fl_notes(
     if del_rows:
         payload["delete"] = del_rows
     _write_json(folder / "inbox.json", payload)
+    from fl_mcp import install
+
+    await _thread(install.bake_piano_roll_script, payload, None, folder)
     if apply:
         try:
             await _fl({"o": "ui", "a": "win", "w": "roll", "v": "focus"})
@@ -429,7 +501,8 @@ async def fl_notes(
             "pattern": roll["pat"],
             "next": "Call fl_desk macro=script to apply them."
             if desk.enabled()
-            else "In FL's piano roll run Tools > Scripting > FL MCP, then press Accept.",
+            else "In FL's piano roll run Tools > Scripting > FL MCP "
+            "(applies immediately; mod+alt+y repeats thereafter).",
         }
     )
 
@@ -486,25 +559,58 @@ async def fl_param(
         else:
             req.update(a="list", f=find or raw_p, st=start, n=limit)
     else:
-        req.update(a="list", f=find, st=start, n=limit)
+        cat_filter = find.strip().lower().startswith("cat:")
+        req.update(
+            a="list",
+            f="" if cat_filter else find,
+            st=0 if cat_filter else start,
+            n=120 if cat_filter else limit,
+        )
+        out = await _fl(req)
+        if cat_filter and isinstance(out, dict) and isinstance(out.get("rows"), list):
+            from fl_mcp import plugins_kb
+
+            out["rows"] = plugins_kb.filter_params_by_category(out["rows"], find)[
+                start : start + limit
+            ]
+        return _out(out)
     return _out(await _fl(req))
 
 
 async def fl_library(
-    action: Literal["scan", "find", "kit", "plugins", "info"],
+    action: Literal["scan", "find", "similar", "kit", "plugins", "info"],
     role: Annotated[
-        str | None, Field(description="kick snare clap hat ohat perc bass fx chords pad lead")
+        str | None, Field(description="kick,snare,hat (CSV ok) bass fx chords pad lead")
     ] = None,
     genre: Genre | None = None,
     query: Annotated[str | None, Field(description="words in names and folders")] = None,
-    path: Annotated[str | None, Field(description="info: a sample file")] = None,
+    path: Annotated[str | None, Field(description="info/similar: sample file")] = None,
     limit: Annotated[int, Field(ge=1, le=50)] = 10,
 ) -> str:
-    """Sounds and plugins on disk. scan indexes FL packs, FL_MCP_SAMPLES and plugin database.
-    find ranks samples by name and measured sound; kit picks a genre drum kit (sounds=auto).
-    plugins lists installed instruments/effects; info measures one sample."""
+    """Sounds and plugins on disk. scan indexes samples/plugins; find ranks by name & sound;
+    similar ranks audio closeness to path; kit builds a genre drum kit; plugins/info inspect."""
     if action == "scan":
+        _require_writable("rebuild library index")
         return _out(await _thread(library.scan, 45.0))
+    if action == "similar":
+        if not path:
+            raise ToolError("similar needs path")
+        res = await _thread(library.find_similar, path, role, limit)
+        cols = ["path", "role", "pack", "similarity", "dur", "decay_ms"]
+        rows = [
+            [
+                c["p"],
+                c["r"],
+                c["k"],
+                c["similarity"],
+                (c["f"] or {}).get("dur"),
+                (c["f"] or {}).get("decay_ms"),
+            ]
+            for c in res["matches"]
+        ]
+        return _out(
+            {"seed": res["seed"], "seed_features": res["seed_features"], "cols": cols, "rows": rows}
+        )
     if action == "plugins":
         if role in ("soundfont", "sf2"):
             sfs = await _thread(library.list_soundfonts, query, limit)
@@ -560,20 +666,22 @@ def _render_blocking(flp: str | Path, fmt: str, *, always_copy: bool = False) ->
 
 
 async def fl_audio(
-    action: Literal["analyze", "render", "compare", "master", "status"] = "analyze",
+    action: Literal[
+        "analyze", "render", "compare", "master", "transcribe", "masking", "status"
+    ] = "analyze",
     path: Annotated[str | None, Field(description="audio file; default latest export")] = None,
     project: Annotated[str | None, Field(description="render: .flp; default just saved")] = None,
-    reference: Annotated[str | None, Field(description="compare: reference track")] = None,
-    fmt: Literal["wav", "mp3", "ogg", "flac"] = "wav",
+    reference: Annotated[str | None, Field(description="compare/masking: reference track")] = None,
+    fmt: Literal["wav", "mp3", "ogg", "flac", "mid", "zip"] = "wav",
     genre: Genre | None = None,
     target: Annotated[
         float | None, Field(ge=-30, le=0, description="LUFS goal; default the genre's or -14")
     ] = None,
     ceiling: Annotated[float, Field(ge=-6, le=0, description="true peak limit, dBTP")] = -1.0,
 ) -> str:
-    """Audio analysis and mastering (needs audio extra). analyze: LUFS, true peak, crest,
-    clipping, DC, stereo width, 7-band spectrum and mix advice. render: export via CLI (.flp)
-    or fl_desk (open project) then analyze. compare: vs reference. master: dial limiter."""
+    """Audio & music intelligence. analyze: LUFS/TP/crest/stereo/spectrum/advice; render: export
+    wav/mp3/ogg/flac/mid/zip; compare: vs reference; transcribe: BPM+key+melody; masking: vocal
+    vs backing EQ cuts; master: dial limiter."""
     if action == "status":
         return _out({"analysis": audio.available(), **await _thread(render.status)})
     goal = target if target is not None else (GENRES[genre].lufs if genre else None)
@@ -584,7 +692,20 @@ async def fl_audio(
         if not mine:
             raise ToolError("compare needs path: no audio was exported recently")
         return _out(await _thread(audio.compare, mine, reference))
+    if action == "transcribe":
+        mine = path or await _thread(render.newest_audio)
+        if not mine:
+            raise ToolError("transcribe needs path: no audio was exported recently")
+        return _out(await _thread(audio.transcribe, mine))
+    if action == "masking":
+        if not reference:
+            raise ToolError("masking needs reference: backing/instrumental track")
+        mine = path or await _thread(render.newest_audio)
+        if not mine:
+            raise ToolError("masking needs path: foreground/vocal track")
+        return _out(await _thread(audio.masking, mine, reference))
     if action == "master":
+        _require_writable("run mastering")
         if not desk.enabled() or desk.mode() == "stealth":
             raise ToolError(
                 "master exports the open project via File > Export, which needs fl_desk in "
@@ -637,6 +758,8 @@ async def fl_audio(
                     )
             else:
                 made = await _thread(_render_blocking, flp, fmt)
+        if fmt in ("mid", "zip"):
+            return _out({"render": made})
         path = made["audio"]
     path = path or await _thread(render.newest_audio)
     if not path:
@@ -847,8 +970,10 @@ def _find_pattern(plan: Any, ref: str) -> int:
 
 async def fl_produce(
     action: Annotated[
-        Literal["make", "plan", "apply", "queue", "midi", "flp", "inspect", "show", "genres"],
-        Field(description="make = plan + deliver; apply = deliver a plan"),
+        Literal[
+            "make", "plan", "apply", "queue", "midi", "flp", "arrange", "inspect", "show", "genres"
+        ],
+        Field(description="make = plan + deliver; arrange = loop->song .flp"),
     ] = "make",
     genre: Genre | None = None,
     key: Annotated[str | None, Field(description="'A minor', 'F# dorian'; default random")] = None,
@@ -873,17 +998,22 @@ async def fl_produce(
         Field(description="flp: 'auto' (a kit) or 'kick=path; snare=path'"),
     ] = None,
 ) -> str:
-    """Fast production. make: builds a genre-aware plan (sections, drums, bass, chords, melody,
-    mix targets) and delivers it: drums go into Channel Rack channels matched by name (kick,
-    hat, bass...) as named patterns with tempo, markers, EQ and pan, and a MIDI file holds every
-    part. With template (.flp), make and flp write a full project (notes, playlist; sounds adds
-    sample channels). queue: one part to the piano roll. inspect: read a template."""
+    """Fast production. make: builds a genre-aware plan and delivers steps, tempo, markers,
+    pan, EQ & MIDI. With template (.flp/.zip), flp builds a project and arrange expands an
+    existing loop into sections keeping original melodies. queue: send part to piano roll."""
     if action == "genres":
         return _out({k: [g.name, *g.bpm, g.default_scale] for k, g in GENRES.items()})
     if action == "inspect":
         if not template:
             raise ToolError("inspect needs template")
         return _out(await _thread(produce.inspect_flp, template))
+    if action == "arrange":
+        _require_writable("arrange project")
+        if not template:
+            raise ToolError("arrange needs template: the .flp/.zip project to expand")
+        return _out(await _thread(produce.arrange_flp, template, length, replace_playlist))
+    if action in ("make", "apply", "flp", "queue"):
+        _require_writable(f"run fl_produce action={action}")
     if action in ("make", "plan") and not genre:
         raise ToolError("genre is required; see action=genres")
     if action == "flp" and not template:
@@ -939,16 +1069,18 @@ async def fl_produce(
             roll = await _fl(
                 {"o": "roll", "c": state["mapping"][role], "p": state["base"] + 1 + idx}
             )
-            _write_json(
-                notes_dir() / "inbox.json",
-                {"serial": secrets.randbelow(2**31), "replace": True, "notes": rows},
-            )
+            q_payload = {"serial": secrets.randbelow(2**31), "replace": True, "notes": rows}
+            _write_json(notes_dir() / "inbox.json", q_payload)
+            from fl_mcp import install
+
+            await _thread(install.bake_piano_roll_script, q_payload, None, notes_dir())
             return _out(
                 {
                     "queued": len(rows),
                     "channel": roll["ch"],
                     "pattern": roll["pat"],
-                    "next": "In FL's piano roll run Tools > Scripting > FL MCP, then press Accept.",
+                    "next": "In FL's piano roll run Tools > Scripting > FL MCP "
+                    "(applies immediately; mod+alt+y repeats thereafter).",
                 }
             )
         if action in ("make", "apply"):
@@ -973,8 +1105,8 @@ async def fl_produce(
 
 async def fl_mix(
     action: Annotated[
-        Literal["meter", "balance", "doctor", "chain"],
-        Field(description="meter/doctor read; balance moves faders; chain checks plugins"),
+        Literal["meter", "balance", "doctor", "chain", "fix", "bus"],
+        Field(description="meter/doctor read; balance/fix/bus shape mix; chain plugins"),
     ] = "meter",
     seconds: Annotated[float, Field(ge=1, le=30, description="how long to play and measure")] = 6.0,
     bar: Annotated[float | None, Field(ge=1, description="start playing from this bar")] = None,
@@ -982,20 +1114,51 @@ async def fl_mix(
         str | None, Field(description="role targets from this plan; default latest")
     ] = None,
     targets: Annotated[
-        str | None, Field(description="balance: 'track=peak_dB', e.g. '1=-8,2=-9'")
+        str | None, Field(description="balance: '1=-8,2=-9'; bus: '1,2->10@0.35'")
     ] = None,
-    track: Annotated[int | None, Field(ge=0, description="chain: one mixer track")] = None,
-    role: Annotated[str | None, Field(description="chain: kick, bass, master...")] = None,
+    track: Annotated[int | None, Field(ge=0, description="chain/bus: target mixer track")] = None,
+    role: Annotated[str | None, Field(description="chain/bus: role or bus track name")] = None,
     apply: Annotated[bool, Field(description="chain: set the role's starting values")] = False,
 ) -> str:
-    """Measure and balance levels using mixer peaks while FL plays. meter: dBFS per track.
-    balance: move faders to role targets. doctor: sorted mix issues. chain: check/set
-    track plugins (compressor, limiter, reverb, delay) in real units."""
+    """Measure and shape mixer tracks. meter: dBFS peaks; balance: hit target peaks;
+    doctor: ranked mix issues; fix: auto pan, HPF/mud EQ and clip gain; bus: route sends;
+    chain: check or set compressor/limiter/reverb/delay plugins."""
     if action == "doctor":
         doc = await _thread(chain.doctor, bridge.call, seconds, bar, plan)
         telemetry.update_snapshot(doctor=doc)
         return _out(doc)
+    if action == "fix":
+        _require_writable("auto-fix mix")
+        return _out(await _thread(mixing.fix_mix, bridge.call, seconds, bar, plan))
+    if action == "bus":
+        _require_writable("route mixer bus")
+        raw = (targets or "").strip()
+        bus_trk = track
+        lvl = 0.35
+        if "->" in raw:
+            src_part, _, dst_part = raw.partition("->")
+            dst_s, _, lvl_s = dst_part.partition("@")
+            try:
+                bus_trk = int(dst_s.strip())
+                if lvl_s.strip():
+                    lvl = float(lvl_s.strip())
+            except ValueError:
+                raise ToolError("bus format is '1,2->10' or '1,2->10@0.35'") from None
+            raw = src_part
+        if bus_trk is None or bus_trk < 1:
+            raise ToolError("bus needs track >= 1 or targets='1,2->10'")
+        try:
+            srcs = [int(x.strip()) for x in raw.split(",") if x.strip()]
+        except ValueError:
+            raise ToolError("bus source tracks must be integers like '1,2,3'") from None
+        if not srcs:
+            raise ToolError("bus needs source track indices in targets, e.g. '1,2->10'")
+        return _out(
+            await _thread(mixing.setup_bus, bridge.call, srcs, bus_trk, name=role, send_level=lvl)
+        )
     if action == "chain":
+        if apply:
+            _require_writable("apply plugin chain settings")
         pairs = await _thread(chain.targets, bridge.call, plan, track, role)
         reports = await _thread(chain.analyze, bridge.call, pairs)
         out: dict[str, Any] = {"tracks": reports}
@@ -1140,7 +1303,25 @@ _EDIT = dict(readOnlyHint=False, destructiveHint=False, idempotentHint=True)
 _ACT = dict(readOnlyHint=False, destructiveHint=False, idempotentHint=False)
 
 
-def _tools(with_desk: bool) -> list[Tool]:
+PROFILES: dict[str, tuple[str, ...]] = {
+    "full": (),
+    "compact": ("fl_status", "fl_produce", "fl_mix", "fl_set", "fl_notes", "fl_param", "fl_list"),
+    "produce": (
+        "fl_status",
+        "fl_produce",
+        "fl_list",
+        "fl_transport",
+        "fl_set",
+        "fl_steps",
+        "fl_notes",
+        "fl_library",
+    ),
+    "mix": ("fl_status", "fl_mix", "fl_list", "fl_transport", "fl_set", "fl_param", "fl_audio"),
+    "read-only": ("fl_status", "fl_list", "fl_library", "fl_audio", "fl_api"),
+}
+
+
+def _tools(with_desk: bool, profile: str | None = None) -> list[Tool]:
     tools = [
         _tool(fl_status, **_READ),
         _tool(fl_produce, readOnlyHint=False, destructiveHint=False, idempotentHint=False),
@@ -1157,8 +1338,13 @@ def _tools(with_desk: bool) -> list[Tool]:
         _tool(fl_audio, **_ACT),
         _tool(fl_api, **_READ),
     ]
-    if with_desk:
+    prof = (profile or os.environ.get("FL_MCP_PROFILE", "full")).strip().lower()
+    if with_desk and prof != "read-only":
         tools.append(_tool(fl_desk, readOnlyHint=False, destructiveHint=True, idempotentHint=False))
+    allow = PROFILES.get(prof)
+    if allow:
+        allowed = set(allow) | ({"fl_desk"} if with_desk and prof != "read-only" else set())
+        tools = [t for t in tools if t.name in allowed]
     return tools
 
 
@@ -1208,7 +1394,9 @@ def _live_traffic() -> str:
     mime_type="application/json",
 )
 def _live_studio() -> str:
-    return _out(telemetry.read_snapshot())
+    snap = telemetry.read_snapshot()
+    snap["context"] = telemetry.load_context_layers((snap.get("status") or {}).get("title"))
+    return _out(snap)
 
 
 @mcp.resource(
@@ -1224,6 +1412,48 @@ def _info_paths() -> str:
     info = paths.diagnostics()
     info["service"] = service_daemon.service_status()
     return _out(info)
+
+
+@mcp.resource(
+    "fl://info/vault",
+    name="vault_status",
+    title="AI models, audio packs, frameworks & rules vault",
+    description=(
+        "Installed ONNX models, SoundFonts, drum samples, IRs, MIDI packs, "
+        "UI assets, frameworks and rules."
+    ),
+    mime_type="application/json",
+)
+def _info_vault() -> str:
+    from fl_mcp import vault
+
+    return _out(vault.status())
+
+
+def _rule_reader(topic_id: str) -> Any:
+    def _read() -> str:
+        from fl_mcp import vault
+
+        return vault.read_rule(topic_id)
+
+    return _read
+
+
+for _rule in (
+    ("production", "Production & Arrangement Rulebook"),
+    ("mixing", "Mixing, Gain-Staging & Spectral Unmasking Rulebook"),
+    ("mastering", "Mastering & Loudness Verification Rulebook"),
+    ("ui_design", "Hardware-Calibrated Dark Studio UI & Visual Rulebook"),
+    ("fl_safety", "Bridge, Binary & Desktop Safety Rulebook"),
+    ("fl_formulas", "FL Studio Formula Controller, Patcher, WaveShaper & Piano Roll Rulebook"),
+):
+    mcp.resource(
+        f"fl://rules/{_rule[0]}",
+        name=f"{_rule[0]}_rules",
+        title=_rule[1],
+        description=f"Autonomous FL-MCP rulebook: {_rule[1]}.",
+        mime_type="text/markdown",
+    )(_rule_reader(_rule[0]))
 
 
 def _task(request: str, *topics: str) -> str:
