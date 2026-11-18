@@ -3,6 +3,13 @@
 All notable changes to FL-MCP are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+- **Zero-Touch Cross-OS Onboarding (`fl-mcp onboard`, `fl-mcp setup --auto`, Studio One-Click Auto-Setup)**: automates script installation (numeric FL 20–26+ registry ordering so FL 26 > 25), `loopMIDI` detection/`winget` opt-in install/`StartMinimized` setup & detached restart, macOS CoreMIDI IAC checks (`check_macos_iac`), Windows FL F10 MIDI Input/Output/Controller Type Registry auto-pairing (`configure_fl_midi`, safely gated when FL is running) + `diagnose_fl_midi` in `doctor`/`selftest`/Studio UI, background service startup, `prewarm_uvx`, and **12-client registration** (adding `cline`, `roo-code`, `zed`, `opencode`, global VS Code, and Antigravity HTTP `serverUrl` fixes + `--source auto` and `--client all`).
+- **FL Studio 2025/2026 Internals, Controller `v7`, & Piano Roll Hardening**: dynamic mixer insert & FX slot caps (`_insert_max` via `getTrackCount` up to 500 inserts; `_slot_max` up to 25 slots), FL 26+ `88`-byte playlist support (`_FL26_PL_TAIL`) & `channel` vs `pattern` clip handling, `.zip` Zipped Loop Packages (`Flp.open`) and `.fsc` score read/write (`FSC_FORMAT = 16`), `_text()` ASCII vs UTF-16LE heuristic, CLI `/M` (`mid`) and `/Z` (`zip`) exports in `render.py` & `fl_audio`, API v37–45+ additions in `api.json`, macOS JXA `Add` menu plugin loader (`uiload._mac_add_menu_load`), WinRT OCR popup arming (`desk_win.ocr_png` & `arm_piano_roll_script`), `_BAKED` pyscript fallback (`bake_piano_roll_script`) + digest idempotency in `FL MCP.pyscript`, single-pass param index caching, `channels.soloChannel(i, v, True)` fix, visible Piano Roll retargeting, `"1:2.0"` ratio unit parsing, and chunked `>64`-track peak metering in `mixing.py`.
+- **High-Leverage Musical & AI Workflow Upgrades**: `fl_status(include="summary,probe,log,memory")` 1-call snapshot + cached capability handshake + 3-layer Producer Context/Memory (`studio.md`, project brief, `memory/*.md` exposed in `fl://live/studio`), `fl_notes` `bar|beat` notation & `transform=` DSL (`humanize`, `swing`, `transpose`, `snap`, `quantize`, `legato`, `ramp`, `ratchet`), `*N` grid tiling + short-grid warning in `fl_steps`, `fl_produce(action="arrange")` non-destructive loop-to-arrangement expansion preserving user melodies, `fl_mix(action="fix"|"bus")`, `fl_param(find="cat:Filter")` semantic filtering + `~/.fl-mcp/fx_prefs.json`, `fl_library(action="similar")` acoustic closeness + multi-role CSV queries, `fl_audio(action="transcribe"|"masking")` + active-region RMS, tool profiles (`--profile` / `FL_MCP_PROFILE`), and `FL_MCP_READONLY=1`.
+
 ## [0.3.0] - 2026-11-15
 
 ### Added
