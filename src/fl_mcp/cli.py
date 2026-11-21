@@ -770,6 +770,53 @@ def main(argv: list[str] | None = None) -> None:
     vlt.add_argument("--workspace", help="target project directory for `vault rules`")
     vlt.add_argument("--force", action="store_true", help="re-download even if present")
     vlt.add_argument("--json", action="store_true", help="output structured JSON")
+    lch = sub.add_parser("launch", help="launch FL Studio safely on the interactive desktop")
+    lch.add_argument("project", nargs="?", help="optional .flp project to open")
+    lch.add_argument("--json", action="store_true", help="output JSON")
+    cap = sub.add_parser(
+        "capture", help="record FL Studio window in the background via ffmpeg gfxcapture (Windows)"
+    )
+    cap.add_argument("out", help="output .mp4 file path")
+    cap.add_argument("--seconds", type=float, required=True, help="capture duration in seconds")
+    cap.add_argument("--fps", type=int, default=30, help="frame rate (default: 30)")
+    cap.add_argument("--crf", type=int, default=16, help="x264 CRF quality (default: 16)")
+    cap.add_argument("--title", default="FL Studio", help="window title match (default: FL Studio)")
+    cap.add_argument(
+        "--keep-audio", action="store_true", help="keep FL64.exe audio unmuted during capture"
+    )
+    cap.add_argument(
+        "--no-play", action="store_true", help="do not auto-toggle Spacebar playback during capture"
+    )
+    cap.add_argument("--json", action="store_true", help="output JSON")
+    rnd = sub.add_parser("renders", help="inspect or prune ~/.fl-mcp/renders cache")
+    rnd.add_argument("--clean", action="store_true", help="delete old render folders")
+    rnd.add_argument("--max-keep", type=int, default=10, help="keep N newest renders (default: 10)")
+    rnd.add_argument(
+        "--max-age-hours", type=float, default=24.0, help="delete renders older than H hours"
+    )
+    rnd.add_argument("--json", action="store_true", help="output JSON")
+    sf2_p = sub.add_parser(
+        "sf2", help="inspect or patch SoundFont 2.01 (.sf2) gen 38 (-100 dB release) curves"
+    )
+    sf2_p.add_argument("path", help="path to .sf2 file")
+    sf2_p.add_argument(
+        "--release",
+        help="seconds (e.g. 2.6) or preset (wind, bowed, piano, guitar, plucked, mallet, perc)",
+    )
+    sf2_p.add_argument("--out", help="output .sf2 path (default: patch in-place with .bak)")
+    sf2_p.add_argument("--no-backup", action="store_true", help="skip .bak when patching in-place")
+    sf2_p.add_argument("--json", action="store_true", help="output JSON")
+    scr = sub.add_parser(
+        "score", help="compile a structured score JSON file into a hybrid multi-channel .flp"
+    )
+    scr.add_argument("score_json", help="input score JSON path")
+    scr.add_argument("template", help="template .flp path")
+    scr.add_argument("out", help="output .flp path")
+    scr.add_argument("--donor", help="optional donor .flp providing a Sampler channel seed")
+    scr.add_argument(
+        "--no-harmony", action="store_true", help="skip automatic 10-pass ensemble harmony solver"
+    )
+    scr.add_argument("--json", action="store_true", help="output JSON")
     args = parser.parse_args(argv)
 
     logging.basicConfig(
@@ -878,6 +925,120 @@ def main(argv: list[str] | None = None) -> None:
             for m in st["models"]:
                 tag = "OK" if m["installed"] else "MISSING"
                 print(f"  [model:{tag}] {m['filename']} ({m['bytes']} B) - {m['title']}")
+        raise SystemExit(0)
+    elif args.cmd == "launch":
+        from fl_mcp import render
+
+        try:
+            res = render.launch_fl(args.project)
+        except ValueError as exc:
+            print(exc, file=sys.stderr)
+            raise SystemExit(1) from None
+        if args.json:
+            print(json.dumps(res, indent=2, ensure_ascii=False))
+        else:
+            print(f"Launched FL Studio (pid={res.get('pid')}) {res.get('project') or ''}".strip())
+        raise SystemExit(0)
+    elif args.cmd == "capture":
+        from fl_mcp import capture
+
+        try:
+            res = capture.capture_fl_video(
+                args.out,
+                args.seconds,
+                fps=args.fps,
+                crf=args.crf,
+                window_title=args.title,
+                mute_fl_only=not args.keep_audio,
+                drive_playback=not args.no_play,
+            )
+        except ValueError as exc:
+            print(exc, file=sys.stderr)
+            raise SystemExit(1) from None
+        if args.json:
+            print(json.dumps(res, indent=2, ensure_ascii=False))
+        else:
+            print(f"Captured {res['video']} ({res['bytes']} B, {res['duration_s']} s)")
+        raise SystemExit(0)
+    elif args.cmd == "renders":
+        from fl_mcp import paths, render
+
+        root = paths.data_dir() / "renders"
+        if args.clean:
+            res = render.cleanup_renders(
+                max_keep=args.max_keep, max_age_hours=args.max_age_hours, workdir=root
+            )
+            if args.json:
+                print(json.dumps(res, indent=2))
+            else:
+                mb = round(res["freed_bytes"] / (1024 * 1024), 2)
+                print(f"Removed {res['removed']} render dir(s), freed {mb} MB")
+            raise SystemExit(0)
+        dirs = [d for d in root.iterdir() if d.is_dir()] if root.is_dir() else []
+        total_b = sum(
+            f.stat().st_size for d in dirs for f in d.rglob("*") if f.is_file()
+        )
+        info = {"dir": str(root), "count": len(dirs), "bytes": total_b}
+        if args.json:
+            print(json.dumps(info, indent=2))
+        else:
+            print(f"{root}: {len(dirs)} render(s), {round(total_b / (1024 * 1024), 2)} MB")
+        raise SystemExit(0)
+    elif args.cmd == "sf2":
+        from fl_mcp import sf2
+
+        try:
+            if args.release is not None:
+                rel: float | str
+                try:
+                    rel = float(args.release)
+                except ValueError:
+                    rel = args.release
+                res = sf2.patch_sf2_release(
+                    args.path, rel, out_path=args.out, backup=not args.no_backup
+                )
+            else:
+                res = sf2.inspect_sf2(args.path)
+        except (OSError, ValueError) as exc:
+            print(exc, file=sys.stderr)
+            raise SystemExit(1) from None
+        if args.json:
+            print(json.dumps(res, indent=2, ensure_ascii=False))
+        else:
+            if args.release is not None:
+                print(
+                    f"Patched {res['file']}: release={res['release_s']}s ({res['timecents']} tc) "
+                    f"updated={res['updated_zones']} inserted={res['inserted_zones']}"
+                )
+            else:
+                r = res["release_s"]
+                print(
+                    f"{res['file']}: zones={res['zones']} with_gen38={res['zones_with_release']} "
+                    f"release={r['min']}..{r['max']}s slam_risk={res['slam_cut_risk']}"
+                )
+        raise SystemExit(0)
+    elif args.cmd == "score":
+        from fl_mcp import flp
+
+        try:
+            data = json.loads(Path(args.score_json).read_text(encoding="utf-8"))
+            res = flp.build_from_score(
+                args.template,
+                data,
+                args.out,
+                donor_flp=args.donor,
+                resolve_harmony=not args.no_harmony,
+            )
+        except (OSError, ValueError) as exc:
+            print(exc, file=sys.stderr)
+            raise SystemExit(1) from None
+        if args.json:
+            print(json.dumps(res, indent=2, ensure_ascii=False))
+        else:
+            print(
+                f"Built {res['file']} ({res['tempo']} BPM, {len(res['channels'])} ch, "
+                f"{res['sections']} sections, {res['clips']} clips)"
+            )
         raise SystemExit(0)
     elif args.cmd == "service":
         raise SystemExit(_service(args))
