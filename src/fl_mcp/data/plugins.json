@@ -478,6 +478,115 @@
         }
       },
       "why": "A ceiling at -1 dB leaves room for lossy encoding; do not chase loudness before the mix is balanced."
+    },
+    "piano": {
+      "want": [
+        "eq"
+      ],
+      "set": {
+        "comp": {
+          "threshold": "-16 dB",
+          "ratio": "1.7:1",
+          "attack": "30 ms",
+          "release": "150 ms"
+        }
+      },
+      "why": "Keep concert/solo piano dynamics natural (<=2 dB GR, HPF 30-40 Hz, shared Room/Hall send)."
+    },
+    "strings": {
+      "want": [
+        "eq"
+      ],
+      "set": {
+        "comp": {
+          "threshold": "-20 dB",
+          "ratio": "2:1",
+          "attack": "35 ms",
+          "release": "220 ms"
+        }
+      },
+      "why": "Preserve bow swell and warm low-mids; send to shared concert hall rather than heavy insert reverb."
+    },
+    "winds": {
+      "want": [
+        "eq"
+      ],
+      "set": {
+        "comp": {
+          "threshold": "-20 dB",
+          "ratio": "2:1",
+          "attack": "25 ms",
+          "release": "180 ms"
+        }
+      },
+      "why": "Smooth breath dynamics gently without flattening phrase swells."
+    },
+    "acoustic_guitar": {
+      "want": [
+        "eq"
+      ],
+      "set": {
+        "comp": {
+          "threshold": "-18 dB",
+          "ratio": "2.5:1",
+          "attack": "20 ms",
+          "release": "120 ms"
+        }
+      },
+      "why": "Tame 120-250 Hz body resonance while keeping fingerstyle pluck transients."
+    },
+    "hall_send": {
+      "want": [
+        "reverb"
+      ],
+      "set": {
+        "reverb": {
+          "wet": "100%",
+          "predelay": "35 ms",
+          "lowcut": "200 Hz",
+          "highcut": "6000 Hz"
+        }
+      },
+      "why": "Dedicated reverb send bus MUST keep dry 0% and wet 100% with HPF 180-250 Hz."
+    }
+  },
+  "enums": {
+    "fruity parametric eq 2": {
+      "band_type": {
+        "0.0": "Off",
+        "0.143": "Low pass",
+        "0.286": "Band pass",
+        "0.429": "High pass",
+        "0.571": "Notch",
+        "0.714": "Low shelf",
+        "0.857": "Peaking",
+        "1.0": "High shelf"
+      },
+      "band_order": {
+        "0.0": "Steep 8",
+        "0.143": "Steep 6",
+        "0.286": "Steep 4",
+        "0.429": "Gentle 8",
+        "0.571": "Gentle 6",
+        "0.714": "Gentle 4",
+        "0.857": "2 (12 dB/oct)",
+        "1.0": "1 (6 dB/oct)"
+      }
+    },
+    "fruity stereo shaper": {
+      "routing": {
+        "0.5": "Neutral (no phase invert)"
+      },
+      "note": "Keep L/R matrix at unity (0.5) unless intentional M/S split; inverted levels cause -16 dB phase cancellation."
+    },
+    "fruity limiter": {
+      "curve": "1-8 attack/release tension curve; ATT is look-ahead latency (PDC). Set CEIL=-1.0 dBTP.",
+      "comp_only": "Set Limiter CEIL to max and ATT to 0 ms.",
+      "limit_only": "Set Compressor THRES to max."
+    },
+    "fruity reeverb 2": {
+      "room_size": "Unitless display 0..100 (pass Room size=80 directly in fl_param settings).",
+      "send_bus": "Set DRY=0%, WET=100% (or binary v[8]=115..125) on dedicated send tracks."
     }
   },
   "instruments": {
