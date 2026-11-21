@@ -15,6 +15,7 @@ import re
 import sys
 import threading
 import time
+import weakref
 from typing import Any
 
 log = logging.getLogger("fl_mcp")
@@ -91,6 +92,60 @@ def match_port(names: list[str], wanted: str) -> str | None:
     return next((n for n in names if w in n.lower()), None)
 
 
+def _disk_script_version() -> int | None:
+    try:
+        from fl_mcp.install import targets
+
+        dev, _ = targets()
+        if not dev.is_file():
+            return None
+        m = re.search(r"^VERSION\s*=\s*(\d+)", dev.read_text(encoding="utf-8"), re.MULTILINE)
+        return int(m.group(1)) if m else None
+    except Exception:
+        return None
+
+
+def _fl_window_hint() -> str:
+    """Non-intrusive check for FL Studio blockers (Welcome dialog or not running)."""
+    if sys.platform != "win32":
+        return ""
+    try:
+        import ctypes
+
+        u32 = ctypes.windll.user32
+        titles: list[str] = []
+
+        @ctypes.WINFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p)
+        def _cb(hwnd, _lp):
+            if not u32.IsWindowVisible(hwnd):
+                return 1
+            n = u32.GetWindowTextLengthW(hwnd)
+            if 0 < n < 256:
+                buf = ctypes.create_unicode_buffer(n + 1)
+                u32.GetWindowTextW(hwnd, buf, n + 1)
+                t = buf.value.strip()
+                low = t.lower()
+                if "fl studio" in low or "welcome to fl" in low:
+                    titles.append(t)
+            return 1
+
+        u32.EnumWindows(_cb, 0)
+        if not titles:
+            return " (No visible FL Studio window found — launch FL Studio first.)"
+        for t in titles:
+            if "welcome" in t.lower():
+                return f" (Detected blocking dialog '{t}' — dismiss it to enter the project.)"
+        return f" (Visible FL window: '{titles[0]}'.)"
+    except Exception:
+        return ""
+
+
+def _close_weak(ref: "weakref.ReferenceType[Bridge]") -> None:
+    obj = ref()
+    if obj is not None:
+        obj.close()
+
+
 class Bridge:
     """Thread-safe request/response channel to FL Studio. One request in flight at a time."""
 
@@ -105,7 +160,7 @@ class Bridge:
         self._in: Any = None
         self._out: Any = None
         self._cooldown_until: float = 0.0
-        atexit.register(self.close)
+        atexit.register(_close_weak, weakref.ref(self))
 
     # -- MIDI I/O (replaced by an in-memory loopback in tests)
 
@@ -161,6 +216,7 @@ class Bridge:
             except Exception:
                 pass
         self._in = self._out = None
+        self.info = None
         self._cooldown_until = 0.0
 
     def _on_msg(self, msg: Any) -> None:
@@ -203,11 +259,20 @@ class Bridge:
             if self.info is None and req.get("o") != "ping":
                 self.info = self._roundtrip(dumps({"o": "ping"}), timeout)
                 if self.info.get("proto") != PROTO or self.info.get("ver", 0) < SCRIPT_VERSION:
+                    live_ver = self.info.get("ver", 0)
                     self.info = None
-                    msg = (
-                        "FL MCP script in FL Studio is outdated: run `fl-mcp install`, "
-                        "then restart FL Studio."
-                    )
+                    disk_ver = _disk_script_version()
+                    if disk_ver is not None and disk_ver >= SCRIPT_VERSION:
+                        msg = (
+                            f"FL MCP script in FL Studio is outdated (v{live_ver}, need "
+                            f"v{SCRIPT_VERSION}); disk already has v{disk_ver} — restart FL "
+                            "Studio (or run `fl-mcp install` / close stale hidden FL64.exe)."
+                        )
+                    else:
+                        msg = (
+                            f"FL MCP script in FL Studio is outdated (v{live_ver}, need "
+                            f"v{SCRIPT_VERSION}): run `fl-mcp install`, then restart FL Studio."
+                        )
                     self._log_midi(**base, error=msg)
                     raise FLError(msg)
             return self._roundtrip(payload, timeout)
@@ -281,11 +346,12 @@ class Bridge:
                 msg = str(res.get("e") or "unknown FL Studio error")
                 finish(ok=False, error=msg)
                 raise FLError(msg)
+        hint = _fl_window_hint()
         msg = (
-            f"No answer from FL Studio on MIDI port '{self.port}'. Check: FL Studio is running "
-            "and not blocked by a dialog; Options > MIDI settings has the port enabled as input "
-            "with controller type 'FL MCP' and as output with the same port number; the script is "
-            "installed (`fl-mcp install`). Run `fl-mcp doctor` for details."
+            f"No answer from FL Studio on MIDI port '{self.port}'.{hint} Check: FL Studio is "
+            "running and not blocked by a dialog; Options > MIDI settings has the port enabled "
+            "as input with controller type 'FL MCP' and as output with the same port number; the "
+            "script is installed (`fl-mcp install`). Run `fl-mcp doctor` for details."
         )
         finish(ok=False, error=msg)
         raise FLError(msg)
