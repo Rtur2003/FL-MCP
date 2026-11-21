@@ -199,7 +199,22 @@ async def fl_transport(
     """Playback and project control. Returns tempo, play/record state, loop mode and position."""
     if action in ("tempo", "position", "loop") and value is None:
         raise ToolError(f"{action} needs a value")
-    return _out(await _fl({"o": "tr", "a": action, "v": value}))
+    try:
+        return _out(await _fl({"o": "tr", "a": action, "v": value}))
+    except ToolError as exc:
+        if (
+            action in ("play", "pause", "stop")
+            and os.name == "nt"
+            and "no answer" in str(exc).lower()
+        ):
+            from fl_mcp import capture
+
+            hwnd, title = await _thread(capture.find_fl_window)
+            if hwnd and await _thread(capture.toggle_play_space, hwnd):
+                return _out(
+                    {"fallback": "win32_space", "action": action, "hwnd": hwnd, "title": title}
+                )
+        raise
 
 
 def _mixer_pending(res: dict[str, Any], props: dict[str, Any]) -> bool:
@@ -612,7 +627,14 @@ async def fl_param(
                 start : start + limit
             ]
         return _out(out)
-    return _out(await _fl(req))
+    out = await _fl(req)
+    if req.get("a") == "info" and isinstance(out, dict) and out.get("plugin"):
+        from fl_mcp import plugins_kb
+
+        enum_map = plugins_kb.enums(str(out["plugin"]))
+        if enum_map:
+            out["enums"] = enum_map
+    return _out(out)
 
 
 async def fl_library(
@@ -720,13 +742,45 @@ def _render_blocking(
     return render.render(flp, fmt, **kwargs)
 
 
+def _parse_sections(spec: str) -> list[tuple[float, str]]:
+    out: list[tuple[float, str]] = []
+    for raw in spec.split(","):
+        part = raw.strip()
+        if not part:
+            continue
+        if ":" in part:
+            t_s, _, label = part.partition(":")
+            try:
+                out.append((float(t_s.strip()), label.strip() or f"{t_s.strip()}s"))
+                continue
+            except ValueError:
+                pass
+        if "@" in part:
+            label, _, t_s = part.partition("@")
+            try:
+                out.append((float(t_s.strip()), label.strip() or f"{t_s.strip()}s"))
+                continue
+            except ValueError:
+                pass
+        raise ToolError(f"bad section '{part}'; use '0:Intro,30:Verse' or 'Intro@0,Verse@30'")
+    return out
+
+
 async def fl_audio(
     action: Literal[
-        "analyze", "render", "compare", "master", "transcribe", "masking", "status"
+        "analyze",
+        "render",
+        "compare",
+        "master",
+        "transcribe",
+        "masking",
+        "arc",
+        "stems",
+        "status",
     ] = "analyze",
     path: Annotated[str | None, Field(description="audio file; default latest export")] = None,
     project: Annotated[str | None, Field(description="render: .flp; default just saved")] = None,
-    reference: Annotated[str | None, Field(description="compare/masking: reference track")] = None,
+    reference: Annotated[str | None, Field(description="compare/masking: ref; arc: secs")] = None,
     fmt: Literal["wav", "mp3", "ogg", "flac", "mid", "zip"] = "wav",
     genre: Genre | None = None,
     target: Annotated[
@@ -737,8 +791,8 @@ async def fl_audio(
     split_mixer: Annotated[bool, Field(description="render: collect split mixer stems")] = False,
 ) -> str:
     """Audio & music intelligence. analyze: LUFS/TP/crest/stereo/spectrum/advice; render: export
-    wav/mp3/ogg/flac/mid/zip; compare: vs reference; transcribe: BPM+key+melody; masking: vocal
-    vs backing EQ cuts; master: dial limiter."""
+    wav/mp3/ogg/flac/mid/zip (+split_mixer stems); compare: vs reference; transcribe: BPM+key;
+    masking: vocal vs backing EQ; arc: per-section LUFS; stems: stem balance; master: limiter."""
     if action == "status":
         return _out({"analysis": audio.available(), **await _thread(render.status)})
     goal = target if target is not None else (GENRES[genre].lufs if genre else None)
@@ -761,6 +815,28 @@ async def fl_audio(
         if not mine:
             raise ToolError("masking needs path: foreground/vocal track")
         return _out(await _thread(audio.masking, mine, reference))
+    if action == "arc":
+        mine = path or await _thread(render.newest_audio)
+        if not mine:
+            raise ToolError("arc needs path: no audio was exported recently")
+        secs = _parse_sections(reference) if reference else None
+        return _out(await _thread(audio.section_arc, mine, secs))
+    if action == "stems":
+        target_stems: Any
+        if path:
+            p_obj = Path(path).expanduser()
+            if "," in path and not p_obj.exists():
+                target_stems = [s.strip() for s in path.split(",") if s.strip()]
+            elif p_obj.is_file():
+                target_stems = p_obj.parent
+            else:
+                target_stems = p_obj
+        else:
+            mine = await _thread(render.newest_audio)
+            if not mine:
+                raise ToolError("stems needs path: folder of split-mixer stems")
+            target_stems = Path(mine).parent
+        return _out(await _thread(audio.stem_balance, target_stems))
     if action == "master":
         _require_writable("run mastering")
         if not desk.enabled() or desk.mode() == "stealth":
@@ -928,7 +1004,7 @@ async def fl_desk(
     ] = None,
     amount: Annotated[int, Field(ge=-20, le=20, description="scroll: clicks, up is +")] = 3,
     ms: Annotated[int, Field(ge=0, le=10000)] = 500,
-    macro: Literal["script", "export", "open", "save", "launch"] | None = None,
+    macro: Literal["script", "export", "open", "save", "launch", "dismiss"] | None = None,
     path: Annotated[
         str | None, Field(description="macro export: new audio; open/launch: .flp")
     ] = None,
@@ -977,8 +1053,10 @@ async def fl_desk(
                 info.update(d.save())
             elif macro == "launch":
                 info.update(d.launch(Path(path) if path else None))
+            elif macro == "dismiss":
+                info.update(d.dismiss())
             else:
-                raise ToolError("macro needs script, export, open, save or launch")
+                raise ToolError("macro needs script, export, open, save, launch or dismiss")
             if not look:
                 return info, None
             d.sleep(0.4)
