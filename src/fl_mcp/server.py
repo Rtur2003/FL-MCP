@@ -89,7 +89,7 @@ async def _fl(req: dict[str, Any]) -> Any:
     op = req.get("o")
     ro_op = (
         op in ("ping", "status", "probe", "diag", "summary", "list", "peaks", "roll")
-        or (op == "param" and req.get("a") in ("list", "info", "presets", "io"))
+        or (op == "param" and req.get("a") in ("list", "info", "presets", "io", "enum"))
         or (op == "steps" and not req.get("on") and not req.get("off") and not req.get("clear"))
         or (
             op == "ui"
@@ -176,7 +176,17 @@ async def fl_list(
 
 async def fl_transport(
     action: Literal[
-        "play", "pause", "stop", "record", "loop", "metronome", "tempo", "position", "save", "undo"
+        "play",
+        "pause",
+        "stop",
+        "record",
+        "loop",
+        "metronome",
+        "tempo",
+        "position",
+        "save",
+        "savenew",
+        "undo",
     ],
     value: Annotated[
         float | None,
@@ -314,19 +324,37 @@ async def fl_steps(
     return _out(out)
 
 
-def _note(row: list[float]) -> list[float]:
-    if len(row) not in (3, 4):
-        raise ToolError("each note is [midi_note, start_beat, length_beats, velocity?]")
+_NOTE_EXTRA_KEYS = frozenset(
+    {"color", "c", "slide", "porta", "pan", "release", "rel", "fcut", "fres", "pitchofs", "repeats"}
+)
+
+
+def _note(row: list[Any]) -> list[Any]:
+    if len(row) not in (3, 4, 5):
+        raise ToolError("each note is [midi_note, start_beat, length_beats, velocity?, extra?]")
     pitch, start, length = row[:3]
-    raw_vel = float(row[3]) if len(row) == 4 else 100.0
-    velocity = max(1, round(raw_vel * 127)) if 0 < raw_vel < 1.0 else round(raw_vel)
+    raw_vel = row[3] if len(row) >= 4 else 100
+    if isinstance(raw_vel, float) and 0.0 < raw_vel <= 1.0:
+        velocity = max(1, round(raw_vel * 127))
+    else:
+        velocity = round(float(raw_vel))
     if not (0 <= pitch <= 127 and float(pitch).is_integer()):
         raise ToolError(f"midi_note must be an integer 0-127, got {pitch}")
     if start < 0 or length <= 0:
         raise ToolError(f"start must be >= 0 and length > 0, got {start}, {length}")
     if not 1 <= velocity <= 127:
         raise ToolError(f"velocity must be 1-127, got {velocity}")
-    return [int(pitch), round(float(start), 4), round(float(length), 4), int(velocity)]
+    out: list[Any] = [int(pitch), round(float(start), 4), round(float(length), 4), int(velocity)]
+    if len(row) == 5:
+        extra = row[4]
+        if not isinstance(extra, dict):
+            raise ToolError("note extra attributes (5th element) must be an object")
+        bad = [k for k in extra if k not in _NOTE_EXTRA_KEYS]
+        if bad:
+            raise ToolError(f"unknown note extra keys: {', '.join(bad)}")
+        if extra:
+            out.append(extra)
+    return out
 
 
 def _write_json(path: Any, obj: Any) -> None:
@@ -366,8 +394,8 @@ def _delete_spec(row: list[float]) -> list[float]:
 
 async def fl_notes(
     notes: Annotated[
-        list[list[float]] | None,
-        Field(description="[midi_note, start_beat, length_beats, vel?]; 4/4 bar=4"),
+        list[list[Any]] | None,
+        Field(description="[midi, start, len, vel?, extra?]; 4/4 bar=4"),
     ] = None,
     chords: Annotated[str | None, Field(description="'Am7@0:4, G7@1|1:n/8'")] = None,
     delete: Annotated[
@@ -452,10 +480,12 @@ async def fl_notes(
             raise ToolError("preview needs notes or chords")
         target_ch = channel if channel >= 0 else (await _fl({"o": "status"}))["ch"]
         played = rows[:16]
-        for pitch, _start, _len, vel in played:
+        for item in played:
+            pitch, _start, _len, vel = item[:4]
             await _fl({"o": "note", "c": target_ch, "n": int(pitch), "v": int(vel)})
         await anyio.sleep(0.25)
-        for pitch, _start, _len, _vel in played:
+        for item in played:
+            pitch = item[0]
             await _fl({"o": "note", "c": target_ch, "n": int(pitch), "v": 0})
         return _out({"previewed": len(played), "channel": target_ch})
     if not rows and not del_rows and not replace_flag:
@@ -510,9 +540,9 @@ async def fl_notes(
 async def fl_param(
     target: Literal["channel", "mixer"],
     index: Annotated[Index, Field(description="channel index or mixer track")],
-    slot: Annotated[int, Field(ge=-1, le=9, description="mixer effect slot 0-9")] = -1,
+    slot: Annotated[int, Field(ge=-1, le=24, description="mixer effect slot 0-24")] = -1,
     view: Annotated[
-        Literal["params", "info", "presets", "io"], Field(description="read")
+        Literal["params", "info", "presets", "io", "enum"], Field(description="read")
     ] = "params",
     find: Annotated[str, Field(description="list: names containing this")] = "",
     param: Annotated[
@@ -521,17 +551,17 @@ async def fl_param(
     value: Annotated[float | None, Field(description="0-1 position of 'param'")] = None,
     real: Annotated[str | None, Field(description="'-6 dB', '2.5 kHz', '120 ms', '4:1'")] = None,
     settings: Annotated[
-        str | None, Field(description="'Threshold=-18 dB, Ratio=4:1, Gain=0.6' (bare = 0-1)")
+        str | None, Field(description="'Threshold=-18 dB, Ratio=4:1, Gain=0.6' (0-1 or real)")
     ] = None,
     preset: Annotated[str | None, Field(description="preset name, or +1 / -1")] = None,
     start: Annotated[int, Field(ge=0, description="first item to list")] = 0,
     limit: Annotated[int, Field(ge=1, le=120)] = 40,
 ) -> str:
     """Any plugin on a channel or mixer slot, stock or third party. Lists parameters; view reads
-    info, presets, or io (routing, out_ctrls, pads, slot state). Sets param or settings (including
-    fl:mix, fl:mute, fl:slots, fl:focus), or loads preset."""
+    info, presets, io, or enum options. Sets param or settings (including fl:mix, fl:mute,
+    fl:slots, fl:focus), or loads preset."""
     if target == "mixer" and slot < 0:
-        raise ToolError("mixer needs slot 0-9")
+        raise ToolError("mixer needs slot 0-24")
     req: dict[str, Any] = {"o": "param", "t": target, "i": index, "s": slot}
     p_key = param.strip().lower() if param is not None else ""
     if settings:
@@ -549,6 +579,14 @@ async def fl_param(
         req["v" if val is not None else "r"] = val if val is not None else real
     elif preset:
         req.update(a="preset", **({"d": int(preset)} if units.is_steps(preset) else {"q": preset}))
+    elif view == "enum":
+        if param is None:
+            raise ToolError("view='enum' needs param: a name or index")
+        req.update(
+            a="enum",
+            p=int(param) if param.strip().isdigit() else param,
+            n=min(limit, 65),
+        )
     elif p_key in ("fl:mix", "fl:mute", "fl:slots") or view != "params":
         act = "io" if p_key in ("fl:mix", "fl:mute", "fl:slots") else view
         req.update(a=act, st=start, n=limit)
@@ -655,14 +693,31 @@ async def fl_library(
     return _out({"cols": cols, "rows": rows})
 
 
-def _render_blocking(flp: str | Path, fmt: str, *, always_copy: bool = False) -> dict[str, Any]:
+def _render_blocking(
+    flp: str | Path,
+    fmt: str,
+    *,
+    always_copy: bool = False,
+    out_dir: str | None = None,
+    keep: bool = True,
+    split_mixer: bool = False,
+) -> dict[str, Any]:
     try:
         sig = inspect.signature(render.render)
     except (TypeError, ValueError):
         return render.render(flp, fmt)
+    kwargs: dict[str, Any] = {}
     if always_copy and "always_copy" in sig.parameters:
-        return render.render(flp, fmt, always_copy=True, isolate=True)
-    return render.render(flp, fmt)
+        kwargs["always_copy"] = True
+        if "isolate" in sig.parameters:
+            kwargs["isolate"] = True
+    if out_dir is not None and "out_dir" in sig.parameters:
+        kwargs["out_dir"] = out_dir
+    if not keep and "keep" in sig.parameters:
+        kwargs["keep"] = False
+    if split_mixer and "split_mixer" in sig.parameters:
+        kwargs["split_mixer"] = True
+    return render.render(flp, fmt, **kwargs)
 
 
 async def fl_audio(
@@ -678,6 +733,8 @@ async def fl_audio(
         float | None, Field(ge=-30, le=0, description="LUFS goal; default the genre's or -14")
     ] = None,
     ceiling: Annotated[float, Field(ge=-6, le=0, description="true peak limit, dBTP")] = -1.0,
+    out_dir: Annotated[str | None, Field(description="render: output folder")] = None,
+    split_mixer: Annotated[bool, Field(description="render: collect split mixer stems")] = False,
 ) -> str:
     """Audio & music intelligence. analyze: LUFS/TP/crest/stereo/spectrum/advice; render: export
     wav/mp3/ogg/flac/mid/zip; compare: vs reference; transcribe: BPM+key+melody; masking: vocal
@@ -722,6 +779,7 @@ async def fl_audio(
         return _out(await _thread(mastering.run, bridge.call, measure, aim, ceiling))
     made: dict[str, Any] | None = None
     if action == "render":
+        _require_writable("render audio")
         mode = desk.mode()
         if not project and desk.enabled() and mode == "foreground" and fmt in ("wav", "mp3"):
             target = data_dir() / "exports" / f"mix-{int(time.time())}.{fmt}"
@@ -744,7 +802,14 @@ async def fl_audio(
                     )
             elif fl_open:
                 if os.name == "nt" and (project or desk.enabled()) and render.find_fl() is not None:
-                    made = await _thread(_render_blocking, flp, fmt, always_copy=True)
+                    made = await _thread(
+                        _render_blocking,
+                        flp,
+                        fmt,
+                        always_copy=True,
+                        out_dir=out_dir,
+                        split_mixer=split_mixer,
+                    )
                     made["parallel"] = True
                     made["note"] = (
                         "Rendered saved .flp on an isolated hidden desktop while FL Studio "
@@ -757,7 +822,13 @@ async def fl_audio(
                         "fl_desk to export the open project"
                     )
             else:
-                made = await _thread(_render_blocking, flp, fmt)
+                made = await _thread(
+                    _render_blocking,
+                    flp,
+                    fmt,
+                    out_dir=out_dir,
+                    split_mixer=split_mixer,
+                )
         if fmt in ("mid", "zip"):
             return _out({"render": made})
         path = made["audio"]
@@ -794,6 +865,7 @@ async def fl_ui(
     roll, browser), key (press navigation/editing keys), browser (step/scan/goto/select/preview),
     load (find query and add effect on mixer index or generator channel), form."""
     if action == "load":
+        _require_writable("load plugin")
         return _out(await _thread(uiload.load, bridge.call, query or "", index))
     if action == "form":
         return _out(await _fl({"o": "ui", "a": "form"}))
@@ -856,9 +928,9 @@ async def fl_desk(
     ] = None,
     amount: Annotated[int, Field(ge=-20, le=20, description="scroll: clicks, up is +")] = 3,
     ms: Annotated[int, Field(ge=0, le=10000)] = 500,
-    macro: Literal["script", "export", "open", "save"] | None = None,
+    macro: Literal["script", "export", "open", "save", "launch"] | None = None,
     path: Annotated[
-        str | None, Field(description="macro export: new audio file; open: .flp")
+        str | None, Field(description="macro export: new audio; open/launch: .flp")
     ] = None,
     full: Annotated[bool, Field(description="shot: the whole screen, not only FL")] = False,
     look: Annotated[bool, Field(description="return a screenshot after acting")] = True,
@@ -868,6 +940,8 @@ async def fl_desk(
     type enters text, key presses combos (blocked: closing and system keys). Input only goes to FL
     and stops if the mouse is in the top-left corner. macro: script applies queued piano roll
     notes, export renders the open project to audio, open loads a .flp, save saves."""
+    if action not in ("status", "shot", "wait"):
+        _require_writable(f"run fl_desk action={action}")
     folder = data_dir()
 
     def work() -> tuple[dict[str, Any], bytes | None]:
@@ -901,8 +975,10 @@ async def fl_desk(
                 info.update(d.open_project(Path(path or "")))
             elif macro == "save":
                 info.update(d.save())
+            elif macro == "launch":
+                info.update(d.launch(Path(path) if path else None))
             else:
-                raise ToolError("macro needs script, export, open or save")
+                raise ToolError("macro needs script, export, open, save or launch")
             if not look:
                 return info, None
             d.sleep(0.4)
@@ -1118,18 +1194,19 @@ async def fl_mix(
     ] = None,
     track: Annotated[int | None, Field(ge=0, description="chain/bus: target mixer track")] = None,
     role: Annotated[str | None, Field(description="chain/bus: role or bus track name")] = None,
+    style: Annotated[str | None, Field(description="doctor/fix: 'acoustic', 'piano', etc.")] = None,
     apply: Annotated[bool, Field(description="chain: set the role's starting values")] = False,
 ) -> str:
     """Measure and shape mixer tracks. meter: dBFS peaks; balance: hit target peaks;
     doctor: ranked mix issues; fix: auto pan, HPF/mud EQ and clip gain; bus: route sends;
     chain: check or set compressor/limiter/reverb/delay plugins."""
     if action == "doctor":
-        doc = await _thread(chain.doctor, bridge.call, seconds, bar, plan)
+        doc = await _thread(chain.doctor, bridge.call, seconds, bar, plan, style)
         telemetry.update_snapshot(doctor=doc)
         return _out(doc)
     if action == "fix":
         _require_writable("auto-fix mix")
-        return _out(await _thread(mixing.fix_mix, bridge.call, seconds, bar, plan))
+        return _out(await _thread(mixing.fix_mix, bridge.call, seconds, bar, plan, style))
     if action == "bus":
         _require_writable("route mixer bus")
         raw = (targets or "").strip()
@@ -1177,6 +1254,7 @@ async def fl_mix(
         }
         telemetry.update_snapshot(peaks=peaks_out)
         return _out(peaks_out)
+    _require_writable("balance mixer faders")
     goals: dict[int, float] = {}
     if targets:
         try:
