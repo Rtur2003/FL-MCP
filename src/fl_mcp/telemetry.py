@@ -91,7 +91,14 @@ def _append(event: dict[str, Any]) -> None:
                 tmp = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
                 try:
                     tmp.write_text(trimmed, encoding="utf-8")
-                    os.replace(tmp, path)
+                    for attempt in range(3):
+                        try:
+                            os.replace(tmp, path)
+                            break
+                        except PermissionError:
+                            if attempt == 2:
+                                raise
+                            time.sleep(0.02 * (attempt + 1))
                 finally:
                     tmp.unlink(missing_ok=True)
         except OSError:
