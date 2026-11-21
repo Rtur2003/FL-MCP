@@ -1122,12 +1122,26 @@ def _find_pattern(plan: Any, ref: str) -> int:
     raise ToolError("pattern not found; use fl_produce action=show to see the names")
 
 
+def _build_score(template_path: str, score_path: str) -> dict[str, Any]:
+    from fl_mcp.flp import build_from_score
+
+    try:
+        score = json.loads(Path(score_path).expanduser().read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"cannot read score json: {exc}") from None
+    if not isinstance(score, dict):
+        raise ValueError("score json must be an object with a 'channels' list")
+    out = data_dir() / "exports" / f"score-{int(time.time())}.flp"
+    return build_from_score(template_path, score, out)
+
+
 async def fl_produce(
     action: Annotated[
         Literal[
-            "make", "plan", "apply", "queue", "midi", "flp", "arrange", "inspect", "show", "genres"
+            "make", "plan", "apply", "queue", "midi", "flp", "arrange", "score", "inspect", "show",
+            "genres",
         ],
-        Field(description="make = plan + deliver; arrange = loop->song .flp"),
+        Field(description="make = plan + deliver; arrange = loop->song .flp; score = json->.flp"),
     ] = "make",
     genre: Genre | None = None,
     key: Annotated[str | None, Field(description="'A minor', 'F# dorian'; default random")] = None,
@@ -1139,7 +1153,7 @@ async def fl_produce(
     energy: Annotated[float, Field(ge=0, le=1)] = 0.75,
     seed: Annotated[int | None, Field(ge=0)] = None,
     roles: Annotated[str | None, Field(description="only these, e.g. 'kick,bass,lead'")] = None,
-    plan: Annotated[str | None, Field(description="plan id; default latest")] = None,
+    plan: Annotated[str | None, Field(description="plan id; score: score .json path")] = None,
     channels: Annotated[str | None, Field(description="'kick=0,bass=3'")] = None,
     pattern: Annotated[str | None, Field(description="queue/show: name or index")] = None,
     role: Annotated[str | None, Field(description="queue: part to send to the piano roll")] = None,
@@ -1154,9 +1168,18 @@ async def fl_produce(
 ) -> str:
     """Fast production. make: builds a genre-aware plan and delivers steps, tempo, markers,
     pan, EQ & MIDI. With template (.flp/.zip), flp builds a project and arrange expands an
-    existing loop into sections keeping original melodies. queue: send part to piano roll."""
+    existing loop into sections keeping original melodies. queue: send part to piano roll.
+    score: template + plan=score.json builds a multi-section .flp with acoustic physics."""
     if action == "genres":
         return _out({k: [g.name, *g.bpm, g.default_scale] for k, g in GENRES.items()})
+    if action == "score":
+        _require_writable("build score project")
+        if not (template and plan):
+            raise ToolError("score needs template (.flp) and plan (score .json path)")
+        async with _spend("produce.flp") as bill:
+            built_score = await _thread(_build_score, template, plan)
+            bill.ok("produce.flp")
+        return _out(built_score)
     if action == "inspect":
         if not template:
             raise ToolError("inspect needs template")
