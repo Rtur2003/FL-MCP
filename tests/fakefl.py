@@ -492,6 +492,9 @@ class FakeFL:
     def mixer_getActiveEffectIndex(self):
         return (10, 0)
 
+    def mixer_afterRoutingChanged(self):
+        self.routing_commits = getattr(self, "routing_commits", 0) + 1
+
     def device_isAssigned(self):
         return self.assigned
 
