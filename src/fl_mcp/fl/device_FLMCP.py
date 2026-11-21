@@ -416,10 +416,12 @@ def _route(i, send, level):
     dest = _idx(send, 0, mixer.trackCount() - 2, "send")
     if level is not None and float(level) < 0:
         mixer.setRouteTo(i, dest, False, True)
+        _try(mixer.afterRoutingChanged)
         return
     mixer.setRouteTo(i, dest, True, True)
     if level is not None:
         mixer.setRouteToLevel(i, dest, _num(level, 0, 1, "level"))
+    _try(mixer.afterRoutingChanged)
 
 
 _SETTERS = {
@@ -539,6 +541,7 @@ def _op_status(r):
         {
             "fl": _try(ui.getVersion),
             "api": _try(general.getVersion),
+            "ver": VERSION,
             "title": _try(ui.getProgTitle),
             "metro": bool(_try(general.getUseMetronome)),
             "pat": _try(patterns.patternNumber),
@@ -691,7 +694,7 @@ def _parse_text(text):
     if not s:
         return None
     low = s.lower()
-    if "inf" in low:
+    if "inf" in low or "\u221e" in s:
         return (-120.0 if "-" in low else 120.0), "db"
     got = _scan_number(s)
     if got is None:
@@ -840,6 +843,9 @@ def _solve_param(i, slot, glob, p, want, unit):
             raise ValueError("this plugin does not show the value as text; use value 0-1")
         if unit and first[1] and unit != first[1]:
             raise ValueError("the parameter is in %s, not %s" % (first[1], unit))
+        tol = max(abs(want) * 0.02, _TOL.get(unit or first[1], 0.01))
+        if abs(first[0] - want) <= tol / 8:
+            return True
         samples = []
         for k in range(17):
             got = put(k / 16.0)
@@ -1209,6 +1215,29 @@ def _op_param(r):
         )
     elif act == "preset":
         out.update(_op_preset(i, slot, glob, r))
+    elif act == "enum":
+        p = _find_param(i, slot, glob, r.get("p"))
+        steps = _idx(r.get("n") or 25, 2, 65, "steps")
+        start_v = plugins.getParamValue(p, i, slot, glob)
+        seen_txt = {}
+        options = []
+        try:
+            for k in range(steps):
+                x = k / float(steps - 1)
+                plugins.setParamValue(x, p, i, slot, midi.PIM_None, glob)
+                txt = _shown(i, slot, glob, p)
+                if txt not in seen_txt:
+                    seen_txt[txt] = _r(x)
+                    options.append([_r(x), txt])
+        finally:
+            plugins.setParamValue(start_v, p, i, slot, midi.PIM_None, glob)
+        out.update(
+            {
+                "param": _param_row(i, slot, glob, p),
+                "options": options,
+                "cols": ["val", "text"],
+            }
+        )
     elif act == "list":
         find = _key(r.get("f"))
         limit = _idx(r.get("n") or 40, 1, 120, "limit")
