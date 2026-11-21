@@ -245,6 +245,7 @@ def report(
     tp = true_peak(x)
     wide = stereo(x, fs)
     bands = spectrum(x, fs)
+    integrity = _qa_integrity_samples(x, fs)
     out: dict[str, Any] = {
         "file": str(Path(path)),
         "dur_s": round(len(x) / fs, 1),
@@ -256,8 +257,26 @@ def report(
         "crest_db": p["crest_db"],
         "stereo": wide,
         "bands_db": bands,
+        "start_offset_s": integrity["start_offset_s"],
+        "integrity": {
+            "ok": integrity["ok"],
+            "abrupt_cuts": len(integrity["abrupt_cuts"]),
+            "dropouts": len(integrity["dropouts"]),
+        },
     }
     out["advice"] = advise(out, p, target_lufs, ceiling_db, fs)
+    if integrity["abrupt_cuts"]:
+        first_c = integrity["abrupt_cuts"][0]
+        out["advice"].append(
+            f"{len(integrity['abrupt_cuts'])} abrupt note-off cut(s) detected (first at "
+            f"{first_c['time_s']} s, -{first_c['drop_db']} dB in 40 ms): check SF2/synth release"
+        )
+    if integrity["dropouts"]:
+        first_d = integrity["dropouts"][0]
+        out["advice"].append(
+            f"{len(integrity['dropouts'])} mid-piece dropout(s) below -70 dBFS (first at "
+            f"{first_d['start_s']} s for {first_d['dur_s']} s)"
+        )
     return out
 
 
@@ -423,65 +442,110 @@ def _estimate_key(np: Any, mono: Any, fs: int) -> tuple[str, float, list[float]]
     return best_name, round(max(0.0, best_score), 3), [round(float(x), 3) for x in chroma]
 
 
-def _basic_pitch_notes(
-    np: Any, signal: Any, mono: Any, fs: int, bpm: float, max_notes: int = 128
-) -> list[list[float]] | None:
-    """Run Spotify Basic Pitch (nmp.onnx) polyphonic audio-to-MIDI inference when installed."""
-    from fl_mcp import paths
+_ORT_SESSIONS: dict[tuple[str, float], Any] = {}
 
-    model_path = paths.models_dir() / "basic_pitch.onnx"
+
+def _ort_session(model_path: Path) -> Any | None:
     if not model_path.is_file():
         return None
     try:
         import onnxruntime as ort
     except ImportError:
         return None
+    key = (str(model_path), model_path.stat().st_mtime)
+    sess = _ORT_SESSIONS.get(key)
+    if sess is None:
+        sess = ort.InferenceSession(str(model_path), providers=["CPUExecutionProvider"])
+        _ORT_SESSIONS[key] = sess
+    return sess
+
+
+def _basic_pitch_notes(
+    np: Any, signal: Any, mono: Any, fs: int, bpm: float, max_notes: int = 128
+) -> list[list[float]] | None:
+    """Run Spotify Basic Pitch (nmp.onnx) with 30-frame overlap and onset-gated note splitting."""
+    from fl_mcp import paths
+
+    sess = _ort_session(paths.models_dir() / "basic_pitch.onnx")
+    if sess is None:
+        return None
     try:
         target_sr = 22050
         win_samples = 43844
         hop_samples = 256
+        overlap_frames = 30
+        overlap_samples = overlap_frames * hop_samples
+        step_samples = win_samples - overlap_samples  # 36164 samples = exact 141.2656 frames
+        half_overlap = overlap_frames // 2
+
         y = _resample_1d(np, signal, mono, fs, target_sr).astype("float32")
-        peak = float(np.max(np.abs(y))) if len(y) else 0.0
+        orig_len = len(y)
+        peak = float(np.max(np.abs(y))) if orig_len else 0.0
         if peak > 1e-6:
             y = y / peak
-        if len(y) < win_samples:
-            y = np.pad(y, (0, win_samples - len(y)))
-        sess = ort.InferenceSession(str(model_path), providers=["CPUExecutionProvider"])
+        # Pad half-overlap at start so frame 0 aligns cleanly to t=0 without edge dropout
+        y_pad = np.pad(y, (overlap_samples // 2, win_samples))
         in_name = sess.get_inputs()[0].name
-        frames_list = []
-        step = win_samples
-        for start in range(0, len(y), step):
-            chunk = y[start : start + win_samples]
+        note_chunks: list[Any] = []
+        onset_chunks: list[Any] = []
+        chunk_times: list[Any] = []
+        frame_sec = hop_samples / float(target_sr)
+
+        for start in range(0, orig_len + overlap_samples // 2, step_samples):
+            chunk = y_pad[start : start + win_samples]
             if len(chunk) < win_samples:
                 chunk = np.pad(chunk, (0, win_samples - len(chunk)))
             outs = sess.run(None, {in_name: chunk.reshape(1, win_samples, 1)})
-            # outs[1] is note activations (1, 172, 88), outs[0] is onsets (1, 172, 88)
+            # out[0] = onsets (1, 172, 88), out[1] = note activations (1, 172, 88)
+            onset_mat = outs[0][0]
             note_mat = outs[1][0] if len(outs) > 1 and outs[1].shape[-1] == 88 else outs[0][0]
-            frames_list.append(note_mat)
-        if not frames_list:
+            n_f = note_mat.shape[0]
+            lo = half_overlap
+            hi = max(lo + 1, n_f - half_overlap)
+            # Compute exact wall-clock seconds per kept frame -> zero cumulative timing drift!
+            t0_s = (start - overlap_samples // 2) / float(target_sr)
+            times = t0_s + (np.arange(lo, hi, dtype="float64") * frame_sec)
+            valid = (times >= 0.0) & (times <= orig_len / float(target_sr))
+            if valid.any():
+                note_chunks.append(note_mat[lo:hi][valid])
+                onset_chunks.append(onset_mat[lo:hi][valid])
+                chunk_times.append(times[valid])
+        if not note_chunks:
             return None
-        full_mat = np.concatenate(frames_list, axis=0)
-        frame_sec = hop_samples / float(target_sr)
+        full_notes = np.concatenate(note_chunks, axis=0)
+        full_onsets = np.concatenate(onset_chunks, axis=0)
+        full_times = np.concatenate(chunk_times, axis=0)
         beats_per_sec = max(0.5, bpm / 60.0)
         notes: list[list[float]] = []
+        n_t = len(full_times)
         for p_idx in range(88):
-            col = full_mat[:, p_idx]
+            col = full_notes[:, p_idx]
+            ons = full_onsets[:, p_idx]
             active = col >= 0.45
             if not active.any():
                 continue
             i = 0
-            n_t = len(col)
             while i < n_t:
                 if not active[i]:
                     i += 1
                     continue
                 j = i + 1
                 while j < n_t and active[j]:
+                    # Split repeated same-pitch notes when a fresh local onset peak arrives
+                    if (
+                        j - i >= 3
+                        and ons[j] >= 0.50
+                        and ons[j] >= ons[j - 1]
+                        and (j + 1 >= n_t or ons[j] >= ons[j + 1])
+                    ):
+                        break
                     j += 1
-                dur_s = (j - i) * frame_sec
+                t_start = float(full_times[i])
+                t_end = float(full_times[min(j - 1, n_t - 1)]) + frame_sec
+                dur_s = t_end - t_start
                 if dur_s >= 0.045:
                     midi = 21 + p_idx
-                    start_b = round((i * frame_sec * beats_per_sec) * 4.0) / 4.0
+                    start_b = round((t_start * beats_per_sec) * 4.0) / 4.0
                     dur_b = max(0.25, round((dur_s * beats_per_sec) * 4.0) / 4.0)
                     pk_prob = float(np.max(col[i:j]))
                     vel = max(35, min(127, round(45 + 82 * min(1.0, pk_prob))))
@@ -497,12 +561,8 @@ def _vad_active_mask(np: Any, signal: Any, mono: Any, fs: int) -> tuple[Any | No
     """Run Silero VAD (silero_vad.onnx) at 16 kHz to isolate voiced/vocal regions."""
     from fl_mcp import paths
 
-    model_path = paths.models_dir() / "silero_vad.onnx"
-    if not model_path.is_file():
-        return None, None
-    try:
-        import onnxruntime as ort
-    except ImportError:
+    sess = _ort_session(paths.models_dir() / "silero_vad.onnx")
+    if sess is None:
         return None, None
     try:
         target_sr = 16000
@@ -511,7 +571,6 @@ def _vad_active_mask(np: Any, signal: Any, mono: Any, fs: int) -> tuple[Any | No
         n_win = len(y16) // win
         if n_win < 4:
             return None, None
-        sess = ort.InferenceSession(str(model_path), providers=["CPUExecutionProvider"])
         state = np.zeros((2, 1, 128), dtype="float32")
         sr_arr = np.array(target_sr, dtype="int64")
         probs: list[float] = []
@@ -536,6 +595,104 @@ def _vad_active_mask(np: Any, signal: Any, mono: Any, fs: int) -> tuple[Any | No
         return (voiced if len(voiced) >= 1024 else None), ratio
     except Exception:
         return None, None
+
+
+def _qa_integrity_samples(
+    x: Any,
+    fs: int,
+    *,
+    cut_drop_db: float = 16.0,
+    cut_window_ms: float = 40.0,
+    cut_floor_db: float = -45.0,
+    dropout_db: float = -70.0,
+    dropout_ms: float = 350.0,
+) -> dict[str, Any]:
+    """Core sample-level QA integrity scan (abrupt cuts, dropouts, PDC leading silence)."""
+    np, _, _ = _libs()
+    mono = x.mean(axis=1).astype("float64") if getattr(x, "ndim", 1) > 1 else x.astype("float64")
+    if len(mono) == 0 or fs <= 0:
+        return {"start_offset_s": 0.0, "abrupt_cuts": [], "dropouts": [], "ok": True}
+    frame_n = max(64, int(round(fs * 0.01)))  # 10 ms RMS frames
+    n_frames = len(mono) // frame_n
+    if n_frames < 5:
+        return {"start_offset_s": 0.0, "abrupt_cuts": [], "dropouts": [], "ok": True}
+    trimmed = mono[: n_frames * frame_n].reshape(n_frames, frame_n)
+    rms = np.sqrt(np.mean(trimmed * trimmed, axis=1))
+    db = 20.0 * np.log10(np.maximum(rms, 1e-9))
+
+    active_idx = np.flatnonzero(db > -60.0)
+    start_offset_s = (
+        round(int(active_idx[0]) * 0.01, 3) if len(active_idx) else round(len(mono) / fs, 3)
+    )
+    if len(active_idx) < 4:
+        return {"start_offset_s": start_offset_s, "abrupt_cuts": [], "dropouts": [], "ok": True}
+    first_a, last_a = int(active_idx[0]), int(active_idx[-1])
+    step_k = max(1, int(round(cut_window_ms / 10.0)))
+    cuts: list[dict[str, float]] = []
+    i = first_a
+    while i + step_k <= last_a:
+        before = float(db[i])
+        after = float(db[i + step_k])
+        drop = before - after
+        if before > cut_floor_db and drop >= cut_drop_db:
+            cuts.append(
+                {
+                    "time_s": round(i * 0.01, 2),
+                    "drop_db": round(drop, 1),
+                    "from_db": round(before, 1),
+                }
+            )
+            i += step_k * 2
+            continue
+        i += 1
+
+    min_drop_frames = max(1, int(round(dropout_ms / 10.0)))
+    dropouts: list[dict[str, float]] = []
+    j = first_a
+    while j <= last_a:
+        if db[j] < dropout_db:
+            k = j
+            while k <= last_a and db[k] < dropout_db:
+                k += 1
+            if k - j >= min_drop_frames:
+                dropouts.append(
+                    {
+                        "start_s": round(j * 0.01, 2),
+                        "dur_s": round((k - j) * 0.01, 2),
+                    }
+                )
+            j = k
+        else:
+            j += 1
+
+    return {
+        "start_offset_s": start_offset_s,
+        "abrupt_cuts": cuts[:24],
+        "dropouts": dropouts[:24],
+        "ok": not cuts and not dropouts,
+    }
+
+
+def qa_integrity(
+    path: str | Path,
+    *,
+    cut_drop_db: float = 16.0,
+    cut_window_ms: float = 40.0,
+    cut_floor_db: float = -45.0,
+    dropout_db: float = -70.0,
+    dropout_ms: float = 350.0,
+) -> dict[str, Any]:
+    """Detect abrupt note-off cuts (>16 dB drop in 40 ms), mid-piece dropouts, and PDC lead lag."""
+    x, fs = load(path)
+    return _qa_integrity_samples(
+        x,
+        fs,
+        cut_drop_db=cut_drop_db,
+        cut_window_ms=cut_window_ms,
+        cut_floor_db=cut_floor_db,
+        dropout_db=dropout_db,
+        dropout_ms=dropout_ms,
+    )
 
 
 def transcribe(path: str | Path, max_notes: int = 128) -> dict[str, Any]:
