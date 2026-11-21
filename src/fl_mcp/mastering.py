@@ -70,25 +70,28 @@ def run(
         )
     ref = {"o": "param", "t": "mixer", "i": 0, "s": lim["slot"], "a": "set"}
     ceil_row = _pick(rows, "ceiling")
+    current_ceiling = ceiling
     if ceil_row is not None:
-        call({**ref, "p": ceil_row[0], "r": f"{ceiling:.1f} dB"})
+        call({**ref, "p": ceil_row[0], "r": f"{current_ceiling:.1f} dB"})
     current = start = _db(gain[3]) or 0.0
     history: list[dict[str, float | None]] = []
     notes: list[str] = []
     report: dict[str, Any] = {}
+    ceiling_moved = False
     for step in range(passes + 1):
         report = measure()
         lufs = report.get("lufs_i")
         if lufs is None:
             raise ValueError("the render is silent: is the project empty, or everything muted?")
         history.append({"lufs": lufs, "true_peak": report["true_peak_db"], "gain_db": current})
-        if step:
+        if step and not ceiling_moved:
             applied = abs(current - history[-2]["gain_db"])
             if applied >= 1.0 and abs(lufs - history[-2]["lufs"]) < 0.25 * applied:
                 notes.append(
                     "the limiter is saturating (more gain adds distortion, not loudness): stopped"
                 )
                 break
+        ceiling_moved = False
         off = target - lufs
         if abs(off) <= TOLERANCE or step == passes:
             break
@@ -100,7 +103,14 @@ def run(
         current = _db(row[3]) if _db(row[3]) is not None else current + sign * delta
         if ceil_row is not None and report["true_peak_db"] > ceiling + 0.1:
             over = report["true_peak_db"] - ceiling  # a limiter's ceiling is not always true-peak
-            call({**ref, "p": ceil_row[0], "r": f"{ceiling - over:.1f} dB"})
+            current_ceiling = round(max(-6.0, current_ceiling - over), 2)
+            call({**ref, "p": ceil_row[0], "r": f"{current_ceiling:.1f} dB"})
+            ceiling_moved = True
+    crest = report.get("crest_db")
+    if isinstance(crest, int | float) and crest < 6.0:
+        notes.append(
+            f"crest factor is low ({crest:.1f} dB < 6.0 dB): transients may be over-limited"
+        )
     final = history[-1]
     reached = abs(target - final["lufs"]) <= TOLERANCE and final["true_peak"] <= ceiling + 0.1
     return {
