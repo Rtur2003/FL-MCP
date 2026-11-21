@@ -374,7 +374,8 @@ class Desk:
                     png, w2, h2 = self.backend.capture(rect, max_width)
                 finally:
                     self._restore_if_polite(front)
-        self.last = Shot((rect[0], rect[1]), w2 / rect[2], (w2, h2))
+        scale = (w2 / rect[2]) if rect[2] > 0 else 1.0
+        self.last = Shot((rect[0], rect[1]), scale, (w2, h2))
         return png, {
             "of": title,
             "size": [w2, h2],
@@ -574,8 +575,13 @@ class Desk:
             raise DeskError(f"not an existing .flp project: {path}")
         prev = self.backend.foreground()
         try:
+            self.focus_fl()
+            self.sleep(0.15)
             self._keys("mod+o")
             self.sleep(1.2)
+            # Clear any pre-filled filename field before typing full path
+            self._keys("mod+a")
+            self.sleep(0.1)
             self._text(str(path))
             self.sleep(0.2)
             self._keys("enter")
@@ -586,6 +592,15 @@ class Desk:
             }
         finally:
             self._restore_if_polite(prev)
+
+    def launch(self, path: Path | None = None) -> dict[str, Any]:
+        """Launch FL Studio on the interactive desktop (optionally opening a .flp project)."""
+        from fl_mcp import render
+
+        try:
+            return render.launch_fl(path)
+        except ValueError as exc:
+            raise DeskError(str(exc)) from None
 
     def save(self) -> dict[str, Any]:
         prev = self.backend.foreground()
