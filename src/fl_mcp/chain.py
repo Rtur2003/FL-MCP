@@ -37,9 +37,22 @@ def targets(
         mapping = mapping_for(plan_id or "", [c[1] for c in chans])
     except ValueError:
         mapping = detect_roles([c[1] for c in chans])[0]
+    seen_tracks: set[int] = {0}
     for r, ch in mapping.items():
         if role in (None, r) and ch < len(chans) and chans[ch][7] >= 1:
-            pairs.append((chans[ch][7], r))
+            trk = chans[ch][7]
+            if trk not in seen_tracks:
+                seen_tracks.add(trk)
+                pairs.append((trk, r))
+    # Also include secondary channels whose role matches even if mapping picked only the first
+    for _ch_idx, c in enumerate(chans):
+        trk = c[7]
+        if trk < 1 or trk in seen_tracks:
+            continue
+        r = next(iter(detect_roles([c[1]])[0]), "")
+        if r and role in (None, r):
+            seen_tracks.add(trk)
+            pairs.append((trk, r))
     return [p for p in pairs if role in (None, p[1])] or pairs[:1]
 
 
@@ -53,6 +66,32 @@ def analyze(call: Call, pairs: list[tuple[int, str]]) -> list[dict[str, Any]]:
     return out
 
 
+def _all_params(call: Call, track: int, slot: int) -> tuple[str, list[list[Any]]]:
+    rows_out: list[list[Any]] = []
+    plugin = ""
+    start = 0
+    for _ in range(6):
+        page = call(
+            {
+                "o": "param",
+                "t": "mixer",
+                "i": track,
+                "s": slot,
+                "a": "list",
+                "f": "",
+                "st": start,
+                "n": 120,
+            }
+        )
+        plugin = page.get("plugin", plugin)
+        batch = page.get("rows") or []
+        rows_out.extend(batch)
+        if not batch or batch[-1][0] + 1 >= page.get("count", 0):
+            break
+        start = batch[-1][0] + 1
+    return plugin, rows_out
+
+
 def apply(call: Call, reports: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Set the role's starting values on the plugins that are already there."""
     done = []
@@ -62,11 +101,9 @@ def apply(call: Call, reports: list[dict[str, Any]]) -> list[dict[str, Any]]:
             slot = next((s for s, _, k in rep["slots"] if k == kind), None)
             if slot is None:
                 continue
-            page = call(
-                {"o": "param", "t": "mixer", "i": rep["track"], "s": slot, "a": "list", "n": 120}
-            )
-            items, missing = plugins_kb.match_intents(page["rows"], wants)
-            entry: dict[str, Any] = {"track": rep["track"], "slot": slot, "plugin": page["plugin"]}
+            plugin_name, param_rows = _all_params(call, rep["track"], slot)
+            items, missing = plugins_kb.match_intents(param_rows, wants)
+            entry: dict[str, Any] = {"track": rep["track"], "slot": slot, "plugin": plugin_name}
             if items:
                 res = call(
                     {
@@ -88,8 +125,34 @@ def apply(call: Call, reports: list[dict[str, Any]]) -> list[dict[str, Any]]:
 SEV = {"high": 0, "med": 1, "low": 2, "info": 3}
 
 
+_ACOUSTIC_STYLES = frozenset(
+    {"acoustic", "piano", "classical", "orchestral", "ambient", "ost", "solo"}
+)
+_ACOUSTIC_HINTS = (
+    "piano", "grand", "upright", "felted", "salamander", "violin", "viola", "cello",
+    "contrabass", "strings", "harp", "flute", "oboe", "clarinet", "horn", "brass",
+    "guitar", "nylon", "acoustic", "glock", "marimba", "choir", "orchestra",
+)
+_EDM_DRUM_HINTS = ("kick", "808", "snare", "clap", "hihat", "hat", "trap", "sub", "reese")
+
+
+def _is_acoustic_project(chans: list[list[Any]], style: str | None = None) -> bool:
+    if style and style.strip().lower() in _ACOUSTIC_STYLES:
+        return True
+    names = [str(c[1]).lower() for c in chans if c[2] != "automation"]
+    if not names:
+        return False
+    has_acoustic = any(any(h in n for h in _ACOUSTIC_HINTS) for n in names)
+    has_edm_drums = any(any(h in n for h in _EDM_DRUM_HINTS) for n in names)
+    return has_acoustic and not has_edm_drums
+
+
 def doctor(
-    call: Call, seconds: float = 6.0, bar: float | None = None, plan_id: str | None = None
+    call: Call,
+    seconds: float = 6.0,
+    bar: float | None = None,
+    plan_id: str | None = None,
+    style: str | None = None,
 ) -> dict[str, Any]:
     """Play the project, measure every used mixer track, and list what to fix, worst first."""
     from fl_mcp import mixing
@@ -103,6 +166,8 @@ def doctor(
     def add(sev: str, track: int | None, what: str, fix: str) -> None:
         found.append({"sev": sev, "track": track, "what": what, "fix": fix})
 
+    chans = rows(call, "channels")
+    acoustic = _is_acoustic_project(chans, style)
     master = seen.get(0, {"peak_db": -120.0, "active": 0.0, "clips": 0})
     if master["active"] == 0:
         add(
@@ -128,7 +193,7 @@ def doctor(
                 f"master peaks at {v['peak_db']} dB: no headroom for a limiter to work gently",
                 "bring the loudest tracks down so the master stays below -3 dB before limiting",
             )
-        elif t and v["active"] > 0.2 and v["peak_db"] < -30:
+        elif t and v["active"] > 0.2 and v["peak_db"] < (-42 if acoustic else -30):
             add(
                 "low",
                 t,
@@ -142,7 +207,6 @@ def doctor(
                 f"{label} carries signal but has the default name",
                 "name it: fl_set kind=mixer name",
             )
-    chans = rows(call, "channels")
     straight = [c[1] for c in chans if c[7] == 0 and c[2] != "automation"]
     if len(straight) > 1:
         add(
@@ -152,7 +216,7 @@ def doctor(
             "give each part its own insert (fl_set kind=channel fx) to balance and process it",
         )
     live = [t for t, v in seen.items() if t and v["active"] > 0.05]
-    if len(live) >= 4 and all(abs(pans.get(t, 0)) < 0.05 for t in live):
+    if not acoustic and len(live) >= 4 and all(abs(pans.get(t, 0)) < 0.05 for t in live):
         add(
             "low",
             None,
@@ -160,12 +224,18 @@ def doctor(
             "pan hats, percussion, arps and pads off-centre; keep kick, snare, bass centred",
         )
     for rep in analyze(call, targets(call, plan_id, None, None)):
-        if rep["missing"]:
+        missing = rep["missing"]
+        if acoustic and rep["role"] != "master":
+            # Solo/acoustic/orchestral instruments do not require pop/EDM delay/drive/comp chains.
+            missing = [m for m in missing if m not in ("delay", "drive", "comp")]
+        if missing:
+            stock = plugins_kb.kb()["stock"]
+            add_names = " and ".join(stock.get(k, k) for k in missing)
             add(
                 "low" if rep["role"] != "master" else "med",
                 rep["track"],
-                f"{rep['name'] or rep['role']} has no {', '.join(rep['missing'])} plugin",
-                f"add {' and '.join(rep['add'])} ({rep['why']})",
+                f"{rep['name'] or rep['role']} has no {', '.join(missing)} plugin",
+                f"add {add_names} ({rep['why']})",
             )
         elif not rep["order_ok"]:
             add(
@@ -175,4 +245,9 @@ def doctor(
                 "usual order: eq, compressor, drive, modulation, delay, reverb, limiter last",
             )
     found.sort(key=lambda f: SEV[f["sev"]])
-    return {"playing": master["active"] > 0, "tracks": len(seen), "findings": found}
+    return {
+        "playing": master["active"] > 0,
+        "tracks": len(seen),
+        "acoustic": acoustic,
+        "findings": found,
+    }
