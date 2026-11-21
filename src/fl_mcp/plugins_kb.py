@@ -48,9 +48,10 @@ def analyze_chain(role: str, slots: list[tuple[int, str]]) -> dict[str, Any]:
     missing = [kind for kind in wanted if kind not in have]
     order = kb()["order"]
     ranks = [order.get(kind, 5) for _, _, kind in found if kind not in ("meter", "other")]
+    max_slots = 25 if any(slot >= 10 for slot, _, _ in found) else 10
     return {
         "slots": [[slot, name, kind] for slot, name, kind in found],
-        "free": 10 - len(found),
+        "free": max(0, max_slots - len(found)),
         "missing": missing,
         "add": [kb()["stock"].get(kind, kind) for kind in missing],
         "order_ok": all(a <= b for a, b in zip(ranks, ranks[1:], strict=False)),
