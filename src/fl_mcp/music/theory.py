@@ -500,29 +500,41 @@ def resolve_ensemble_harmony(
         all_notes: list[tuple[str, list[Any]]],
         self_obj: list[Any],
     ) -> int:
-        active = []
+        # Local key: the 7 heaviest pitch classes within +-12 s, so modulating multi-movement
+        # scores never get pulled back into the global key.
+        active: list[tuple[bool, int]] = []
+        loc_cnt: dict[int, float] = {}
         for sch, eo in all_notes:
+            if abs(eo[0] - t0) <= 12.0:
+                pc_o = int(eo[2]) % 12
+                loc_cnt[pc_o] = loc_cnt.get(pc_o, 0.0) + float(eo[1])
             if eo is self_obj:
                 continue
             ov = min(t1, eo[0] + eo[1]) - max(t0, eo[0])
-            if ov >= 0.18:
+            if ov >= 0.15:
                 active.append((sch == ch_name, int(eo[2])))
+        loc_pcs = (
+            set(sorted(loc_cnt, key=lambda k: -loc_cnt[k])[:7])
+            if len(loc_cnt) >= 5
+            else diatonic_pcs
+        )
         lo_lim = (
             54
             if (orig_p < 54 and any(sc and ap < 54 for sc, ap in active))
-            else max(36, orig_p - 7)
+            else max(36, orig_p - 12)
         )
-        cands: list[tuple[int, int, int]] = []
-        for delta in (0, 2, -2, 3, -3, 4, -4, 5, -5, 7, -7, 12, -12, 1, -1):
+        cands: list[tuple[int, int, int, int]] = []
+        for delta in (0, 2, -2, 3, -3, 4, -4, 5, -5, 7, -7, 12, -12, 1, -1, 9, -9):
             c = orig_p + delta
-            if c < lo_lim or c > 96 or (c % 12) not in diatonic_pcs:
+            if c < lo_lim or c > 96:
                 continue
+            in_key = 0 if (c % 12) in loc_pcs else 1
             bad = sum(1 for sc, ap in active if _clashes(c, ap, same_ch=sc))
-            cands.append((bad, abs(delta), c))
-            if bad == 0 and abs(delta) <= 4:
+            cands.append((bad, in_key, abs(delta), c))
+            if bad == 0 and in_key == 0 and abs(delta) <= 4:
                 return int(c)
         cands.sort()
-        return int(cands[0][2]) if cands else int(orig_p)
+        return int(cands[0][3]) if cands else int(orig_p)
 
     # Step 1: Within-channel coalesce (<0.38 s same-pitch bounces, <0.36 s mono grace overlaps)
     for ch in pitched_chs:
