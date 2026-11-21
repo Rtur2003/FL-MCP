@@ -788,6 +788,18 @@ def main(argv: list[str] | None = None) -> None:
         "--no-play", action="store_true", help="do not auto-toggle Spacebar playback during capture"
     )
     cap.add_argument("--json", action="store_true", help="output JSON")
+    cap.add_argument("--project", help="open this .flp in FL first and wait for it to load")
+    dlv = sub.add_parser(
+        "deliver", help="ship a score JSON: per-channel MIDI, YouTube chapters, tagged MP3"
+    )
+    dlv.add_argument("score_json", help="score JSON path (same shape as `fl-mcp score`)")
+    dlv.add_argument("out", help="output folder")
+    dlv.add_argument("--wav", help="master wav to encode as a 320k MP3")
+    dlv.add_argument("--cover", help="cover image embedded in the MP3")
+    dlv.add_argument("--title", default="", help="MP3 title tag")
+    dlv.add_argument("--artist", default="", help="MP3 artist tag")
+    dlv.add_argument("--album", default="", help="MP3 album tag")
+    dlv.add_argument("--json", action="store_true", help="output JSON")
     rnd = sub.add_parser("renders", help="inspect or prune ~/.fl-mcp/renders cache")
     rnd.add_argument("--clean", action="store_true", help="delete old render folders")
     rnd.add_argument("--max-keep", type=int, default=10, help="keep N newest renders (default: 10)")
@@ -951,6 +963,7 @@ def main(argv: list[str] | None = None) -> None:
                 window_title=args.title,
                 mute_fl_only=not args.keep_audio,
                 drive_playback=not args.no_play,
+                project=args.project,
             )
         except ValueError as exc:
             print(exc, file=sys.stderr)
@@ -1039,6 +1052,34 @@ def main(argv: list[str] | None = None) -> None:
                 f"Built {res['file']} ({res['tempo']} BPM, {len(res['channels'])} ch, "
                 f"{res['sections']} sections, {res['clips']} clips)"
             )
+        raise SystemExit(0)
+    elif args.cmd == "deliver":
+        from fl_mcp import deliver
+
+        try:
+            data = json.loads(Path(args.score_json).read_text(encoding="utf-8"))
+            res = deliver.package(
+                data,
+                args.out,
+                wav=args.wav,
+                cover=args.cover,
+                title=args.title,
+                artist=args.artist,
+                album=args.album,
+            )
+        except (OSError, ValueError) as exc:
+            print(exc, file=sys.stderr)
+            raise SystemExit(1) from None
+        if args.json:
+            print(json.dumps(res, indent=2, ensure_ascii=False))
+        else:
+            print(
+                f"Delivered to {res['dir']}: {len(res['midi'])} MIDI file(s), chapters "
+                f"{'ok' if res['chapters_valid'] else 'INVALID'}"
+                + (f", mp3 {res['mp3']['mp3']}" if "mp3" in res else "")
+            )
+            for note in res["chapter_issues"]:
+                print(f"  note: {note}")
         raise SystemExit(0)
     elif args.cmd == "service":
         raise SystemExit(_service(args))
