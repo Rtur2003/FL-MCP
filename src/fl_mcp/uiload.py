@@ -118,7 +118,6 @@ def _call_popup(fn: Callable[..., bool], allow_cursor: bool) -> bool:
     return fn()
 
 
-Call = Callable[[dict[str, Any]], Any]
 ATTEMPTS = 6  # several browser items can share a name (the plugin, its preset folder...)
 CHUNKS = 10  # the browser is walked in pieces of `steps` items, this many at most
 
