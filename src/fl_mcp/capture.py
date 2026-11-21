@@ -11,7 +11,9 @@ the user's own system audio:
 
 from __future__ import annotations
 
+import base64
 import ctypes
+import re
 import shutil
 import subprocess
 import sys
@@ -186,22 +188,31 @@ def toggle_play_space(hwnd: int | None = None) -> bool:
     return ok1 and ok2
 
 
+def _mute_command(mode: str, proc_name: str) -> list[str]:
+    """PowerShell argv running the CoreAudio mute script (param block first, no temp file)."""
+    if mode not in ("on", "off", "list"):
+        raise ValueError("mute mode must be on, off or list")
+    if not re.fullmatch(r"[A-Za-z0-9_.\-]{1,64}", proc_name):
+        raise ValueError(f"invalid process name {proc_name!r}")
+    script = f"& {{ {_APP_MUTE_PS} }} '{mode}' '{proc_name}'"
+    encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
+    return ["powershell", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded]
+
+
 def set_fl_app_mute(muted: bool, *, proc_name: str = "FL64") -> dict[str, Any]:
-    """Mute/unmute ONLY FL64.exe's Windows audio session (leaves all other PC audio ON)."""
+    """Mute/unmute ONLY FL64.exe's Windows audio session (leaves all other PC audio ON).
+
+    FL creates its audio session lazily on first playback, so call this again right after
+    starting playback (see `capture_fl_video`).
+    """
     if sys.platform != "win32":
         return {"ok": False, "reason": "Windows CoreAudio only"}
     mode = "on" if muted else "off"
     res = subprocess.run(
-        [
-            "powershell",
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            f"$mode='{mode}'; $procName='{proc_name}'; {_APP_MUTE_PS}",
-        ],
+        _mute_command(mode, proc_name),
         capture_output=True,
         text=True,
-        timeout=15.0,
+        timeout=30.0,
         check=False,
     )
     out = (res.stdout or res.stderr or "").strip()
@@ -221,6 +232,33 @@ def current_desktop_name() -> str:
         return str(buf.value)
     except Exception:
         return ""
+
+
+def foreground_hwnd() -> int | None:
+    """The window currently in front (so it can be restored after FL is pushed behind)."""
+    if sys.platform != "win32":
+        return None
+    h = ctypes.windll.user32.GetForegroundWindow()
+    return int(h) if h else None
+
+
+def restore_foreground(hwnd: int | None, *, skip: int | None = None) -> bool:
+    """Bring `hwnd` back to the front unless it is FL itself (`skip`)."""
+    if sys.platform != "win32" or not hwnd or hwnd == skip:
+        return False
+    return bool(ctypes.windll.user32.SetForegroundWindow(ctypes.c_void_p(hwnd)))
+
+
+def wait_fl_title(substr: str, timeout: float = 45.0) -> tuple[int | None, str]:
+    """Poll until FL's main window title contains `substr` (the project finished loading)."""
+    t0 = time.monotonic()
+    while time.monotonic() - t0 < timeout:
+        hwnd, title = find_fl_window()
+        if hwnd and substr.lower() in title.lower():
+            return hwnd, title
+        time.sleep(0.8)
+    return find_fl_window()
+
 
 
 def build_gfxcapture_cmd(
@@ -268,33 +306,91 @@ def capture_fl_video(
     mute_fl_only: bool = True,
     drive_playback: bool = True,
     ffmpeg_exe: str | None = None,
+    project: str | Path | None = None,
+    startup_s: float = 2.8,
 ) -> dict[str, Any]:
-    """Capture FL Studio's live window in the background via ffmpeg gfxcapture (Windows)."""
+    """Capture FL Studio's live window in the background via ffmpeg gfxcapture (Windows).
+
+    Optionally opens `project` first and waits for its title. FL64.exe alone is muted, and the
+    mute is re-applied right after playback starts because FL creates its audio session lazily.
+    Playback is toggled with a background Space message (never steals focus); the previous
+    foreground window is restored. Raises if ffmpeg dies during start-up (playback never starts).
+    """
     if sys.platform != "win32":
         raise ValueError("background FL window capture (gfxcapture) is supported on Windows only")
     ff = ffmpeg_exe or shutil.which("ffmpeg")
     if not ff:
         raise ValueError("ffmpeg not found on PATH (required for gfxcapture)")
-    hwnd, title = find_fl_window()
-    if not hwnd:
-        raise ValueError("no visible FL Studio main window (TFruityLoopsMainForm) found")
+    desktop = current_desktop_name()
+    if desktop and desktop.lower() != "default":
+        raise ValueError(
+            f"FL Studio's window lives on the interactive desktop; this process runs on "
+            f"'{desktop}'. Run the capture from your normal desktop session."
+        )
     out = Path(out_mp4).expanduser().resolve()
     out.parent.mkdir(parents=True, exist_ok=True)
-    push_fl_behind(hwnd)
+    prev_fg = foreground_hwnd()
     muted_applied = False
-    if mute_fl_only:
-        muted_applied = bool(set_fl_app_mute(True).get("ok"))
-    cmd = build_gfxcapture_cmd(
-        ff, out, duration_s, window_title=window_title, fps=fps, crf=crf
-    )
+
+    def _mute(on: bool) -> None:
+        nonlocal muted_applied
+        if mute_fl_only and set_fl_app_mute(on).get("ok") and on:
+            muted_applied = True
+
+    _mute(True)
     try:
-        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
-        if drive_playback:
+        if project is not None:
+            from fl_mcp import render
+
+            proj = Path(project).expanduser().resolve()
+            render.launch_fl(proj)
             time.sleep(2.5)
-            toggle_play_space(hwnd)
-        _, stderr = proc.communicate(timeout=float(duration_s) + 30.0)
-        if drive_playback:
-            toggle_play_space(hwnd)
+            hwnd, title = wait_fl_title(proj.stem)
+            if not hwnd or proj.stem.lower() not in title.lower():
+                raise ValueError(f"FL Studio did not load {proj.name} (window title {title!r})")
+            time.sleep(1.5)
+        else:
+            hwnd, title = find_fl_window()
+        if not hwnd:
+            raise ValueError("no visible FL Studio main window (TFruityLoopsMainForm) found")
+        push_fl_behind(hwnd)
+        restore_foreground(prev_fg, skip=hwnd)
+        _mute(True)
+
+        cmd = build_gfxcapture_cmd(
+            ff, out, duration_s, window_title=window_title, fps=fps, crf=crf
+        )
+        t_ff = time.monotonic()
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True
+        )
+        playing = False
+        try:
+            time.sleep(startup_s)
+            if proc.poll() is not None:
+                err = (proc.stderr.read() if proc.stderr else "") or ""
+                raise ValueError(
+                    f"ffmpeg gfxcapture exited during start-up (code {proc.returncode}): "
+                    f"{err[-300:]}"
+                )
+            play_offset = round(time.monotonic() - t_ff, 3)
+            if drive_playback:
+                playing = bool(toggle_play_space(hwnd))
+                time.sleep(0.35)
+                _mute(True)
+                time.sleep(1.0)
+                _mute(True)
+            try:
+                _, stderr = proc.communicate(timeout=float(duration_s) + 30.0)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.communicate()
+                raise ValueError("ffmpeg gfxcapture did not finish in time") from None
+        finally:
+            if playing:
+                toggle_play_space(hwnd)
+            if proc.poll() is None:
+                proc.kill()
         if proc.returncode != 0 or not out.is_file():
             raise ValueError(f"ffmpeg gfxcapture failed (code {proc.returncode}): {stderr[-300:]}")
         return {
@@ -303,6 +399,7 @@ def capture_fl_video(
             "title": title,
             "duration_s": round(float(duration_s), 2),
             "fps": int(fps),
+            "play_offset_s": play_offset,
             "muted_fl_only": muted_applied,
             "bytes": out.stat().st_size,
         }
