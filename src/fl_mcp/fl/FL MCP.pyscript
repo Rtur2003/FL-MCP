@@ -108,7 +108,12 @@ def _run():
     queue = _queue()
     prev = _prev_state()
     sig = _queue_sig(queue) if queue is not None else None
-    already_applied = bool(queue) and sig is not None and prev.get("sig") == sig
+    already_applied = (
+        bool(queue)
+        and sig is not None
+        and prev.get("sig") == sig
+        and not (queue.get("notes") and score.noteCount == 0)
+    )
     if queue and not already_applied:
         if queue.get("replace"):
             score.clearNotes(True)
