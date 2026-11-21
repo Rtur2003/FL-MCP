@@ -412,3 +412,285 @@ def notes_summary(rows: list[list[Any]], beats_per_bar: int = 4) -> dict[str, An
         "vel_range": [min(vels), max(vels)],
         "avg_vel": round(sum(vels) / len(vels), 1),
     }
+
+
+_DEFAULT_HARMONY_PRIO: dict[str, int] = {
+    "box": 10,
+    "flute": 9,
+    "clarinet": 9,
+    "lead": 9,
+    "viola": 8,
+    "fhorn": 8,
+    "intimate": 8,
+    "grand": 8,
+    "piano": 8,
+    "cello": 7,
+    "pizz": 7,
+    "timpani": 7,
+    "bass": 7,
+    "marimba": 5,
+    "kalimba": 5,
+    "celesta": 5,
+    "guitar_harm": 5,
+    "glock": 5,
+    "harp": 4,
+    "guitar": 4,
+    "chords": 4,
+    "pad": 4,
+}
+_DEFAULT_MONO_CHANNELS = frozenset({"flute", "clarinet", "viola", "fhorn", "cello", "oboe", "sax"})
+_DEFAULT_SKIP_CHANNELS = frozenset({"shaker", "drum", "drums", "perc", "kick", "snare", "hat"})
+
+
+def resolve_ensemble_harmony(
+    ch_events: dict[str, list[list[Any]]],
+    total_sec: float | None = None,
+    *,
+    skip_channels: tuple[str, ...] | frozenset[str] = _DEFAULT_SKIP_CHANNELS,
+    mono_channels: tuple[str, ...] | frozenset[str] = _DEFAULT_MONO_CHANNELS,
+    priorities: dict[str, int] | None = None,
+) -> dict[str, list[list[Any]]]:
+    """Ensemble-wide harmonic damper, low-register mud guard, phrase bloom & dead-air solver (E20).
+
+    Events per channel are `[start_sec, dur_sec, midi_pitch, velocity, ...]`. Pure Python
+    (no numpy required). Guarantees:
+      1. Coalesces <0.38 s same-pitch bounces and prevents <0.35 s choppy notes.
+      2. Eliminates within-channel & cross-channel b2/m9 semitone bleeds.
+      3. Eliminates <MIDI 54 low-register mud collisions (1, 2, 3, 4, 6 semitones).
+      4. Blooms phrase-ending notes before >0.35 s rests to >=1.55 s (>=2.00 s final).
+      5. Bridges full-ensemble dead-air gaps where 0 pitched notes sound.
+    """
+    prio = {**_DEFAULT_HARMONY_PRIO, **(priorities or {})}
+    skip = {s.lower() for s in skip_channels}
+    mono = {m.lower() for m in mono_channels}
+    result: dict[str, list[list[Any]]] = {
+        ch: [[float(e[0]), float(e[1]), int(e[2]), int(e[3]), *e[4:]] for e in evs]
+        for ch, evs in ch_events.items()
+    }
+    pitched_chs = [
+        ch
+        for ch, evs in result.items()
+        if evs and ch.lower() not in skip and not ch.lower().endswith("_wav")
+    ]
+    if not pitched_chs:
+        return result
+
+    if total_sec is None:
+        total_sec = max(e[0] + e[1] for ch in pitched_chs for e in result[ch])
+
+    # Detect the piece's 7 primary diatonic pitch classes so pitch shifts stay in key
+    pc_counts: dict[int, float] = {}
+    for ch in pitched_chs:
+        for _t, d, p, *_ in result[ch]:
+            pc = int(p) % 12
+            pc_counts[pc] = pc_counts.get(pc, 0.0) + float(d)
+    diatonic_pcs = set(sorted(pc_counts, key=lambda k: -pc_counts[k])[:7]) or set(range(12))
+
+    def _clashes(pa: int, pb: int, same_ch: bool = False) -> bool:
+        diff = abs(pa - pb)
+        if diff % 12 == 1 and diff <= 13:
+            return True
+        return bool(same_ch and pa < 54 and pb < 54 and diff in (1, 2, 3, 4, 6))
+
+    def _pick_consonant(
+        orig_p: int,
+        ch_name: str,
+        t0: float,
+        t1: float,
+        all_notes: list[tuple[str, list[Any]]],
+        self_obj: list[Any],
+    ) -> int:
+        active = []
+        for sch, eo in all_notes:
+            if eo is self_obj:
+                continue
+            ov = min(t1, eo[0] + eo[1]) - max(t0, eo[0])
+            if ov >= 0.18:
+                active.append((sch == ch_name, int(eo[2])))
+        lo_lim = (
+            54
+            if (orig_p < 54 and any(sc and ap < 54 for sc, ap in active))
+            else max(36, orig_p - 7)
+        )
+        cands: list[tuple[int, int, int]] = []
+        for delta in (0, 2, -2, 3, -3, 4, -4, 5, -5, 7, -7, 12, -12, 1, -1):
+            c = orig_p + delta
+            if c < lo_lim or c > 96 or (c % 12) not in diatonic_pcs:
+                continue
+            bad = sum(1 for sc, ap in active if _clashes(c, ap, same_ch=sc))
+            cands.append((bad, abs(delta), c))
+            if bad == 0 and abs(delta) <= 4:
+                return int(c)
+        cands.sort()
+        return int(cands[0][2]) if cands else int(orig_p)
+
+    # Step 1: Within-channel coalesce (<0.38 s same-pitch bounces, <0.36 s mono grace overlaps)
+    for ch in pitched_chs:
+        evs = sorted(result[ch], key=lambda x: (x[0], x[2]))
+        by_p: dict[int, list[Any]] = {}
+        merged: list[list[Any]] = []
+        is_mono = ch.lower() in mono
+        for e in evs:
+            e[1] = max(0.38, float(e[1]))
+            p = int(e[2])
+            if is_mono and merged and 0.025 < (e[0] - merged[-1][0]) < 0.36:
+                merged[-1][1] = max(merged[-1][1], (e[0] + e[1]) - merged[-1][0], 0.45)
+                merged[-1][3] = max(merged[-1][3], e[3])
+                continue
+            prev = by_p.get(p)
+            if prev is not None and (e[0] - prev[0]) < 0.38:
+                prev[1] = max(prev[1], (e[0] + e[1]) - prev[0], 0.45)
+                prev[3] = max(prev[3], e[3])
+            else:
+                by_p[p] = e
+                merged.append(e)
+        result[ch] = sorted(merged, key=lambda x: (x[0], x[2]))
+
+    def _build_grid() -> list[int]:
+        grid_hz = 20
+        n_bins = max(1, int((total_sec + 12.0) * grid_hz))
+        grid = [0] * n_bins
+        for ch in pitched_chs:
+            for t0, d, *_ in result[ch]:
+                a = max(0, int(t0 * grid_hz))
+                b = min(n_bins, int((t0 + d) * grid_hz))
+                for idx_b in range(a, b):
+                    grid[idx_b] += 1
+        return grid
+
+    # Step 2: Bridge full-ensemble dead-air holes
+    grid_hz = 20
+    grid = _build_grid()
+    act = [idx for idx, v in enumerate(grid) if v > 0]
+    if act:
+        i_start, i_end = act[0], act[-1]
+        cur: list[float] | None = None
+        holes: list[tuple[float, float]] = []
+        for idx_g in range(i_start, i_end + 1):
+            t_g = idx_g / float(grid_hz)
+            if grid[idx_g] == 0:
+                if cur is None:
+                    cur = [t_g, t_g]
+                else:
+                    cur[1] = t_g
+            elif cur is not None:
+                holes.append((cur[0], cur[1]))
+                cur = None
+        for h0, h1 in holes:
+            cands = [
+                (abs(h0 - (e[0] + e[1])), e)
+                for ch in pitched_chs
+                for e in result[ch]
+                if e[0] <= h0 and (h0 - (e[0] + e[1])) <= 2.0
+            ]
+            cands.sort(key=lambda x: x[0])
+            for _, e in cands[:2]:
+                e[1] = max(e[1], (h1 + 0.25) - e[0])
+
+    # Step 3: Phrase-continuity bloom & monophonic join enforcement
+    for ch in pitched_chs:
+        evs = sorted(result[ch], key=lambda x: (x[0], x[2]))
+        if ch.lower() in mono:
+            clusters: list[list[list[Any]]] = []
+            for e in evs:
+                if clusters and abs(e[0] - clusters[-1][0][0]) <= 0.025:
+                    clusters[-1].append(e)
+                else:
+                    clusters.append([e])
+            for ci, cl in enumerate(clusters):
+                nxt_t = clusters[ci + 1][0][0] if ci + 1 < len(clusters) else None
+                for e in cl:
+                    t0, d, p = e[0], e[1], int(e[2])
+                    end = max(t0 + d, t0 + 0.38)
+                    if nxt_t is not None:
+                        if nxt_t - t0 < 1.60:
+                            end = min(nxt_t + 0.038, max(end, nxt_t - 0.02))
+                        else:
+                            end = min(nxt_t - 0.05, max(end, t0 + 1.55))
+                        if any(int(ne[2]) == p for ne in clusters[ci + 1]):
+                            end = min(end, nxt_t - 0.015)
+                    else:
+                        end = max(end, t0 + 2.00)
+                    e[1] = max(0.36, end - t0)
+        else:
+            for i, e in enumerate(evs):
+                t0, d = e[0], e[1]
+                nxt_t = evs[i + 1][0] if i + 1 < len(evs) else None
+                if nxt_t is not None:
+                    gap = nxt_t - (t0 + d)
+                    if gap > 0.35 and d < 1.55:
+                        e[1] = max(d, 1.55) if nxt_t - t0 >= 1.60 else max(d, nxt_t - t0 - 0.03)
+                else:
+                    e[1] = max(d, 2.00)
+        result[ch] = evs
+
+    # Step 4: Iterative ensemble-wide b2/m9 & low-mud (<54) resolution
+    for _pass in range(4):
+        all_notes = [(ch, e) for ch in pitched_chs for e in result[ch]]
+        next_in_ch: dict[int, float | None] = {}
+        for ch in pitched_chs:
+            evs = result[ch]
+            for i, e in enumerate(evs):
+                next_in_ch[id(e)] = evs[i + 1][0] if i + 1 < len(evs) else None
+        all_refs = [(prio.get(ch.lower(), 5), ch, e) for ch, e in all_notes]
+        all_refs.sort(key=lambda x: (x[2][0], -x[0]))
+        changed = 0
+        for i in range(len(all_refs)):
+            pr1, ch1, e1 = all_refs[i]
+            for j in range(i + 1, len(all_refs)):
+                pr2, ch2, e2 = all_refs[j]
+                if e2[0] >= e1[0] + e1[1] - 0.05:
+                    break
+                ov = min(e1[0] + e1[1], e2[0] + e2[1]) - max(e1[0], e2[0])
+                same_c = ch1 == ch2
+                p1, p2 = int(e1[2]), int(e2[2])
+                is_mud = (
+                    same_c
+                    and p1 < 54
+                    and p2 < 54
+                    and abs(p1 - p2) in (1, 2, 3, 4, 6)
+                    and ov >= 0.05
+                )
+                is_b2 = abs(p1 - p2) % 12 == 1 and abs(p1 - p2) <= 13 and ov >= 0.22
+                if not (is_mud or is_b2):
+                    continue
+                new_d1 = e2[0] - e1[0] + 0.02
+                nxt1 = next_in_ch.get(id(e1))
+                creates_abrupt = (
+                    nxt1 is not None and (nxt1 - (e1[0] + new_d1)) > 0.35 and new_d1 < 1.52
+                ) or (nxt1 is None and new_d1 < 1.82)
+                if new_d1 >= 0.38 and not creates_abrupt:
+                    e1[1] = new_d1
+                    changed += 1
+                else:
+                    target_ch, target_e = (ch2, e2) if pr2 <= pr1 else (ch1, e1)
+                    target_e[2] = _pick_consonant(
+                        int(target_e[2]),
+                        target_ch,
+                        target_e[0],
+                        target_e[0] + target_e[1],
+                        all_notes,
+                        target_e,
+                    )
+                    changed += 1
+        if changed == 0:
+            break
+
+    # Step 5: Bridge any micro dead-air bin uncovered by damping
+    grid2 = _build_grid()
+    act2 = [idx for idx, v in enumerate(grid2) if v > 0]
+    if act2:
+        for idx_g in range(act2[0], act2[-1] + 1):
+            if grid2[idx_g] == 0:
+                t_g = idx_g / float(grid_hz)
+                cands = [
+                    (abs(t_g - (e[0] + e[1])), e)
+                    for ch in pitched_chs
+                    for e in result[ch]
+                    if e[0] <= t_g
+                ]
+                cands.sort(key=lambda x: x[0])
+                if cands:
+                    cands[0][1][1] = max(cands[0][1][1], (t_g + 0.18) - cands[0][1][0])
+
+    return result
