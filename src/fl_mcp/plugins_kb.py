@@ -40,6 +40,15 @@ def recipe(role: str) -> dict[str, Any] | None:
     return kb()["recipes"].get(role)
 
 
+def enums(plugin_name: str) -> dict[str, Any] | None:
+    """Return known stock enumerated/unitless parameter hints for `plugin_name`, if available."""
+    low = plugin_name.strip().lower()
+    for name, table in (kb().get("enums") or {}).items():
+        if name in low or low in name:
+            return {"plugin": name, **table}
+    return None
+
+
 def analyze_chain(role: str, slots: list[tuple[int, str]]) -> dict[str, Any]:
     """Compare the plugins on a track (slot, name) with what its role usually wants."""
     found = [(slot, name, classify(name)) for slot, name in sorted(slots)]
