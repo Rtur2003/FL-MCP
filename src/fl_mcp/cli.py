@@ -10,8 +10,18 @@ from pathlib import Path
 from fl_mcp import __version__
 
 
+def _disk_script_version(path: Path) -> int | None:
+    import re
+
+    try:
+        m = re.search(r"^VERSION\s*=\s*(\d+)", path.read_text(encoding="utf-8"), re.MULTILINE)
+        return int(m.group(1)) if m else None
+    except OSError:
+        return None
+
+
 def _doctor() -> int:
-    from fl_mcp.bridge import Bridge, FLError, match_port
+    from fl_mcp.bridge import SCRIPT_VERSION, Bridge, FLError, match_port
     from fl_mcp.install import diagnose_fl_midi, find_loopmidi, targets
 
     print(f"fl-mcp {__version__} | python {platform.python_version()} | {platform.platform()}")
@@ -30,9 +40,10 @@ def _doctor() -> int:
         lm = find_loopmidi()
         print(f"loopMIDI    : {lm if lm else 'not found'}")
     device, script = targets()
-    print(
-        f"FL script   : {'ok' if device.exists() else 'missing, run `fl-mcp install`'} ({device})"
-    )
+    disk_ver = _disk_script_version(device) if device.exists() else None
+    ver_note = f", disk v{disk_ver}" if disk_ver is not None else ""
+    dev_state = f"ok{ver_note}" if device.exists() else "missing, run `fl-mcp install`"
+    print(f"FL script   : {dev_state} ({device})")
     print(f"piano roll  : {'ok' if script.exists() else 'missing, run `fl-mcp install`'}")
     midi_diag = diagnose_fl_midi(bridge.port)
     if midi_diag.get("configured"):
@@ -44,7 +55,21 @@ def _doctor() -> int:
     except FLError as exc:
         print(f"FL Studio   : {exc}")
         return 1
-    print(f"FL Studio   : ok, {info.get('fl')} (API {info.get('api')}, script v{info.get('ver')})")
+    live_ver = int(info.get("ver") or 0)
+    if live_ver < SCRIPT_VERSION:
+        if disk_ver is not None and disk_ver >= SCRIPT_VERSION:
+            fix = (
+                f"disk already has v{disk_ver} — restart FL Studio (or close any stale hidden "
+                "FL64.exe holding the MIDI port)"
+            )
+        else:
+            fix = "run `fl-mcp install`, then restart FL Studio"
+        print(
+            f"FL Studio   : OUTDATED script v{live_ver} (need v{SCRIPT_VERSION}); {fix}"
+        )
+        _extras()
+        return 1
+    print(f"FL Studio   : ok, {info.get('fl')} (API {info.get('api')}, script v{live_ver})")
     _extras()
     return 0
 
