@@ -530,7 +530,18 @@ def test_clients_install_json_toml_backup_and_cli(monkeypatch, tmp_path):
     )
     cc_res = clients.install_client("claude-code", source="local")
     assert cc_res["written"] and seen == [
-        ["/bin/claude", "mcp", "add", "fl-studio", "--", sys.executable, "-m", "fl_mcp"]
+        [
+            "/bin/claude",
+            "mcp",
+            "add",
+            "--scope",
+            "user",
+            "fl-studio",
+            "--",
+            sys.executable,
+            "-m",
+            "fl_mcp",
+        ]
     ]
 
     # CLI config --write guard and success
