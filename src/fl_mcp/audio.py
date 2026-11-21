@@ -864,3 +864,110 @@ def masking(path: str | Path, reference: str | Path) -> dict[str, Any]:
         out["vad_engine"] = "silero_vad_onnx"
         out["vad_active_ratio"] = vad_ratio
     return out
+
+
+def section_arc(
+    path: str | Path,
+    sections: list[tuple[float, str]] | None = None,
+    *,
+    num_segments: int = 4,
+) -> dict[str, Any]:
+    """Measure per-section loudness (LUFS), LRA, crest & spectral balance across a track (D4)."""
+    x, fs = load(path)
+    dur_s = len(x) / float(fs)
+    if sections:
+        ordered = sorted((max(0.0, float(t)), str(name)) for t, name in sections)
+        bounds: list[tuple[str, float, float]] = []
+        for idx, (t0, name) in enumerate(ordered):
+            t1 = ordered[idx + 1][0] if idx + 1 < len(ordered) else dur_s
+            if t1 > t0 + 0.15:
+                bounds.append((name, t0, min(dur_s, t1)))
+    else:
+        n = max(1, int(num_segments))
+        step = dur_s / n
+        bounds = [(f"Part {i + 1}", i * step, min(dur_s, (i + 1) * step)) for i in range(n)]
+
+    rows: list[dict[str, Any]] = []
+    lufs_vals: list[float] = []
+    for name, t0, t1 in bounds:
+        a = max(0, int(round(t0 * fs)))
+        b = max(a + 1, min(len(x), int(round(t1 * fs))))
+        seg = x[a:b]
+        if len(seg) < fs // 10:
+            continue
+        ld = loudness(seg, fs)
+        pk = peaks(seg)
+        sp = spectrum(seg, fs)
+        if ld["lufs_i"] is not None:
+            lufs_vals.append(float(ld["lufs_i"]))
+        rows.append(
+            {
+                "name": name,
+                "start_s": round(t0, 2),
+                "end_s": round(t1, 2),
+                "lufs_i": ld["lufs_i"],
+                "lufs_s_max": ld["lufs_s_max"],
+                "lra": ld["lra"],
+                "peak_db": pk["peak_db"],
+                "crest_db": pk["crest_db"],
+                "bands_db": sp,
+            }
+        )
+    span_lu = round(max(lufs_vals) - min(lufs_vals), 1) if len(lufs_vals) >= 2 else 0.0
+    return {
+        "file": str(Path(path)),
+        "dur_s": round(dur_s, 1),
+        "dynamic_span_lu": span_lu,
+        "sections": rows,
+    }
+
+
+def stem_balance(stems: str | Path | list[str | Path]) -> dict[str, Any]:
+    """Compute a per-stem loudness & 3-band spectral energy table from split-mixer stems (D4)."""
+    if isinstance(stems, (str, Path)):
+        folder = Path(stems).expanduser()
+        files = sorted(
+            f for f in folder.iterdir() if f.is_file() and f.suffix.lower() in (".wav", ".flac")
+        )
+    else:
+        files = [Path(p).expanduser() for p in stems]
+    if not files:
+        raise ValueError("stem_balance found no audio stem files")
+
+    rows: list[dict[str, Any]] = []
+    master_lufs: float | None = None
+    for f in files:
+        x, fs = load(f)
+        ld = loudness(x, fs)
+        pk = peaks(x)
+        sp = spectrum(x, fs)
+        # Convert dB band levels into approximate low / mid / high percentage shares
+        lin = {k: 10.0 ** (v / 10.0) for k, v in sp.items()}
+        tot = sum(lin.values()) or 1e-12
+        low_pct = round(100.0 * (lin.get("sub", 0.0) + lin.get("bass", 0.0)) / tot, 1)
+        mid_sum = lin.get("low_mid", 0.0) + lin.get("mid", 0.0) + lin.get("high_mid", 0.0)
+        mid_pct = round(100.0 * mid_sum / tot, 1)
+        high_pct = round(100.0 * (lin.get("high", 0.0) + lin.get("air", 0.0)) / tot, 1)
+        is_master = f.stem.lower().endswith("_master") or f.stem.lower() == "master"
+        if is_master and ld["lufs_i"] is not None:
+            master_lufs = float(ld["lufs_i"])
+        rows.append(
+            {
+                "name": f.stem,
+                "file": str(f),
+                "lufs_i": ld["lufs_i"],
+                "peak_db": pk["peak_db"],
+                "crest_db": pk["crest_db"],
+                "low_pct": low_pct,
+                "mid_pct": mid_pct,
+                "high_pct": high_pct,
+                "is_master": is_master,
+            }
+        )
+    for row in rows:
+        if master_lufs is not None and row["lufs_i"] is not None and not row["is_master"]:
+            row["vs_master_lu"] = round(float(row["lufs_i"]) - master_lufs, 1)
+    rows.sort(
+        key=lambda r: (not r["is_master"], -(r["lufs_i"] if r["lufs_i"] is not None else -999))
+    )
+    return {"master_lufs": master_lufs, "count": len(rows), "stems": rows}
