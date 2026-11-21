@@ -624,8 +624,8 @@ def resolve_ensemble_harmony(
                     e[1] = max(d, 2.00)
         result[ch] = evs
 
-    # Step 4: Iterative ensemble-wide b2/m9 & low-mud (<54) resolution
-    for _pass in range(4):
+    # Step 4: Iterative ensemble-wide b2/m9 & low-mud (<54) resolution (10 passes for dense scores)
+    for _pass in range(10):
         all_notes = [(ch, e) for ch in pitched_chs for e in result[ch]]
         next_in_ch: dict[int, float | None] = {}
         for ch in pitched_chs:
@@ -694,3 +694,85 @@ def resolve_ensemble_harmony(
                     cands[0][1][1] = max(cands[0][1][1], (t_g + 0.18) - cands[0][1][0])
 
     return result
+
+
+def audit_ensemble_harmony(
+    ch_events: dict[str, list[list[Any]]],
+    total_sec: float | None = None,
+    *,
+    skip_channels: tuple[str, ...] | frozenset[str] = _DEFAULT_SKIP_CHANNELS,
+    mono_channels: tuple[str, ...] | frozenset[str] = _DEFAULT_MONO_CHANNELS,
+) -> dict[str, Any]:
+    """Pre-render harmonic & continuity audit (shorts, mono overlaps, mud, b2/m9, dead-air)."""
+    skip = {s.lower() for s in skip_channels}
+    mono = {m.lower() for m in mono_channels}
+    pitched = [
+        ch
+        for ch, evs in ch_events.items()
+        if evs and ch.lower() not in skip and not ch.lower().endswith("_wav")
+    ]
+    if not pitched:
+        return {
+            "ok": True,
+            "shorts": 0,
+            "mono_overlaps": 0,
+            "abrupt_phrase_ends": 0,
+            "low_mud": 0,
+            "b2_m9_clashes": 0,
+            "dead_air_holes": 0,
+        }
+    if total_sec is None:
+        total_sec = max(float(e[0]) + float(e[1]) for ch in pitched for e in ch_events[ch])
+
+    shorts = mono_ov = abrupt = low_mud = b2_m9 = 0
+    all_n: list[tuple[float, float, int, str]] = []
+    for ch in pitched:
+        evs = sorted(ch_events[ch], key=lambda x: (float(x[0]), int(x[2])))
+        is_mono = ch.lower() in mono
+        for i, e in enumerate(evs):
+            t0, d, p = float(e[0]), float(e[1]), int(e[2])
+            if d < 0.35:
+                shorts += 1
+            if i + 1 < len(evs):
+                nt = float(evs[i + 1][0])
+                if is_mono and nt - t0 > 0.03 and (t0 + d) - nt > 0.060:
+                    mono_ov += 1
+                if (nt - (t0 + d)) > 0.35 and d < 1.50:
+                    abrupt += 1
+            if p < 54:
+                for j in range(i + 1, len(evs)):
+                    nt = float(evs[j][0])
+                    if nt >= t0 + d - 0.05:
+                        break
+                    np_ = int(evs[j][2])
+                    if np_ < 54 and abs(np_ - p) in (1, 2, 3, 4, 6):
+                        low_mud += 1
+            all_n.append((t0, t0 + d, p, ch))
+
+    all_n.sort()
+    for i in range(len(all_n)):
+        t0, t1, p1, _ = all_n[i]
+        for j in range(i + 1, len(all_n)):
+            s0, s1, p2, _ = all_n[j]
+            if s0 >= t1 - 0.08:
+                break
+            if min(t1, s1) - max(t0, s0) >= 0.25 and abs(p1 - p2) % 12 == 1 and abs(p1 - p2) <= 13:
+                b2_m9 += 1
+
+    grid_hz = 20
+    n_bins = max(1, int((total_sec + 10.0) * grid_hz))
+    grid = [0] * n_bins
+    for t0, t1, _, _ in all_n:
+        for b in range(max(0, int(t0 * grid_hz)), min(n_bins, int(t1 * grid_hz))):
+            grid[b] += 1
+    act = [idx for idx, v in enumerate(grid) if v > 0]
+    holes = sum(1 for v in grid[act[0] : act[-1] + 1] if v == 0) if act else 0
+    return {
+        "ok": not (shorts or mono_ov or abrupt or low_mud or b2_m9 or holes),
+        "shorts": shorts,
+        "mono_overlaps": mono_ov,
+        "abrupt_phrase_ends": abrupt,
+        "low_mud": low_mud,
+        "b2_m9_clashes": b2_m9,
+        "dead_air_holes": holes,
+    }
