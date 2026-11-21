@@ -1502,11 +1502,20 @@ def build_from_score(
       - `sections`: list of `[pos, name]`
       - `time_unit`: `'seconds'` (default) or `'beats'`
       - `channels`: list of channel dicts (`name`, `kind`: `'sf2'|'wav'|'sampler'`, `sf2`/`wav`,
-        `insert`, `level_db`, `pan`, `color`, `sf2_release`, `events`: `[[start, dur, midi, vel]]`)
+        `insert`, `level_db`, `pan`, `color`, `sf2_release`, `events`: `[[start, dur, midi, vel]]`,
+        optional `mode` (an `articulation.MODES` name; applies acoustic physics), `pre_ms`, `lo`,
+        `hi`, `min_ring`, `audit_mel` (melody-vs-chord audit))
+      - `chords`: optional `[[t0_sec, t1_sec, "Am7"], ...]` (pedal / let-ring boundaries + audit)
+      - `chord_bounds`: optional extra chord-change times in seconds
       - `inserts`: optional dict `{insert_idx: {name, gain_db, pan, stereo, sends}}`
       - `hall`: optional dict for `patch_fruity_reeverb2(..., send_bus=True)`
     """
-    from fl_mcp.music.theory import audit_ensemble_harmony, resolve_ensemble_harmony
+    from fl_mcp.music import articulation as artic
+    from fl_mcp.music.theory import (
+        _DEFAULT_SKIP_CHANNELS,
+        audit_ensemble_harmony,
+        resolve_ensemble_harmony,
+    )
 
     flp = Flp.open(template)
     bpm = float(score.get("tempo") or 120.0)
@@ -1528,9 +1537,46 @@ def build_from_score(
         for idx, c in enumerate(ch_specs)
     }
     harmony_audit: dict[str, Any] | None = None
+    physics: dict[str, str] = {}
+    melody_audit: dict[str, list[Any]] = {}
+    chord_slots = [(float(a), float(b), str(s)) for a, b, s in (score.get("chords") or [])]
+    if unit == "seconds":
+        extra_bounds = {float(x) for x in (score.get("chord_bounds") or [])}
+        bounds = sorted(extra_bounds | set(artic.slot_boundaries(chord_slots)))
+        for idx, c in enumerate(ch_specs):
+            key = str(c.get("id") or c.get("name") or f"ch{idx}")
+            mode = c.get("mode")
+            if not mode or mode == "wav" or c.get("kind") in ("wav", "sampler"):
+                continue
+            raw_by_ch[key] = artic.apply_instrument_physics(
+                raw_by_ch[key],
+                str(mode),
+                bounds,
+                attack_pre_ms=float(c.get("pre_ms", 0.0)),
+                pitch_lo=int(c.get("lo", 21)),
+                pitch_hi=int(c.get("hi", 108)),
+                min_ring=float(c.get("min_ring", 2.8)),
+            )
+            physics[key] = str(mode)
     if resolve_harmony and unit == "seconds":
-        raw_by_ch = resolve_ensemble_harmony(raw_by_ch)
-        harmony_audit = audit_ensemble_harmony(raw_by_ch)
+        quiet = {
+            str(c.get("id") or c.get("name") or f"ch{idx}")
+            for idx, c in enumerate(ch_specs)
+            if c.get("kind") in ("wav", "sampler") or c.get("mode") in ("wav", "perc")
+        }
+        skip = frozenset({*_DEFAULT_SKIP_CHANNELS, *(k.lower() for k in quiet)})
+        raw_by_ch = resolve_ensemble_harmony(raw_by_ch, skip_channels=skip)
+        harmony_audit = audit_ensemble_harmony(raw_by_ch, skip_channels=skip)
+        if chord_slots:
+            for idx, c in enumerate(ch_specs):
+                key = str(c.get("id") or c.get("name") or f"ch{idx}")
+                if c.get("audit_mel") and raw_by_ch.get(key):
+                    melody_audit[key] = [
+                        list(x)
+                        for x in artic.audit_melody_clashes(
+                            raw_by_ch[key], chord_slots, pre_ms=float(c.get("pre_ms", 0.0))
+                        )
+                    ]
 
     donor = Flp.open(donor_flp) if donor_flp else None
     has_local_sampler = any(c.kind == "sampler" for c in flp.channels())
@@ -1668,4 +1714,6 @@ def build_from_score(
         "clips": len(clips),
         "end_ticks": end_tk,
         "harmony_audit": harmony_audit,
+        "articulation": physics,
+        "melody_audit": melody_audit,
     }
