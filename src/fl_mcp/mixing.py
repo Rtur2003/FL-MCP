@@ -104,15 +104,21 @@ def fix_mix(
     seconds: float = 3.0,
     bar: float | None = None,
     plan_id: str | None = None,
+    style: str | None = None,
 ) -> dict[str, Any]:
     """One-call automated cleanup: pan spread by role, mud cuts/HPF EQ, and clip protection."""
-    from fl_mcp import plugins_kb
-    from fl_mcp.produce import detect_roles, rows, send
+    from fl_mcp import chain, plugins_kb
+    from fl_mcp.produce import detect_roles, mapping_for, rows, send
 
     mixer = rows(call, "mixer")
     chans = rows(call, "channels")
     names = {r[0]: r[1] for r in mixer}
-    roles, _ = detect_roles([c[1] for c in chans])
+    acoustic = chain._is_acoustic_project(chans, style)
+    ch_names = [c[1] for c in chans]
+    try:
+        roles = mapping_for(plan_id or "", ch_names) if plan_id else detect_roles(ch_names)[0]
+    except ValueError:
+        roles = detect_roles(ch_names)[0]
     prefs = plugins_kb.fx_prefs()
     pan_pref = prefs.get("pan") if isinstance(prefs.get("pan"), dict) else {}
     default_pans = {
@@ -125,11 +131,27 @@ def fix_mix(
         "arp": 0.2,
     }
 
+    # Build (role, ch_idx) list covering primary mapped channels plus duplicate-role channels
+    role_channels: list[tuple[str, int]] = list(roles.items())
+    mapped_chs = {ch for _, ch in role_channels}
+    for ch_idx, c in enumerate(chans):
+        if ch_idx in mapped_chs:
+            continue
+        extra_role = next(iter(detect_roles([c[1]])[0]), "")
+        if extra_role:
+            role_channels.append((extra_role, ch_idx))
+
     ops: list[dict[str, Any]] = []
-    summary: dict[str, Any] = {"panned": [], "eq": [], "attenuated": [], "warnings": []}
+    summary: dict[str, Any] = {
+        "acoustic": acoustic,
+        "panned": [],
+        "eq": [],
+        "attenuated": [],
+        "warnings": [],
+    }
     seen_tracks: set[int] = set()
 
-    for role, ch in roles.items():
+    for role, ch in role_channels:
         if ch >= len(chans):
             continue
         track = int(chans[ch][7])
@@ -139,6 +161,9 @@ def fix_mix(
         if track in seen_tracks:
             continue
         seen_tracks.add(track)
+        if acoustic:
+            # Preserve natural acoustic/piano tone & stereo image; only run clip protection below.
+            continue
         pan = pan_pref.get(role, default_pans.get(role))
         if pan is not None:
             p_val = max(-0.85, min(0.85, float(pan)))
@@ -210,6 +235,7 @@ def setup_bus(
         routed.append(src)
     if not routed:
         raise ValueError("setup_bus needs at least one source track >= 1 distinct from bus_track")
+    ops.append({"o": "call", "c": [["mixer.afterRoutingChanged"]]})
     bad = send(call, ops, f"mix.bus->{bus_track}")
     return {
         "bus_track": bus_track,
