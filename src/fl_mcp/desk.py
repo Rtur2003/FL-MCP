@@ -602,6 +602,31 @@ class Desk:
         except ValueError as exc:
             raise DeskError(str(exc)) from None
 
+    def dismiss(self) -> dict[str, Any]:
+        """Dismiss known FL Studio startup or modal dialogs (e.g. 'Welcome to FL Studio')."""
+        prev = self.backend.foreground()
+        try:
+            wins = [w for w in self.backend.windows() if self.is_fl(w)]
+            welcome = [w for w in wins if "welcome" in w.title.lower()]
+            target = welcome[0] if welcome else (wins[0] if wins else None)
+            if target is None:
+                return {"dismissed": False, "reason": "no FL Studio window found"}
+            if self.backend.post_key(target, parse_combo("escape", self.platform)):
+                self.sleep(0.3)
+                return {"dismissed": True, "window": target.title, "method": "post_escape"}
+            if mode() == "stealth":
+                return {
+                    "dismissed": False,
+                    "window": target.title,
+                    "reason": "stealth mode blocked",
+                }
+            self.focus_fl()
+            self.backend.key(parse_combo("escape", self.platform))
+            self.sleep(0.3)
+            return {"dismissed": True, "window": target.title, "method": "escape"}
+        finally:
+            self._restore_if_polite(prev)
+
     def save(self) -> dict[str, Any]:
         prev = self.backend.foreground()
         try:
