@@ -8,6 +8,7 @@ The entries below the first ones (favourite, delete file) are never reached.
 
 import ctypes
 import sys
+import threading
 import time
 from typing import Any
 
@@ -37,24 +38,29 @@ def _lparam_xy(x: int, y: int) -> int:
     return ((y & 0xFFFF) << 16) | (x & 0xFFFF)
 
 
+_DESKTOP_TLS = threading.local()
+
+
 def _user32():
     windll = getattr(__import__("ctypes"), "windll", None) if sys.platform == "win32" else None
     if windll is None:
         return None
     u32 = windll.user32
-    try:
-        ws = u32.OpenWindowStationW("winsta0", False, 0x037F)
-        if ws:
-            u32.SetProcessWindowStation(ws)
-        dt = u32.OpenDesktopW("default", 0, False, 0x01FF)
-        if dt:
-            u32.SetThreadDesktop(dt)
-            if hasattr(u32, "CloseDesktop"):
-                u32.CloseDesktop(dt)
-        if ws and hasattr(u32, "CloseWindowStation"):
-            u32.CloseWindowStation(ws)
-    except Exception:
-        pass
+    if not getattr(_DESKTOP_TLS, "attached", False):
+        _DESKTOP_TLS.attached = True
+        try:
+            ws = u32.OpenWindowStationW("winsta0", False, 0x037F)
+            if ws:
+                u32.SetProcessWindowStation(ws)
+            dt = u32.OpenDesktopW("default", 0, False, 0x01FF)
+            if dt:
+                u32.SetThreadDesktop(dt)
+                if hasattr(u32, "CloseDesktop"):
+                    u32.CloseDesktop(dt)
+            if ws and hasattr(u32, "CloseWindowStation"):
+                u32.CloseWindowStation(ws)
+        except Exception:
+            pass
     return u32
 
 
