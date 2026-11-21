@@ -5,11 +5,52 @@ Fixed-width field types are used on purpose so the structure sizes can be checke
 
 import ctypes
 import sys
+import threading
 import time
 from typing import Any
 
 from fl_mcp import imaging
 from fl_mcp.desk import Backend, Combo, DeskError, Win
+
+_DESKTOP_TLS = threading.local()
+
+
+def _ensure_default_desktop(user32: Any) -> None:
+    """Attach the current worker thread to Winsta0\\Default once (sandbox-safe)."""
+    if getattr(_DESKTOP_TLS, "attached", False):
+        return
+    _DESKTOP_TLS.attached = True
+    ws = dt = None
+    H, B, DWORD = ctypes.c_void_p, ctypes.c_int, ctypes.c_uint32  # noqa: N806
+
+    def opt_bind(name: str, restype: Any, *argtypes: Any) -> Any:
+        fn = getattr(user32, name)
+        try:
+            fn.restype, fn.argtypes = restype, list(argtypes)
+        except AttributeError:
+            pass
+        return fn
+
+    try:
+        open_ws = opt_bind("OpenWindowStationW", H, ctypes.c_wchar_p, B, DWORD)
+        set_ws = opt_bind("SetProcessWindowStation", B, H)
+        open_dt = opt_bind("OpenDesktopW", H, ctypes.c_wchar_p, DWORD, B, DWORD)
+        set_dt = opt_bind("SetThreadDesktop", B, H)
+        ws = open_ws("winsta0", False, 0x037F)
+        if ws:
+            set_ws(ws)
+        dt = open_dt("default", 0, False, 0x01FF)
+        if dt:
+            set_dt(dt)
+    except Exception:
+        pass
+    finally:
+        for val, fn_name in ((dt, "CloseDesktop"), (ws, "CloseWindowStation")):
+            if val:
+                try:
+                    opt_bind(fn_name, B, H)(val)
+                except Exception:
+                    pass
 
 LONG, DWORD, WORD = ctypes.c_int32, ctypes.c_uint32, ctypes.c_uint16
 ULONG_PTR = ctypes.c_size_t
@@ -185,40 +226,16 @@ class WindowsBackend(Backend):
         self.PrintWindow = _bind(user32, "PrintWindow", B, H, H, DWORD)
         self.GetCurrentThreadId = _bind(kernel32, "GetCurrentThreadId", DWORD)
         self.GetTickCount = _bind(kernel32, "GetTickCount", DWORD)
+        self._user32 = user32
+
+    def _attach_desktop(self) -> None:
+        user32 = getattr(self, "_user32", None)
+        if user32 is not None:
+            _ensure_default_desktop(user32)
 
     @staticmethod
     def _dpi_aware(user32: Any) -> None:
-        ws = dt = None
-        H, B, DWORD = ctypes.c_void_p, ctypes.c_int, ctypes.c_uint32  # noqa: N806
-
-        def opt_bind(name: str, restype: Any, *argtypes: Any) -> Any:
-            fn = getattr(user32, name)
-            try:
-                fn.restype, fn.argtypes = restype, list(argtypes)
-            except AttributeError:
-                pass
-            return fn
-
-        try:
-            open_ws = opt_bind("OpenWindowStationW", H, ctypes.c_wchar_p, B, DWORD)
-            set_ws = opt_bind("SetProcessWindowStation", B, H)
-            open_dt = opt_bind("OpenDesktopW", H, ctypes.c_wchar_p, DWORD, B, DWORD)
-            set_dt = opt_bind("SetThreadDesktop", B, H)
-            ws = open_ws("winsta0", False, 0x037F)
-            if ws:
-                set_ws(ws)
-            dt = open_dt("default", 0, False, 0x01FF)
-            if dt:
-                set_dt(dt)
-        except Exception:
-            pass
-        finally:
-            for val, fn_name in ((dt, "CloseDesktop"), (ws, "CloseWindowStation")):
-                if val:
-                    try:
-                        opt_bind(fn_name, B, H)(val)
-                    except Exception:
-                        pass
+        _ensure_default_desktop(user32)
         # physical pixels everywhere, so screenshots and click coordinates are the same space
         for attempt in (
             lambda: user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4)),
@@ -258,6 +275,7 @@ class WindowsBackend(Backend):
         return Win(int(hwnd), buf.value, self._rect(hwnd), self._process(hwnd))
 
     def windows(self) -> list[Win]:
+        self._attach_desktop()
         found: list[Win] = []
 
         def visit(hwnd: int, _: int) -> int:
@@ -271,10 +289,12 @@ class WindowsBackend(Backend):
         return found
 
     def foreground(self) -> Win | None:
+        self._attach_desktop()
         hwnd = self.GetForegroundWindow()
         return self._win(hwnd) if hwnd else None
 
     def focus(self, win: Win) -> bool:
+        self._attach_desktop()
         if self.IsIconic(win.handle):
             self.ShowWindow(win.handle, 9)  # SW_RESTORE
         # a tap on Alt lifts Windows' rule that only the foreground process may take focus
@@ -489,24 +509,30 @@ class WindowsBackend(Backend):
         gui = GUITHREADINFO(cbSize=ctypes.sizeof(GUITHREADINFO))
         if self.GetGUIThreadInfo(target_tid, ctypes.byref(gui)) and gui.hwndFocus:
             target_hwnd = int(gui.hwndFocus)
+        self._attach_desktop()
         need_attach = target_tid != cur_tid
-        if need_attach and not self.AttachThreadInput(cur_tid, target_tid, True):
-            return False
+        attached = False
+        if need_attach:
+            attached = bool(self.AttachThreadInput(cur_tid, target_tid, True))
+            if not attached and mods:
+                return False
         prev_state = (ctypes.c_ubyte * 256)()
         saved = False
         try:
-            saved = bool(self.GetKeyboardState(prev_state))
-            new_state = (ctypes.c_ubyte * 256)(*prev_state)
-            for m in mods:
-                new_state[VK[m]] = 0x80
-            new_state[vk] = 0x80
-            self.SetKeyboardState(new_state)
+            if attached or not need_attach:
+                saved = bool(self.GetKeyboardState(prev_state))
+                if mods:
+                    new_state = (ctypes.c_ubyte * 256)(*prev_state)
+                    for m in mods:
+                        new_state[VK[m]] = 0x80
+                    new_state[vk] = 0x80
+                    self.SetKeyboardState(new_state)
             scan = self.MapVirtualKeyW(vk, 0) & 0xFF
             has_alt = "alt" in mods
             down_msg = _WM_SYSKEYDOWN if has_alt and "ctrl" not in mods else _WM_KEYDOWN
             up_msg = _WM_SYSKEYUP if has_alt and "ctrl" not in mods else _WM_KEYUP
             lp_base = 1 | (scan << 16) | ((1 << 24) if ext else 0) | ((1 << 29) if has_alt else 0)
-            lp_up = lp_base | (1 << 30) | (1 << 31)
+            lp_up = ctypes.c_ssize_t(lp_base | (1 << 30) | (1 << 31)).value
             ok1 = bool(self.PostMessageW(target_hwnd, down_msg, vk, lp_base))
             ok2 = bool(self.PostMessageW(target_hwnd, up_msg, vk, lp_up))
             if ok1 or ok2:
@@ -514,9 +540,9 @@ class WindowsBackend(Backend):
                 time.sleep(0.035)
             return ok1 and ok2
         finally:
-            if saved:
+            if saved and mods:
                 self.SetKeyboardState(prev_state)
-            if need_attach:
+            if attached:
                 self.AttachThreadInput(cur_tid, target_tid, False)
 
     def key(self, combo: Combo) -> None:
