@@ -729,6 +729,7 @@ class Flp:
         color: tuple[int, int, int] | None = None,
         *,
         synthesize: bool = False,
+        force_synthesize: bool = False,
     ) -> None:
         """Set a pattern's notes and name; patterns that do not exist yet are cloned from a seed."""
         blob = b"".join(sorted(notes, key=lambda n: struct.unpack_from("<I", n)[0]))
@@ -736,7 +737,7 @@ class Flp:
         if iid not in blocks:
             seed = self._seed_pattern()
             if seed is None:
-                if synthesize and not blocks:
+                if force_synthesize or (synthesize and not blocks):
                     anchor = next(
                         (idx for idx, ev in enumerate(self.events) if ev.id in (NEW_ARR, PLAYLIST)),
                         len(self.events),
@@ -1053,6 +1054,32 @@ class Flp:
         """Set offline mixer send level (0.0..1.0 -> 0..12800) from src_insert to dst_insert."""
         raw = max(0, min(12800, int(round(max(0.0, min(1.0, float(level))) * 12800))))
         return self.patch_init_events({(src_insert, 0x2000 + int(dst_insert)): raw})
+
+    def set_insert(
+        self,
+        insert: int,
+        *,
+        name: str | None = None,
+        gain_db: float | None = None,
+        pan: float | None = None,
+        stereo: float | None = None,
+        sends: dict[int, float] | None = None,
+    ) -> dict[str, Any]:
+        """Configure a mixer insert offline (name, fader dB, pan, stereo sep, sends) in 1 call."""
+        updates: dict[tuple[int, int], int] = {}
+        if gain_db is not None:
+            raw_v = max(0, min(16000, int(round(12800 * (10.0 ** (float(gain_db) / 20.0))))))
+            updates[(insert, 0x1FC0)] = raw_v
+        if pan is not None:
+            updates[(insert, 0x1FC1)] = max(-6400, min(6400, int(round(float(pan) * 6400))))
+        if stereo is not None:
+            updates[(insert, 0x1FC2)] = max(-6400, min(6400, int(round(float(stereo) * 6400))))
+        for dst, lvl in (sends or {}).items():
+            raw_s = max(0, min(12800, int(round(max(0.0, min(1.0, float(lvl))) * 12800))))
+            updates[(insert, 0x2000 + int(dst))] = raw_s
+        renamed = self.rename_insert(insert, name) if name is not None else False
+        patched = self.patch_init_events(updates) if updates else 0
+        return {"insert": insert, "renamed": renamed, "patched_init_events": patched}
 
     def patch_fruity_reeverb2(
         self,
@@ -1456,3 +1483,189 @@ def _group_of(role: str) -> str:
     from fl_mcp.music.compose import GROUPS
 
     return next((name for name, roles in GROUPS if role in roles), "FX")
+
+
+def build_from_score(
+    template: str | Path,
+    score: dict[str, Any],
+    out: str | Path,
+    *,
+    donor_flp: str | Path | None = None,
+    resolve_harmony: bool = True,
+) -> dict[str, Any]:
+    """Build a hybrid multi-channel, multi-section `.flp` from a structured score dict (D1/D2).
+
+    `score` supports:
+      - `tempo`: float (default 120.0)
+      - `tempo_map`: list of `[ticks_or_sec, bpm]` (uses seconds when `time_unit == 'seconds'`)
+      - `time_signatures`: list of `[pos, num, den]`
+      - `sections`: list of `[pos, name]`
+      - `time_unit`: `'seconds'` (default) or `'beats'`
+      - `channels`: list of channel dicts (`name`, `kind`: `'sf2'|'wav'|'sampler'`, `sf2`/`wav`,
+        `insert`, `level_db`, `pan`, `color`, `sf2_release`, `events`: `[[start, dur, midi, vel]]`)
+      - `inserts`: optional dict `{insert_idx: {name, gain_db, pan, stereo, sends}}`
+      - `hall`: optional dict for `patch_fruity_reeverb2(..., send_bus=True)`
+    """
+    from fl_mcp.music.theory import audit_ensemble_harmony, resolve_ensemble_harmony
+
+    flp = Flp.open(template)
+    bpm = float(score.get("tempo") or 120.0)
+    flp.set_tempo(bpm)
+    ppq = flp.ppq
+    unit = str(score.get("time_unit") or "seconds").lower()
+    ticks_per_unit = (ppq * (bpm / 60.0)) if unit == "seconds" else float(ppq)
+
+    ch_specs: list[dict[str, Any]] = list(score.get("channels") or [])
+    if not ch_specs:
+        raise FlpError("score needs at least one channel in 'channels'")
+
+    # Optional ensemble harmony solver (E20) when working in seconds
+    raw_by_ch = {
+        str(c.get("id") or c.get("name") or f"ch{idx}"): [
+            [float(e[0]), float(e[1]), int(e[2]), int(e[3]) if len(e) > 3 else 100]
+            for e in (c.get("events") or [])
+        ]
+        for idx, c in enumerate(ch_specs)
+    }
+    harmony_audit: dict[str, Any] | None = None
+    if resolve_harmony and unit == "seconds":
+        raw_by_ch = resolve_ensemble_harmony(raw_by_ch)
+        harmony_audit = audit_ensemble_harmony(raw_by_ch)
+
+    donor = Flp.open(donor_flp) if donor_flp else None
+    has_local_sampler = any(c.kind == "sampler" for c in flp.channels())
+    ch_iids: dict[str, int] = {}
+
+    for idx, spec in enumerate(ch_specs):
+        key = str(spec.get("id") or spec.get("name") or f"ch{idx}")
+        label = str(spec.get("name") or key)
+        kind = str(spec.get("kind") or ("wav" if spec.get("wav") else "sf2")).lower()
+        insert = int(spec.get("insert", idx + 1))
+        col_raw = spec.get("color")
+        rgb = (
+            (int(col_raw[0]), int(col_raw[1]), int(col_raw[2]))
+            if isinstance(col_raw, (list, tuple)) and len(col_raw) >= 3
+            else (120, 160, 210)
+        )
+        pan = float(spec["pan"]) if spec.get("pan") is not None else None
+        vol: float | None = None
+        if spec.get("level_db") is not None:
+            # Map level_db relative to 0 dB = 10000/12800 (~0.78125)
+            gain = 10.0 ** (float(spec["level_db"]) / 20.0)
+            vol = max(0.0, min(1.0, (10000.0 / 12800.0) * gain))
+        if kind in ("wav", "sampler"):
+            sample_path = str(spec.get("wav") or spec.get("sample") or "")
+            if not sample_path:
+                raise FlpError(f"channel '{label}' (kind={kind}) needs 'wav' or 'sample' path")
+            if has_local_sampler:
+                iid = flp.add_sampler(label, sample_path, insert, rgb, volume=vol, pan=pan)
+            elif donor is not None:
+                iid = flp.add_sampler_from_donor(
+                    donor, label, sample_path, insert, rgb, volume=vol, pan=pan
+                )
+            else:
+                raise FlpError(
+                    f"channel '{label}' needs a Sampler channel in template or donor_flp="
+                )
+        else:
+            sf2_path = str(spec.get("sf2") or "")
+            if not sf2_path:
+                raise FlpError(f"channel '{label}' (kind=sf2) needs 'sf2' path")
+            iid = _add_soundfont_channel(flp, label, sf2_path, insert, rgb, pan)
+            if spec.get("sf2_release") is not None or vol is not None:
+                s0, e0 = flp._channel_spans()[iid]
+                for ev in flp.events[s0:e0]:
+                    if ev.id == PLUGIN_PARAMS and spec.get("sf2_release") is not None:
+                        ev.data = set_soundfont_release(ev.data, int(spec["sf2_release"]))
+                        ev.raw = None
+                    elif ev.id == CHAN_LEVELS and vol is not None and len(ev.data) >= 8:
+                        buf = bytearray(ev.data)
+                        struct.pack_into("<I", buf, 4, round(vol * 12800))
+                        ev.data, ev.raw = bytes(buf), None
+        ch_iids[key] = iid
+        flp.rename_insert(insert, label)
+
+    # Apply offline mixer inserts & optional send-bus Reeverb 2
+    for ins_k, ins_cfg in (score.get("inserts") or {}).items():
+        if isinstance(ins_cfg, dict):
+            flp.set_insert(
+                int(ins_k),
+                name=ins_cfg.get("name"),
+                gain_db=ins_cfg.get("gain_db"),
+                pan=ins_cfg.get("pan"),
+                stereo=ins_cfg.get("stereo"),
+                sends=ins_cfg.get("sends"),
+            )
+    if isinstance(score.get("hall"), dict):
+        h = score["hall"]
+        flp.patch_fruity_reeverb2(
+            highcut_hz=h.get("highcut_hz", h.get("highcut")),
+            lowcut_hz=h.get("lowcut_hz", h.get("lowcut")),
+            size=h.get("size"),
+            diffusion=h.get("diffusion"),
+            decay_s=h.get("decay_s", h.get("decay")),
+            predelay_ms=h.get("predelay_ms", h.get("predelay")),
+            wet=h.get("wet"),
+            mod=h.get("mod"),
+            send_bus=bool(h.get("send_bus", True)),
+        )
+
+    # Slice notes by sections (or build one master section if none provided)
+    raw_secs = score.get("sections") or [[0.0, "Main"]]
+    sec_list = sorted((max(0.0, float(s[0])), str(s[1])) for s in raw_secs)
+    max_end_unit = max(
+        (float(e[0]) + float(e[1]) for evs in raw_by_ch.values() for e in evs),
+        default=4.0,
+    )
+    existing_pats = flp.patterns()
+    pat_iid = max(existing_pats, default=0)
+    clips: list[tuple[int, int, int, int]] = []
+
+    for s_idx, (s_start, s_name) in enumerate(sec_list):
+        s_end = sec_list[s_idx + 1][0] if s_idx + 1 < len(sec_list) else max_end_unit
+        s_start_tk = int(round(s_start * ticks_per_unit))
+        s_len_tk = max(ppq, int(round((s_end - s_start) * ticks_per_unit)))
+        sec_notes: list[bytes] = []
+        for key, iid in ch_iids.items():
+            for t0, dur, pitch, vel in raw_by_ch.get(key, ()):
+                if s_start - 1e-4 <= t0 < s_end - 1e-4 or (
+                    s_idx + 1 == len(sec_list) and t0 >= s_start - 1e-4
+                ):
+                    rel_tk = max(0, int(round((t0 - s_start) * ticks_per_unit)))
+                    d_tk = max(1, int(round(dur * ticks_per_unit)))
+                    sec_notes.append(note_record(rel_tk, d_tk, int(pitch), iid, int(vel)))
+        if sec_notes:
+            pat_iid += 1
+            flp.put_pattern(pat_iid, sec_notes, s_name, force_synthesize=True)
+            clips.append((s_start_tk, pat_iid, s_len_tk, 1))
+        flp.add_marker(s_start_tk, s_name)
+
+    if clips:
+        flp.set_playlist(clips, mode="replace", synthesize=True)
+
+    for ts_item in score.get("time_signatures") or []:
+        t_pos, num, den = ts_item[:3]
+        flp.set_time_signature(int(num), int(den), ticks=int(round(float(t_pos) * ticks_per_unit)))
+
+    if score.get("tempo_map"):
+        pts = [
+            (int(round(float(p[0]) * ticks_per_unit)), float(p[1])) for p in score["tempo_map"]
+        ]
+        flp.set_tempo_map(pts)
+
+    end_tk = max((c[0] + c[2] for c in clips), default=int(round(max_end_unit * ticks_per_unit)))
+    flp.set_end_marker(end_tk, create=True)
+
+    out_path = Path(out).expanduser().resolve()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_bytes(flp.dumps())
+    return {
+        "file": str(out_path),
+        "tempo": bpm,
+        "ppq": ppq,
+        "channels": ch_iids,
+        "sections": len(sec_list),
+        "clips": len(clips),
+        "end_ticks": end_tk,
+        "harmony_audit": harmony_audit,
+    }
