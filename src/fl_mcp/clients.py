@@ -280,7 +280,7 @@ def snippet(
     if transport == "http":
         endpoint = url or DEFAULT_HTTP_URL
         if client == "claude-code":
-            return where, f"claude mcp add --transport http {NAME} {endpoint}"
+            return where, f"claude mcp add --scope user --transport http {NAME} {endpoint}"
         if client == "codex":
             return where, f"[mcp_servers.{NAME}]\nurl = {json.dumps(endpoint)}\n"
         key = _root_key(client)
@@ -291,7 +291,7 @@ def snippet(
         cmdline = (
             subprocess.list2cmdline([cmd, *args]) if os.name == "nt" else shlex.join([cmd, *args])
         )
-        return where, "claude mcp add " + NAME + " -- " + cmdline
+        return where, "claude mcp add --scope user " + NAME + " -- " + cmdline
     if client == "codex":
         text = f"[mcp_servers.{NAME}]\ncommand = {json.dumps(cmd)}\nargs = {json.dumps(args)}\n"
         return where, text
@@ -389,9 +389,9 @@ def install_client(
     if client == "claude-code":
         label = CLIENTS[client][0]
         argv = (
-            ["claude", "mcp", "add", "--transport", "http", NAME, endpoint]
+            ["claude", "mcp", "add", "--scope", "user", "--transport", "http", NAME, endpoint]
             if transport == "http"
-            else ["claude", "mcp", "add", NAME, "--", cmd, *args]
+            else ["claude", "mcp", "add", "--scope", "user", NAME, "--", cmd, *args]
         )
         if dry_run:
             return {
@@ -578,6 +578,13 @@ def client_statuses(project: Path | None = None) -> list[dict[str, Any]]:
                     data = json.loads(raw)
                     sec_key = _root_key(key)
                     entry = (data.get(sec_key) or {}).get(NAME) if isinstance(data, dict) else None
+                    if entry is None and key == "claude-code" and isinstance(data, dict):
+                        for proj_cfg in (data.get("projects") or {}).values():
+                            if isinstance(proj_cfg, dict):
+                                cand = (proj_cfg.get("mcpServers") or {}).get(NAME)
+                                if isinstance(cand, dict):
+                                    entry = cand
+                                    break
                 if isinstance(entry, dict):
                     configured = True
                     args_val = entry.get("args")
