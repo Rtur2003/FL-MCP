@@ -399,6 +399,11 @@ def create_asgi_app(
     async def api_service(_request: Request) -> JSONResponse:
         return JSONResponse({**service_status(), "poller": poller.config()})
 
+    async def api_vault(_request: Request) -> JSONResponse:
+        from fl_mcp import vault
+
+        return JSONResponse(vault.status())
+
     async def api_poll(_request: Request) -> JSONResponse:
         import anyio
 
@@ -444,12 +449,13 @@ def create_asgi_app(
         payload = body if isinstance(body, dict) else {}
 
         def _exec() -> dict[str, Any]:
-            with poller._lock:
-                return dashboard.dispatch_action(
-                    payload,
-                    bridge=server.bridge,
-                    http_port=port,
-                )
+            # MIDI transactions are serialized by server.bridge._lock; do not hold
+            # poller._lock across slow actions (vault_download, onboard) so /api/state stays live.
+            return dashboard.dispatch_action(
+                payload,
+                bridge=server.bridge,
+                http_port=port,
+            )
 
         res = await anyio.to_thread.run_sync(_exec)
         return JSONResponse(res)
@@ -465,6 +471,7 @@ def create_asgi_app(
         Route("/api/paths", api_paths, methods=["GET"]),
         Route("/api/clients", api_clients, methods=["GET"]),
         Route("/api/service", api_service, methods=["GET"]),
+        Route("/api/vault", api_vault, methods=["GET"]),
         Route("/api/poll", api_poll, methods=["POST"]),
         Route("/api/action", api_action, methods=["POST"]),
         Route("/api/traffic/clear", api_traffic_clear, methods=["POST"]),
