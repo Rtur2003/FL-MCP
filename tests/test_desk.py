@@ -277,7 +277,7 @@ def test_open_and_save(tmp_path):
     flp.write_bytes(b"FLhd")
     out = d.open_project(flp)
     assert out["opened"] == str(flp)
-    assert fake.log == [("key", "ctrl+o"), ("type", str(flp)), ("key", "enter")]
+    assert fake.log == [("key", "ctrl+o"), ("key", "ctrl+a"), ("type", str(flp)), ("key", "enter")]
     with pytest.raises(DeskError, match="not an existing .flp"):
         d.open_project(tmp_path / "nope.flp")
     fake.log.clear()
