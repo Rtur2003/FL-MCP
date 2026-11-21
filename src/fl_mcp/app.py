@@ -475,47 +475,60 @@ def _run_native_tk(url: str, *, host: str, port: int, runtime: dict[str, Any]) -
 
     alive = {"run": True}
 
+    def _apply_state(data: dict[str, Any]) -> None:
+        if not alive["run"]:
+            return
+        studio = data.get("studio") or {}
+        st = studio.get("status")
+        svc = data.get("service") or {}
+        tf = (data.get("traffic") or {}).get("stats") or {}
+        events = (data.get("traffic") or {}).get("events") or []
+        if st:
+            status_var.set(
+                f"FL Studio: {st.get('title') or 'Connected'} | {st.get('bpm') or '--'} BPM | "
+                f"Pat {st.get('pat') or 1}"
+            )
+        else:
+            doc = data.get("doctor") or {}
+            status_var.set(
+                "FL Studio: Waiting on MIDI port"
+                if doc.get("midi_port_found")
+                else f"FL Studio: MIDI port '{doc.get('port_name', 'FL MCP')}' not found"
+            )
+        pid_txt = f"PID {svc['pid']}" if svc.get("running") else "Embedded Service"
+        service_var.set(f"{pid_txt} · MCP: http://{host}:{port}/mcp · SSE: /sse")
+        metrics_var.set(
+            f"MIDI: {tf.get('midi_calls', 0)} calls ({tf.get('midi_errors', 0)} err, "
+            f"avg {tf.get('avg_ms', 0)} ms) · MCP Tools: {tf.get('mcp_calls', 0)} calls"
+        )
+        lines = []
+        for ev in events[-16:]:
+            ok = "OK" if ev.get("ok") else "ERR"
+            lines.append(
+                f"[{ev.get('dir', '?').upper():4s}] {ev.get('op', '?'):<14} {ok:3s} "
+                f"({ev.get('ms', 0)} ms) {ev.get('error') or ev.get('req') or ''}"
+            )
+        text = "\n".join(lines) or "Waiting for MIDI or MCP tool activity..."
+        log_box.configure(state="normal")
+        log_box.delete("1.0", "end")
+        log_box.insert("1.0", text)
+        log_box.configure(state="disabled")
+
     def refresh_loop() -> None:
         if not alive["run"]:
             return
         data = _http_json(f"http://{host}:{port}/api/state", timeout=1.5)
+        if not alive["run"]:
+            return
         if data:
-            studio = data.get("studio") or {}
-            st = studio.get("status")
-            svc = data.get("service") or {}
-            tf = (data.get("traffic") or {}).get("stats") or {}
-            events = (data.get("traffic") or {}).get("events") or []
-            if st:
-                status_var.set(
-                    f"FL Studio: {st.get('title') or 'Connected'} | {st.get('bpm') or '--'} BPM | "
-                    f"Pat {st.get('pat') or 1}"
-                )
-            else:
-                doc = data.get("doctor") or {}
-                status_var.set(
-                    "FL Studio: Waiting on MIDI port"
-                    if doc.get("midi_port_found")
-                    else f"FL Studio: MIDI port '{doc.get('port_name', 'FL MCP')}' not found"
-                )
-            pid_txt = f"PID {svc['pid']}" if svc.get("running") else "Embedded Service"
-            service_var.set(f"{pid_txt} · MCP: http://{host}:{port}/mcp · SSE: /sse")
-            metrics_var.set(
-                f"MIDI: {tf.get('midi_calls', 0)} calls ({tf.get('midi_errors', 0)} err, "
-                f"avg {tf.get('avg_ms', 0)} ms) · MCP Tools: {tf.get('mcp_calls', 0)} calls"
-            )
-            lines = []
-            for ev in events[-16:]:
-                ok = "OK" if ev.get("ok") else "ERR"
-                lines.append(
-                    f"[{ev.get('dir', '?').upper():4s}] {ev.get('op', '?'):<14} {ok:3s} "
-                    f"({ev.get('ms', 0)} ms) {ev.get('error') or ev.get('req') or ''}"
-                )
-            text = "\n".join(lines) or "Waiting for MIDI or MCP tool activity..."
-            log_box.configure(state="normal")
-            log_box.delete("1.0", "end")
-            log_box.insert("1.0", text)
-            log_box.configure(state="disabled")
-        root.after(2200, lambda: threading.Thread(target=refresh_loop, daemon=True).start())
+            try:
+                root.after(0, lambda d=data: _apply_state(d))
+            except tk.TclError:
+                return
+        try:
+            root.after(2200, lambda: threading.Thread(target=refresh_loop, daemon=True).start())
+        except tk.TclError:
+            pass
 
     root.protocol("WM_DELETE_WINDOW", lambda: (alive.__setitem__("run", False), root.destroy()))
     threading.Thread(target=refresh_loop, daemon=True).start()
@@ -566,6 +579,12 @@ def _find_free_port(host: str, preferred: int) -> int:
         try:
             s.bind((host, preferred))
             return int(s.getsockname()[1])
+        except OSError:
+            pass
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s2:
+        try:
+            s2.bind((host, 0))
+            return int(s2.getsockname()[1])
         except OSError:
             return preferred
 
