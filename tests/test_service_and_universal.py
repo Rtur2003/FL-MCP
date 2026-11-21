@@ -81,7 +81,10 @@ def test_clients_http_transport_antigravity_and_uvx_fallback(tmp_path, monkeypat
 
     # HTTP transport snippets and config writes across formats
     _, http_code = clients.snippet("claude-code", transport="http", url="http://127.0.0.1:9123/mcp")
-    assert http_code == "claude mcp add --transport http fl-studio http://127.0.0.1:9123/mcp"
+    assert (
+        http_code
+        == "claude mcp add --scope user --transport http fl-studio http://127.0.0.1:9123/mcp"
+    )
 
     _, http_vs = clients.snippet("vscode", transport="http")
     assert json.loads(http_vs)["servers"]["fl-studio"] == {
