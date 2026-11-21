@@ -4,6 +4,7 @@ FL is started with the project, renders it to a file next to it, and the file is
 FL is already running it may hand the project to that instance; the answer then comes later or
 not at all, which is reported rather than hidden."""
 
+import contextlib
 import ctypes
 import itertools
 import os
@@ -13,7 +14,7 @@ import subprocess
 import sys
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from ctypes import wintypes
 from pathlib import Path
 from typing import Any
@@ -23,8 +24,10 @@ from fl_mcp import paths
 FORMATS = ("wav", "mp3", "ogg", "flac")
 EXPORT_FORMATS = (*FORMATS, "mid", "zip")
 _RENDER_DIR_LOCK = threading.Lock()
+_RENDER_PREFS_LOCK = threading.Lock()
 _RENDER_SEQ = itertools.count(1)
 _DESK_SEQ = itertools.count(1)
+_TAIL_MODES = {"leave": 0, "remainder": 0, "wrap": 1, "cut": 2}
 _STARTF_USESHOWWINDOW = 0x00000001
 _SW_HIDE = 0
 _SW_SHOWNORMAL = 1
@@ -395,6 +398,89 @@ def _find_stems(folder: Path, stem: str, fmt: str, started: float) -> list[Path]
     return hits
 
 
+@contextlib.contextmanager
+def _fl_render_prefs(
+    *,
+    split_mixer: bool | None = None,
+    tail: str | None = None,
+    trim_pdc: bool | None = None,
+    save_markers: bool | None = None,
+    save_tempo: bool | None = None,
+) -> Iterator[bool]:
+    """Temporarily override FL Studio's Windows `General\\Render (master)` registry prefs.
+
+    Enables true headless `split_mixer_tracks=True` (and tail/PDC/marker options) for `FL64.exe /R`
+    without GUI clicks, then restores the user's exact prior registry values in `finally:`.
+    """
+    updates: dict[str, int] = {}
+    if split_mixer is not None:
+        updates["Split mixer tracks"] = 1 if split_mixer else 0
+    if tail is not None:
+        key = tail.strip().lower()
+        if key not in _TAIL_MODES:
+            raise ValueError(f"tail must be one of {', '.join(_TAIL_MODES)}")
+        updates["Tail"] = _TAIL_MODES[key]
+    if trim_pdc is not None:
+        updates["Trim PDC silence"] = 1 if trim_pdc else 0
+    if save_markers is not None:
+        updates["Save playlist markers"] = 1 if save_markers else 0
+    if save_tempo is not None:
+        updates["Save tempo"] = 1 if save_tempo else 0
+
+    if not updates or sys.platform != "win32":
+        yield False
+        return
+
+    try:
+        import winreg
+    except ImportError:
+        yield False
+        return
+
+    ver_keys = paths.fl_registry_version_keys()
+    if not ver_keys:
+        yield False
+        return
+
+    subkey = f"{ver_keys[0]}\\General\\Render (master)"
+    saved: dict[str, tuple[Any, int] | None] = {}
+    with _RENDER_PREFS_LOCK:
+        applied = False
+        try:
+            with winreg.CreateKeyEx(
+                winreg.HKEY_CURRENT_USER, subkey, 0, winreg.KEY_READ | winreg.KEY_WRITE
+            ) as k:
+                for name, val in updates.items():
+                    try:
+                        old_v, old_t = winreg.QueryValueEx(k, name)
+                        saved[name] = (old_v, old_t)
+                        # Preserve FL Studio's existing registry type (REG_SZ vs REG_DWORD)
+                        out_v: Any = str(val) if old_t == winreg.REG_SZ else int(val)
+                        winreg.SetValueEx(k, name, 0, old_t, out_v)
+                    except FileNotFoundError:
+                        saved[name] = None
+                        winreg.SetValueEx(k, name, 0, winreg.REG_SZ, str(val))
+                applied = True
+        except OSError:
+            applied = False
+        try:
+            yield applied
+        finally:
+            if applied:
+                try:
+                    with winreg.OpenKey(
+                        winreg.HKEY_CURRENT_USER, subkey, 0, winreg.KEY_WRITE
+                    ) as k:
+                        for name, prev in saved.items():
+                            if prev is None:
+                                with contextlib.suppress(OSError):
+                                    winreg.DeleteValue(k, name)
+                            else:
+                                winreg.SetValueEx(k, name, 0, prev[1], prev[0])
+                except OSError:
+                    pass
+
+
 def render(
     flp: str | Path,
     fmt: str = "wav",
@@ -411,6 +497,8 @@ def render(
     out_dir: str | Path | None = None,
     keep: bool = True,
     split_mixer: bool = False,
+    tail: str | None = None,
+    trim_pdc: bool | None = None,
 ) -> dict[str, Any]:
     """Render one saved project with FL's command line (isolated hidden desktop on Windows)."""
     project = Path(flp).expanduser().resolve()
@@ -436,82 +524,98 @@ def render(
         shutil.copy2(project, source / project.name)
     started = wall()
     cmd = command_line(exe, fmt, source, out)
-    if popen is not None:
-        proc = popen(cmd)
-        isolated = False
-    elif sys.platform == "win32" and isolate:
-        proc = hidden_popen(cmd, isolated_desktop=True)
-        isolated = isinstance(proc, _DesktopProcess)
-    elif sys.platform == "win32":
-        proc = hidden_popen(cmd, isolated_desktop=False)
-        isolated = False
-    else:
-        proc = subprocess.Popen(shlex.split(cmd))
-        isolated = False
-    wanted = [out / f"{project.stem}.{fmt}", project.with_suffix(f".{fmt}")]  # /O, or beside it
-    deadline, last_size, stable = clock() + timeout, -1, 0
-    finished = False
-    exited_grace = 0
-    try:
-        while clock() < deadline:
-            sleep(1.0)
-            found = next(
-                (f for f in wanted if f.is_file() and f.stat().st_mtime >= started - 1),
-                None,
-            )
-            stems: list[Path] = []
-            if found is None or split_mixer:
-                stems = _find_stems(out, project.stem, fmt, started) or _find_stems(
-                    project.parent, project.stem, fmt, started
-                )
-                if found is None and stems:
-                    found = next(
-                        (s for s in stems if s.stem.lower().endswith("_master")),
-                        stems[0],
-                    )
-            if found is not None:
-                size = found.stat().st_size
-                stable = stable + 1 if size == last_size and size > 0 else 0
-                last_size = size
-                if stable >= 2:
-                    finished = True
-                    res: dict[str, Any] = {
-                        "audio": str(found),
-                        "fmt": fmt,
-                        "seconds": round(clock() - (deadline - timeout), 1),
-                        "copied": copied,
-                        "isolated_desktop": isolated,
-                    }
-                    if stems:
-                        res["stems"] = [str(s) for s in stems]
-                    offset_s = _measure_start_offset_s(found)
-                    if offset_s is not None:
-                        res["start_offset_s"] = offset_s
-                    if not keep and out_dir is not None and base != out:
-                        shutil.rmtree(base, ignore_errors=True)
-                    return res
-            code = proc.poll()
-            if code is not None and found is None:
-                if code != 0:
-                    raise ValueError(f"FL Studio exited with code {code} and wrote no audio")
-                exited_grace += 1
-                if exited_grace >= 2:
-                    raise ValueError(
-                        "FL Studio exited (code 0) without writing audio — another FL instance "
-                        "may have absorbed the launch or export failed"
-                    )
-        raise ValueError(
-            f"no audio appeared within {timeout:.0f} s. FL's batch renderer starts its own copy "
-            "of FL Studio: close FL first. Otherwise export from its File menu, or turn on fl_desk"
+    # Apply temporary Windows registry overrides only for real FL launches (never mock popen)
+    want_prefs = popen is None and (split_mixer or tail is not None or trim_pdc is not None)
+    prefs_ctx = (
+        _fl_render_prefs(
+            split_mixer=True if split_mixer else None, tail=tail, trim_pdc=trim_pdc
         )
-    finally:
-        if isinstance(proc, _DesktopProcess):
-            proc.terminate() if not finished else proc.close()
-        elif not finished and hasattr(proc, "terminate"):
-            try:
-                if proc.poll() is None:
-                    proc.terminate()
-            except Exception:
-                pass
-        if not finished and not keep:
-            shutil.rmtree(base, ignore_errors=True)
+        if want_prefs
+        else contextlib.nullcontext(False)
+    )
+    with prefs_ctx as prefs_applied:
+        if popen is not None:
+            proc = popen(cmd)
+            isolated = False
+        elif sys.platform == "win32" and isolate:
+            proc = hidden_popen(cmd, isolated_desktop=True)
+            isolated = isinstance(proc, _DesktopProcess)
+        elif sys.platform == "win32":
+            proc = hidden_popen(cmd, isolated_desktop=False)
+            isolated = False
+        else:
+            proc = subprocess.Popen(shlex.split(cmd))
+            isolated = False
+        wanted = [
+            out / f"{project.stem}.{fmt}",
+            project.with_suffix(f".{fmt}"),
+        ]  # /O, or beside it
+        deadline, last_size, stable = clock() + timeout, -1, 0
+        finished = False
+        exited_grace = 0
+        try:
+            while clock() < deadline:
+                sleep(1.0)
+                found = next(
+                    (f for f in wanted if f.is_file() and f.stat().st_mtime >= started - 1),
+                    None,
+                )
+                stems: list[Path] = []
+                if found is None or split_mixer:
+                    stems = _find_stems(out, project.stem, fmt, started) or _find_stems(
+                        project.parent, project.stem, fmt, started
+                    )
+                    if found is None and stems:
+                        found = next(
+                            (s for s in stems if s.stem.lower().endswith("_master")),
+                            stems[0],
+                        )
+                if found is not None:
+                    size = found.stat().st_size
+                    stable = stable + 1 if size == last_size and size > 0 else 0
+                    last_size = size
+                    if stable >= 2:
+                        finished = True
+                        res: dict[str, Any] = {
+                            "audio": str(found),
+                            "fmt": fmt,
+                            "seconds": round(clock() - (deadline - timeout), 1),
+                            "copied": copied,
+                            "isolated_desktop": isolated,
+                        }
+                        if prefs_applied:
+                            res["render_prefs_applied"] = True
+                        if stems:
+                            res["stems"] = [str(s) for s in stems]
+                        offset_s = _measure_start_offset_s(found)
+                        if offset_s is not None:
+                            res["start_offset_s"] = offset_s
+                        if not keep and out_dir is not None and base != out:
+                            shutil.rmtree(base, ignore_errors=True)
+                        return res
+                code = proc.poll()
+                if code is not None and found is None:
+                    if code != 0:
+                        raise ValueError(f"FL Studio exited with code {code} and wrote no audio")
+                    exited_grace += 1
+                    if exited_grace >= 2:
+                        raise ValueError(
+                            "FL Studio exited (code 0) without writing audio — another FL "
+                            "instance may have absorbed the launch or export failed"
+                        )
+            raise ValueError(
+                f"no audio appeared within {timeout:.0f} s. FL's batch renderer starts its own "
+                "copy of FL Studio: close FL first. Otherwise export from its File menu, or turn "
+                "on fl_desk"
+            )
+        finally:
+            if isinstance(proc, _DesktopProcess):
+                proc.terminate() if not finished else proc.close()
+            elif not finished and hasattr(proc, "terminate"):
+                try:
+                    if proc.poll() is None:
+                        proc.terminate()
+                except Exception:
+                    pass
+            if not finished and not keep:
+                shutil.rmtree(base, ignore_errors=True)
