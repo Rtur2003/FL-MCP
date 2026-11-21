@@ -100,6 +100,12 @@ def doctor_info() -> dict[str, Any]:
     dev, scr = targets(fl_user)
     info["fl_script_installed"] = dev.is_file()
     info["piano_roll_script_installed"] = scr.is_file()
+    from fl_mcp.bridge import SCRIPT_VERSION, _disk_script_version
+
+    disk_ver = _disk_script_version() if dev.is_file() else None
+    info["fl_script_version"] = disk_ver
+    info["expected_script_version"] = SCRIPT_VERSION
+    info["script_outdated"] = bool(disk_ver is not None and disk_ver < SCRIPT_VERSION)
     info["fl_user_dir"] = str(fl_user)
     info["paths"] = paths.diagnostics()
     info["loopmidi"] = {
@@ -334,6 +340,23 @@ def _act_vault_rules(body: dict[str, Any], _http_port: int) -> dict[str, Any]:
     return {"ok": res["ok"], "action": "vault_rules", "result": res}
 
 
+def _act_cleanup_renders(body: dict[str, Any], _http_port: int) -> dict[str, Any]:
+    from fl_mcp import render
+
+    max_keep = int(body.get("max_keep", 10))
+    max_age_h = float(body.get("max_age_hours", 24.0))
+    res = render.cleanup_renders(max_keep=max_keep, max_age_hours=max_age_h)
+    return {"ok": True, "action": "cleanup_renders", **res}
+
+
+def _act_launch_fl(body: dict[str, Any], _http_port: int) -> dict[str, Any]:
+    from fl_mcp import render
+
+    proj = body.get("project") or None
+    res = render.launch_fl(proj)
+    return {"ok": True, "action": "launch_fl", **res}
+
+
 def _act_produce_plan(body: dict[str, Any], _http_port: int) -> dict[str, Any]:
     from fl_mcp.music import compose
 
@@ -441,6 +464,8 @@ _HOST_ACTIONS = {
     "onboard": _act_onboard,
     "vault_download": _act_vault_download,
     "vault_rules": _act_vault_rules,
+    "cleanup_renders": _act_cleanup_renders,
+    "launch_fl": _act_launch_fl,
 }
 
 
