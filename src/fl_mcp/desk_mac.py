@@ -175,17 +175,32 @@ class MacBackend(Backend):
 
     def arm_piano_roll_script(self, script_name: str = "FL MCP", win: Win | None = None) -> bool:
         """Attempt first-run Piano Roll script invocation via macOS System Events."""
+        safe = _quote(script_name)
         try:
             res = _osa(
-                f'''
+                f"""
                 tell application "System Events"
                     set p to first application process whose name is "FL Studio"
                     set frontmost of p to true
-                    set t to menu item "Tools" of menu 1 of menu bar item "Patterns" of menu bar 1 of p
-                    click menu item "{script_name}" of menu 1 of menu item "Scripting" of menu 1 of t
+                    repeat with mb in menu bar items of menu bar 1 of p
+                        try
+                            set m1 to menu 1 of mb
+                            if exists menu item "Scripting" of m1 then
+                                click menu item {safe} of menu 1 of menu item "Scripting" of m1
+                                return "ok"
+                            end if
+                            if exists menu item "Tools" of m1 then
+                                set tm to menu 1 of menu item "Tools" of m1
+                                if exists menu item "Scripting" of tm then
+                                    click menu item {safe} of menu 1 of menu item "Scripting" of tm
+                                    return "ok"
+                                end if
+                            end if
+                        end try
+                    end repeat
+                    return "miss"
                 end tell
-                return "ok"
-                '''  # noqa: E501
+                """
             )
             return res.strip() == "ok"
         except Exception:
