@@ -75,18 +75,21 @@ def test_cli_help_lists_commands(capsys):
 
 
 def test_doctor_reports_each_layer(monkeypatch, fl_home, capsys):
+    from fl_mcp.bridge import SCRIPT_VERSION
     from tests.test_bridge import FakeMido
 
     monkeypatch.setitem(sys.modules, "mido", FakeMido(["FL MCP 1"], ["FL MCP 1"]))
     monkeypatch.setattr(paths, "fl_user_dir", lambda: fl_home)
     monkeypatch.setattr(
-        Bridge, "call", lambda self, req: {"fl": "Producer v25", "api": 37, "ver": 1, "proto": 1}
+        Bridge,
+        "call",
+        lambda self, req: {"fl": "Producer v25", "api": 37, "ver": SCRIPT_VERSION, "proto": 1},
     )
     assert cli._doctor() == 0
     out = capsys.readouterr().out
     assert "port 'FL MCP': found" in out and "FL script   : missing" in out
     assert "piano roll  : missing" in out
-    assert "FL Studio   : ok, Producer v25 (API 37, script v1)" in out
+    assert f"FL Studio   : ok, Producer v25 (API 37, script v{SCRIPT_VERSION})" in out
     install(fl_home, fl_home / "n")
     cli._doctor()
     assert "FL script   : ok" in capsys.readouterr().out
@@ -132,7 +135,7 @@ def test_config_prints_ready_text_for_every_client(capsys):
     for name in clients.CLIENTS:
         where, text = clients.snippet(name, "pypi")
         if name == "claude-code":
-            assert text.startswith("claude mcp add fl-studio -- ") and "fl-mcp" in text
+            assert text.startswith("claude mcp add --scope user fl-studio -- ") and "fl-mcp" in text
         elif name == "codex":
             assert text.startswith("[mcp_servers.fl-studio]") and 'args = ["--from"' in text
             if sys.version_info >= (3, 11):
