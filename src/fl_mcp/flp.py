@@ -7,6 +7,7 @@ only by cloning structure that FL Studio itself wrote into the template. Format 
 the public reverse-engineering work (see NOTICE); no code from it is included.
 """
 
+import re
 import struct
 import zipfile
 from dataclasses import dataclass
@@ -18,11 +19,23 @@ from fl_mcp.music.plan import Plan
 PPQS = (24, 48, 72, 96, 120, 144, 168, 192, 384, 768, 960)
 TEMPO, VERSION = 156, 199
 NEW_CHAN, CHAN_TYPE, CHAN_NAME, PLUGIN_NAME, SAMPLE_PATH = 64, 21, 203, 201, 196
+INSERT_NAME = 204
 PLUGIN_FLAGS, PLUGIN_PARAMS = 212, 213
 CHAN_ROUTE, CHAN_ROUTE_16, CHAN_COLOR, CHAN_LEVELS = 22, 104, 128, 219  # insert, RGB, pan/vol
-NEW_PAT, PAT_NAME, PAT_COLOR, NOTES = 65, 193, 150, 224
+NEW_PAT, PAT_NAME, PAT_COLOR, AUTOMATION_DATA, NOTES, INIT_EVENTS = 65, 193, 150, 223, 224, 225
 NEW_ARR, PLAYLIST = 99, 233
-TIME_MARKER_POS, TIME_MARKER_NAME = 148, 205
+TIME_MARKER_POS, TIME_MARKER_NAME, TIME_MARKER_NUM, TIME_MARKER_DEN = 148, 205, 33, 34
+REC_TEMPO = 0x40000005
+REEVERB2_FIELDS = {
+    "highcut": 2,
+    "lowcut": 3,
+    "size": 4,
+    "diffusion": 5,
+    "decay": 6,
+    "predelay": 7,
+    "wet": 8,
+    "mod": 12,
+}
 FSC_FORMAT = 16
 FST_FORMAT = 48
 _FL24_PL_TAIL = bytes.fromhex("00000000000000000000f03f0000000000000000")
@@ -179,32 +192,77 @@ def _parse_header_and_events(
 
 
 _SF2_HEADER_BYTES = 56
+_SF2_RELEASE_OFFSET = 9 * 4
+_SF2_PATH_RE = re.compile(rb"(?:[A-Za-z]:\\|/)[^\x00\r\n]{1,500}\.sf2", re.IGNORECASE)
 
 
-def patch_soundfont_blob(blob: bytes, sf2_path: str) -> bytes:
-    """Replace the `.sf2` path inside an FL SoundFont Player event 213 state blob."""
-    if len(blob) < _SF2_HEADER_BYTES + 2:
-        raise FlpError("SoundFont Player plugin state blob is too short")
-    old_len, path_start = _decode_varint(blob, _SF2_HEADER_BYTES)
-    path_end = path_start + old_len
-    if path_end > len(blob):
-        raise FlpError("SoundFont Player plugin state path runs past end of blob")
+def _find_soundfont_path_span(blob: bytes) -> tuple[int, int, int] | None:
+    """Locate (varint_pos, path_start, path_end) inside a SoundFont Player event 213 blob."""
+    if len(blob) >= _SF2_HEADER_BYTES + 2:
+        try:
+            length, path_start = _decode_varint(blob, _SF2_HEADER_BYTES)
+            path_end = path_start + length
+            if length > 0 and path_end <= len(blob):
+                sample = blob[path_start:path_end].decode("utf-8", "replace")
+                if ".sf2" in sample.lower() or "\\" in sample or "/" in sample:
+                    return _SF2_HEADER_BYTES, path_start, path_end
+        except FlpError:
+            pass
+    # Fallback scan for FL builds where SoundFont Player header size differs from 56 bytes
+    for m in _SF2_PATH_RE.finditer(blob):
+        path_start, path_end = m.start(), m.end()
+        length = path_end - path_start
+        for back in (1, 2, 3):
+            vpos = path_start - back
+            if vpos < 0:
+                continue
+            try:
+                dec_len, dec_start = _decode_varint(blob, vpos)
+            except FlpError:
+                continue
+            if dec_start == path_start and dec_len == length:
+                return vpos, path_start, path_end
+    return None
+
+
+def set_soundfont_release(blob: bytes, release_value: int) -> bytes:
+    """Override the SoundFont Player release knob (event 213 int32 at byte offset 36)."""
+    if len(blob) < _SF2_RELEASE_OFFSET + 4:
+        raise FlpError("SoundFont Player plugin state blob is too short for release override")
+    out = bytearray(blob)
+    struct.pack_into("<i", out, _SF2_RELEASE_OFFSET, int(release_value))
+    return bytes(out)
+
+
+def patch_soundfont_blob(
+    blob: bytes, sf2_path: str, *, release: int | None = None
+) -> bytes:
+    """Replace the `.sf2` path (and optional release override) inside SoundFont Player event 213."""
+    span = _find_soundfont_path_span(blob)
+    if span is None:
+        if len(blob) < _SF2_HEADER_BYTES + 2:
+            raise FlpError("SoundFont Player plugin state blob is too short")
+        old_len, path_start = _decode_varint(blob, _SF2_HEADER_BYTES)
+        path_end = path_start + old_len
+        if path_end > len(blob):
+            raise FlpError("SoundFont Player plugin state path runs past end of blob")
+        vpos = _SF2_HEADER_BYTES
+    else:
+        vpos, _path_start, path_end = span
     encoded = sf2_path.encode("utf-8")
-    return blob[:_SF2_HEADER_BYTES] + _encode_varint(len(encoded)) + encoded + blob[path_end:]
+    patched = blob[:vpos] + _encode_varint(len(encoded)) + encoded + blob[path_end:]
+    if release is not None:
+        patched = set_soundfont_release(patched, release)
+    return patched
 
 
 def read_soundfont_blob_path(blob: bytes) -> str | None:
     """Extract the `.sf2` path stored inside a SoundFont Player event 213 blob, if readable."""
-    if len(blob) < _SF2_HEADER_BYTES + 2:
+    span = _find_soundfont_path_span(blob)
+    if span is None:
         return None
-    try:
-        length, path_start = _decode_varint(blob, _SF2_HEADER_BYTES)
-        if path_start + length > len(blob) or length == 0:
-            return None
-        text = blob[path_start : path_start + length].decode("utf-8", "replace")
-        return text if ".sf2" in text.lower() or "\\" in text or "/" in text else None
-    except FlpError:
-        return None
+    _, path_start, path_end = span
+    return blob[path_start:path_end].decode("utf-8", "replace")
 
 
 def read_fst(path: str | Path) -> dict[str, Any]:
@@ -331,12 +389,11 @@ class Flp:
         return next((i for i, e in enumerate(self.events) if e.id == NEW_ARR), len(self.events))
 
     def channels(self) -> list[Channel]:
-        starts = [i for i, e in enumerate(self.events) if e.id == NEW_CHAN]
-        stop = self._first_arrangement()
+        spans = self._channel_spans()
         out = []
-        for k, s in enumerate(starts):
-            span = self.events[s : (starts[k + 1] if k + 1 < len(starts) else stop)]
-            get = lambda i, span=span: next((e.data for e in span if e.id == i), None)  # noqa: E731
+        for iid, (s, e) in sorted(spans.items(), key=lambda kv: kv[1][0]):
+            span = self.events[s:e]
+            get = lambda i, span=span: next((ev.data for ev in span if ev.id == i), None)  # noqa: E731
             name = _text(get(CHAN_NAME) or b"")
             if not name and get(SAMPLE_PATH):
                 name = (
@@ -346,7 +403,7 @@ class Flp:
             kind = get(CHAN_TYPE)
             out.append(
                 Channel(
-                    struct.unpack("<H", self.events[s].data)[0],
+                    iid,
                     name,
                     CHANNEL_KINDS.get(kind[0], "?") if kind else "?",
                 )
@@ -434,6 +491,7 @@ class Flp:
             put(eid, data, before_id=before_id, after_id=after_id)
         put(CHAN_NAME, _utf16(name))
         if insert > 255 or any(e.id == CHAN_ROUTE_16 for e in block):
+            block[:] = [e for e in block if e.id != CHAN_ROUTE]
             put(CHAN_ROUTE_16, struct.pack("<H", insert))
         else:
             put(CHAN_ROUTE, bytes([insert]))
@@ -442,9 +500,9 @@ class Flp:
         levels = next((e for e in block if e.id == CHAN_LEVELS), None)
         if levels is not None and (volume is not None or pan is not None):
             data = bytearray(levels.data)
-            if pan is not None:
+            if pan is not None and len(data) >= 4:
                 struct.pack_into("<I", data, 0, round((max(-1.0, min(1.0, pan)) + 1) * 6400))
-            if volume is not None:
+            if volume is not None and len(data) >= 8:
                 struct.pack_into("<I", data, 4, round(max(0.0, min(1.0, volume)) * 12800))
             put(CHAN_LEVELS, bytes(data))
         last_end = max(stop_ for _, stop_ in spans.values())
@@ -565,7 +623,7 @@ class Flp:
         out = {}
         for iid, b in self._pattern_blocks().items():
             name = ""
-            for s, e in b["meta"]:
+            for s, e in (*b["meta"], *b["notes"]):
                 name = next((_text(x.data) for x in self.events[s:e] if x.id == PAT_NAME), name)
             n = sum(
                 len(x.data) // NOTE.size
@@ -696,16 +754,30 @@ class Flp:
                 )
             self._clone_pattern(seed, iid)
             blocks = self._pattern_blocks()
+        wrote_notes = False
         for s, e in blocks[iid]["notes"]:
             for x in self.events[s:e]:
                 if x.id == NOTES:
                     x.data, x.raw = blob, None
+                    wrote_notes = True
+        if not wrote_notes and blob:
+            meta_spans = blocks[iid]["meta"]
+            if meta_spans:
+                ins_at = meta_spans[-1][1]
+                self.events.insert(ins_at, Event(NOTES, blob))
+                blocks = self._pattern_blocks()
+        wrote_name = False
         for s, e in blocks[iid]["meta"]:
             for x in self.events[s:e]:
                 if x.id == PAT_NAME:
                     x.data, x.raw = _utf16(name), None
+                    wrote_name = True
                 elif x.id == PAT_COLOR and color is not None:
                     x.data, x.raw = bytes([*color, 0]), None
+        if not wrote_name and name:
+            target_spans = blocks[iid]["meta"] or blocks[iid]["notes"]
+            if target_spans:
+                self.events.insert(target_spans[0][0] + 1, Event(PAT_NAME, _utf16(name)))
 
     def _clone_pattern(self, seed: int, iid: int) -> None:
         b = self._pattern_blocks()
@@ -843,20 +915,38 @@ class Flp:
     def set_end_marker(
         self, ticks: int, arrangement: int = 0, *, create: bool = True
     ) -> dict[str, Any] | None:
-        """Move the arrangement 'end' marker to `ticks`, or insert one if requested."""
+        """Move the arrangement 'end' marker to `ticks` (preserving upper flag bits), or insert."""
         if ticks < 0:
             raise FlpError("end marker ticks must be >= 0")
         marks = self.markers(arrangement)
         existing = next(
             (m for m in marks if m["flags"] == 0 and m["name"].strip().lower() == "end"),
             None,
-        )
+        ) or next((m for m in marks if m["name"].strip().lower() == "end"), None)
         if existing is not None:
             ev = self.events[existing["idx_pos"]]
-            ev.data, ev.raw = struct.pack("<I", ticks), None
+            old_raw = struct.unpack("<I", ev.data)[0]
+            new_raw = (old_raw & 0xFF000000) | (ticks & 0x00FFFFFF)
+            ev.data, ev.raw = struct.pack("<I", new_raw), None
             return {"action": "updated", "position": ticks}
         if not create:
             return None
+        return self.add_marker(ticks, "end", arrangement=arrangement)
+
+    def add_marker(
+        self,
+        ticks: int,
+        name: str,
+        *,
+        mode: int = 0,
+        ts_num: int = 4,
+        ts_den: int = 4,
+        arrangement: int = 0,
+    ) -> dict[str, Any]:
+        """Insert a playlist marker (mode=8 for time-signature change) into `arrangement`."""
+        if ticks < 0:
+            raise FlpError("marker ticks must be >= 0")
+        marks = self.markers(arrangement)
         if marks:
             anchor = max(m["idx_name"] or m["idx_pos"] for m in marks) + 1
         else:
@@ -865,14 +955,247 @@ class Flp:
                 (i + 1 for i in range(start, stop) if self.events[i].id == PLAYLIST),
                 stop,
             )
+        raw_pos = ((int(mode) & 0xFF) << 24) | (int(ticks) & 0x00FFFFFF)
         block = [
-            Event(TIME_MARKER_POS, struct.pack("<I", ticks)),
-            Event(33, b"\x04"),
-            Event(34, b"\x04"),
-            Event(TIME_MARKER_NAME, _utf16("end")),
+            Event(TIME_MARKER_POS, struct.pack("<I", raw_pos)),
+            Event(TIME_MARKER_NUM, bytes([max(1, min(16, int(ts_num)))])),
+            Event(TIME_MARKER_DEN, bytes([max(1, min(16, int(ts_den)))])),
+            Event(TIME_MARKER_NAME, _utf16(name)),
         ]
         self.events[anchor:anchor] = block
-        return {"action": "created", "position": ticks}
+        return {
+            "action": "created",
+            "position": ticks,
+            "name": name,
+            "mode": int(mode),
+            "ts": [int(ts_num), int(ts_den)],
+        }
+
+    def set_time_signature(
+        self, numerator: int, denominator: int, *, ticks: int = 0, arrangement: int = 0
+    ) -> dict[str, Any]:
+        """Insert a time-signature marker (`mode=8`) at `ticks` in `arrangement`."""
+        if numerator < 1 or numerator > 16 or denominator not in (1, 2, 4, 8, 16):
+            raise FlpError(f"invalid time signature {numerator}/{denominator}")
+        return self.add_marker(
+            ticks,
+            f"{numerator}/{denominator}",
+            mode=8,
+            ts_num=numerator,
+            ts_den=denominator,
+            arrangement=arrangement,
+        )
+
+    def rename_insert(self, insert: int, name: str) -> bool:
+        """Rename mixer insert (0 = Master, 1..N = Insert 1..N) via INSERT_NAME (event 204)."""
+        names = [ev for ev in self.events if ev.id == INSERT_NAME]
+        if not 0 <= insert < len(names):
+            return False
+        names[insert].data, names[insert].raw = _utf16(name), None
+        return True
+
+    def patch_init_events(
+        self, updates: dict[tuple[int, int], int], *, append_missing: bool = True
+    ) -> int:
+        """Patch/append FLP_InitEvents (id=225, 12-byte <IIi) records keyed by (insert, param_lo).
+
+        param_lo: 0x1fc0=fader (12800=0 dB), 0x1fc1=pan (-6400..6400), 0x1fc2=stereo sep,
+        0x2000+dst=send level to insert dst (0..12800).
+        """
+        ev = self.first(INIT_EVENTS)
+        if ev is None:
+            if not append_missing:
+                return 0
+            buf = bytearray()
+            ev = Event(INIT_EVENTS, b"")
+            anchor = self._first_arrangement()
+            self.events.insert(anchor, ev)
+        else:
+            buf = bytearray(ev.data)
+        remaining = {
+            ((0x7000 + int(ins) * 0x40), int(lo)): int(v) for (ins, lo), v in updates.items()
+        }
+        changed = 0
+        for off in range(0, len(buf) - 11, 12):
+            _a, b, _val = struct.unpack_from("<IIi", buf, off)
+            key = (b >> 16, b & 0xFFFF)
+            if key in remaining:
+                struct.pack_into("<i", buf, off + 8, remaining.pop(key))
+                changed += 1
+        if append_missing and remaining:
+            for (hi, lo), val in remaining.items():
+                buf.extend(struct.pack("<IIi", 0, (hi << 16) | (lo & 0xFFFF), val))
+                changed += 1
+        ev.data, ev.raw = bytes(buf), None
+        return changed
+
+    def set_mixer_fader(
+        self, insert: int, gain_db: float | None = None, *, raw: int | None = None
+    ) -> int:
+        """Set offline mixer insert fader in InitEvents (12800 = 0 dB unity)."""
+        if raw is None:
+            if gain_db is None:
+                raise FlpError("set_mixer_fader needs gain_db or raw")
+            raw = max(0, min(16000, int(round(12800 * (10.0 ** (float(gain_db) / 20.0))))))
+        return self.patch_init_events({(insert, 0x1FC0): int(raw)})
+
+    def set_mixer_pan(self, insert: int, pan: float) -> int:
+        """Set offline mixer insert pan (-1.0 left .. +1.0 right) in InitEvents."""
+        raw = max(-6400, min(6400, int(round(float(pan) * 6400))))
+        return self.patch_init_events({(insert, 0x1FC1): raw})
+
+    def set_mixer_stereo(self, insert: int, separation: float) -> int:
+        """Set offline mixer stereo separation (-1.0 merged .. +1.0 separated) in InitEvents."""
+        raw = max(-6400, min(6400, int(round(float(separation) * 6400))))
+        return self.patch_init_events({(insert, 0x1FC2): raw})
+
+    def set_mixer_send(self, src_insert: int, dst_insert: int, level: float) -> int:
+        """Set offline mixer send level (0.0..1.0 -> 0..12800) from src_insert to dst_insert."""
+        raw = max(0, min(12800, int(round(max(0.0, min(1.0, float(level))) * 12800))))
+        return self.patch_init_events({(src_insert, 0x2000 + int(dst_insert)): raw})
+
+    def patch_fruity_reeverb2(
+        self,
+        *,
+        occurrence: int = 0,
+        highcut_hz: float | None = None,
+        lowcut_hz: float | None = None,
+        size: float | None = None,
+        diffusion: int | None = None,
+        decay_s: float | None = None,
+        predelay_ms: int | None = None,
+        wet: int | None = None,
+        mod: int | None = None,
+        send_bus: bool = False,
+    ) -> list[int] | None:
+        """Patch Fruity Reeverb 2 binary state (event 213, 16x int32 + tail) offline.
+
+        When `send_bus=True`, `wet` is clamped to `100..125` (default `115`) so a dedicated
+        reverb send bus never loses its wet return.
+        """
+        seen = 0
+        for i, ev in enumerate(self.events):
+            if ev.id == PLUGIN_NAME and "reeverb 2" in _text(ev.data).lower():
+                for j in range(i, min(len(self.events), i + 10)):
+                    pe = self.events[j]
+                    if pe.id == PLUGIN_PARAMS and len(pe.data) >= 64:
+                        if seen < occurrence:
+                            seen += 1
+                            break
+                        tail = pe.data[64:]
+                        vals = list(struct.unpack("<16i", pe.data[:64]))
+                        eff_wet = wet
+                        if send_bus:
+                            eff_wet = max(100, min(125, 115 if eff_wet is None else int(eff_wet)))
+                        elif eff_wet is not None:
+                            eff_wet = max(0, min(125, int(eff_wet)))
+                        updates = {
+                            "highcut": (
+                                None if highcut_hz is None else int(round(highcut_hz / 100.0))
+                            ),
+                            "lowcut": None if lowcut_hz is None else int(round(lowcut_hz / 10.0)),
+                            "size": None if size is None else int(round(size * 100)),
+                            "diffusion": None if diffusion is None else int(diffusion),
+                            "decay": None if decay_s is None else int(round(decay_s * 10)),
+                            "predelay": None if predelay_ms is None else int(predelay_ms),
+                            "wet": eff_wet,
+                            "mod": None if mod is None else int(mod),
+                        }
+                        for key, v in updates.items():
+                            if v is not None:
+                                vals[REEVERB2_FIELDS[key]] = v
+                        pe.data, pe.raw = struct.pack("<16i", *vals) + tail, None
+                        return vals
+        return None
+
+    def add_sampler_from_donor(
+        self,
+        donor: "Flp | str | Path",
+        name: str,
+        sample: str,
+        insert: int = 0,
+        color: tuple[int, int, int] | None = None,
+        volume: float | None = None,
+        pan: float | None = None,
+    ) -> int:
+        """Clone a Sampler channel from `donor` `.flp` when this project lacks a Sampler seed."""
+        src = donor if isinstance(donor, Flp) else Flp.open(donor)
+        src_kinds = {c.iid: c.kind for c in src.channels()}
+        seeds = [iid for iid, kind in src_kinds.items() if kind == "sampler"]
+        if not seeds:
+            raise FlpError("donor .flp has no Sampler channel to clone")
+        s_start, s_stop = src._channel_spans()[seeds[0]]
+        spans = self._channel_spans()
+        iid = max(spans, default=-1) + 1
+        block = [Event(e.id, e.data) for e in src.events[s_start:s_stop]]
+        block[0] = Event(NEW_CHAN, struct.pack("<H", iid))
+        limit = self._max_insert()
+        if not 0 <= insert <= limit:
+            raise FlpError(f"insert must be 0-{limit}")
+
+        def _put(eid: int, data: bytes) -> None:
+            for k, e in enumerate(block):
+                if e.id == eid:
+                    block[k] = Event(eid, data)
+                    return
+            block.append(Event(eid, data))
+
+        _put(CHAN_NAME, _utf16(name))
+        _put(SAMPLE_PATH, _utf16(str(Path(sample))))
+        if insert > 255 or any(e.id == CHAN_ROUTE_16 for e in block):
+            block[:] = [e for e in block if e.id != CHAN_ROUTE]
+            _put(CHAN_ROUTE_16, struct.pack("<H", insert))
+        else:
+            _put(CHAN_ROUTE, bytes([insert]))
+        if color is not None:
+            _put(CHAN_COLOR, bytes([*color, 0]))
+        levels = next((e for e in block if e.id == CHAN_LEVELS), None)
+        if levels is not None and (volume is not None or pan is not None):
+            data = bytearray(levels.data)
+            if pan is not None and len(data) >= 4:
+                struct.pack_into("<I", data, 0, round((max(-1.0, min(1.0, pan)) + 1) * 6400))
+            if volume is not None and len(data) >= 8:
+                struct.pack_into("<I", data, 4, round(max(0.0, min(1.0, volume)) * 12800))
+            _put(CHAN_LEVELS, bytes(data))
+        last_end = max((stop_ for _, stop_ in spans.values()), default=self._first_arrangement())
+        self.events[last_end:last_end] = block
+        self.header = self.header[:10] + struct.pack("<H", len(spans) + 1) + self.header[12:]
+        return iid
+
+    def set_tempo_map(
+        self,
+        points: list[tuple[int, float]],
+        *,
+        pattern_iid: int | None = None,
+        arrangement: int = 0,
+    ) -> dict[str, Any]:
+        """Write a multi-point tempo map: base TEMPO + event-223 REC_Tempo automation + markers."""
+        if not points:
+            raise FlpError("tempo map needs at least one (ticks, bpm) point")
+        ordered = sorted((int(t), float(b)) for t, b in points)
+        if ordered[0][0] < 0 or any(not 10.0 <= b <= 522.0 for _, b in ordered):
+            raise FlpError("tempo points need ticks >= 0 and bpm in 10..522")
+        self.set_tempo(ordered[0][1])
+        auto_blob = b"".join(
+            struct.pack("<IIi", tick, REC_TEMPO, int(round(bpm * 1000))) for tick, bpm in ordered
+        )
+        blocks = self._pattern_blocks()
+        target_pat = pattern_iid or (min(blocks) if blocks else 1)
+        if target_pat in blocks and blocks[target_pat]["notes"]:
+            s, e = blocks[target_pat]["notes"][0]
+            existing_auto = next((x for x in self.events[s:e] if x.id == AUTOMATION_DATA), None)
+            if existing_auto is not None:
+                existing_auto.data, existing_auto.raw = auto_blob, None
+            else:
+                self.events.insert(e, Event(AUTOMATION_DATA, auto_blob))
+        else:
+            anchor = self._first_arrangement()
+            self.events[anchor:anchor] = [
+                Event(NEW_PAT, struct.pack("<H", target_pat)),
+                Event(PAT_NAME, _utf16("Tempo Map")),
+                Event(AUTOMATION_DATA, auto_blob),
+            ]
+        return {"base_bpm": ordered[0][1], "points": len(ordered), "pattern": target_pat}
 
     def verify(self) -> dict[str, Any]:
         """Run an offline structural & musical readiness check on this `.flp`."""
@@ -883,7 +1206,9 @@ class Flp:
         items = self.playlist_items() if has_playlist else []
         marks = self.markers() if has_playlist else []
         max_tick = max((it["position"] + it["length"] for it in items), default=0)
-        end_m = next((m for m in marks if m["flags"] == 0 and m["name"].lower() == "end"), None)
+        end_m = next(
+            (m for m in marks if m["flags"] == 0 and m["name"].lower() == "end"), None
+        ) or next((m for m in marks if m["name"].strip().lower() == "end"), None)
         bars = round(max_tick / (4 * self.ppq), 2) if self.ppq else 0.0
         duration_s = round((max_tick / max(1, self.ppq)) * (60.0 / max(1.0, self.tempo)), 2)
 
