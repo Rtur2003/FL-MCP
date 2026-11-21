@@ -21,7 +21,11 @@ def parse_settings(text: str) -> list[dict]:
         if value.startswith("~"):
             items.append({"p": name, "r": value[1:].strip()})
         elif NUMBER.fullmatch(value):
-            items.append({"p": name, "v": float(value)})
+            num = float(value)
+            if 0.0 <= num <= 1.0:
+                items.append({"p": name, "v": num})
+            else:
+                items.append({"p": name, "r": value})
         else:
             items.append({"p": name, "r": value})
     if not items:
@@ -67,7 +71,7 @@ def parse_value(text: str) -> tuple[float, str] | None:
     if not s:
         return None
     low = s.lower()
-    if "inf" in low:
+    if "inf" in low or "\u221e" in s:
         return (-120.0 if "-" in low else 120.0), "db"
     found = _FIRST_NUMBER.search(s)
     if found is None:
